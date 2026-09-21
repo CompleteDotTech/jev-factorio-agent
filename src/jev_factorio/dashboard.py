@@ -384,7 +384,8 @@ class Monitor:
                 or type(event.get("seq")) is not int or event["seq"] < 1
                 or type(event.get("stage")) is not int or not 1 <= event["stage"] <= 8
                 or not isinstance(event.get("kind"), str) or not isinstance(event.get("data"), dict)
-                or type(event.get("time")) not in (int, float) or not math.isfinite(event["time"])):
+                or type(event.get("time")) not in (int, float)
+                or not -8640000000000 <= event["time"] <= 8640000000000):
             self.rejected += 1
             return
         if event["run_id"] != self.last_run:
@@ -457,6 +458,9 @@ class Monitor:
                         self.rejected += 1
                         continue
                     state = row.get("after_state") or row["state"]
+                    if not isinstance(state, dict):
+                        self.rejected += 1
+                        continue
                     identity = str(row.get("session_id") or state.get("session_id") or "legacy")
                     row = {"schema": SCHEMA, "run_id": identity, "seq": self.last_seq + 1 if identity == self.last_run else 1,
                            "time": self.tail.mtime, "at": "", "kind": "decision_recorded", "stage": 7,

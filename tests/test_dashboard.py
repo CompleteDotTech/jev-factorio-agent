@@ -245,3 +245,22 @@ def test_no_runtime_dependencies_or_remote_frontend_assets():
     js = (ASSETS / "app.js").read_text()
     assert ".innerHTML" not in js and "eval(" not in js
     assert "getDisplayMedia" in js and "getUserMedia" in js
+
+
+def test_malformed_legacy_state_does_not_stop_following(tmp_path):
+    path = tmp_path / "legacy"
+    write(path, {"state": {}, "after_state": ["invalid"], "action": "observe"},
+          {"state": {"session_id": "valid"}, "action": "observe"})
+    monitor = Monitor(path, legacy=True)
+    monitor.poll()
+    assert monitor.rejected == 1
+    assert monitor.view["run_id"] == "valid"
+
+
+@pytest.mark.parametrize("timestamp", [10 ** 400, -(10 ** 400), float("inf"), float("nan")])
+def test_unrenderable_timestamps_are_rejected_without_overflow(tmp_path, timestamp):
+    monitor = Monitor(tmp_path / "events")
+    monitor.accept({**event(), "time": timestamp})
+    monitor.accept(event())
+    assert monitor.rejected == 1
+    assert monitor.view["run_id"] == "test-run"
