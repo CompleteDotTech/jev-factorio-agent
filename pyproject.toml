@@ -33,6 +33,11 @@ test = [
     "lupa==2.8",
 ]
 
+dashboard-test = [
+    "pytest>=8,<10",
+    "playwright==1.57.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/CompleteDotTech/jev-factorio"
 Repository = "https://github.com/CompleteDotTech/jev-factorio"
@@ -41,9 +46,10 @@ Company = "https://www.complete.tech"
 
 [project.scripts]
 jev-factorio = "jev_factorio.main:cli"
+jev-factorio-dashboard = "jev_factorio.dashboard:cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-jev_factorio = ["lua/*.lua"]
+jev_factorio = ["lua/*.lua", "dashboard_assets/*.html", "dashboard_assets/*.css", "dashboard_assets/*.js"]

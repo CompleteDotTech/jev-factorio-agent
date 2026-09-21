@@ -1,0 +1,619 @@
+"""Read-only live workflow dashboard. No game, provider, or web dependencies.
+
+Display telemetry is deliberately separate from research evidence: bounded,
+redacted, best-effort, and never an authority to dispatch or verify an action.
+"""
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import math
+import os
+import re
+import stat
+import sys
+import threading
+import time
+import uuid
+from collections import deque
+from dataclasses import asdict
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any, Callable
+from urllib.parse import urlsplit
+
+SCHEMA = "jev.dashboard.v1"
+MAX_LINE = 262144
+ASSETS = Path(__file__).with_name("dashboard_assets")
+SECRET_KEY = re.compile(r"password|secret|authorization|api.?key|access.?token|refresh.?token", re.I)
+URL = re.compile(r"(?:https?|wss?)://[^\s\"<>]+", re.I)
+CREDENTIAL = re.compile(r"(?:Bearer\s+\S+|\b(?:sk|ts|pk)-[\w-]{12,})", re.I)
+RECORD_KEYS = ("controller", "policy", "tick", "session_id", "world_kind", "goal", "target",
+               "status", "reason", "action", "outcome", "verified", "completed_goals",
+               "decision", "model_call", "requested_model", "resolved_model", "usage", "pending")
+STATE_KEYS = ("tick", "session_id", "world_kind", "inventory", "player_position", "nearby_resources",
+              "placed_entities", "drill_status", "drill_fuel", "drill_output_connected",
+              "iron_ore_collected", "production_rates", "researched", "victory", "victory_source")
+
+
+def secret_values() -> tuple[str, ...]:
+    """Use known secrets for redaction, never export environment keys or values."""
+    return tuple(value for key, value in os.environ.items() if SECRET_KEY.search(key) and len(value) >= 4)
+
+
+def sanitize(value: Any, secrets: tuple[str, ...] = ()) -> Any:
+    """Detach JSON data with a total node/depth budget and visible omissions."""
+    remaining = [3000]
+
+    def visit(item: Any, depth: int = 0) -> Any:
+        remaining[0] -= 1
+        if remaining[0] < 0 or depth > 12:
+            return "[display limit]"
+        if item is None or type(item) in (bool, int):
+            return item
+        if isinstance(item, float):
+            return item if math.isfinite(item) else None
+        if isinstance(item, str):
+            for secret in secrets:
+                item = item.replace(secret, "[redacted]")
+            item = CREDENTIAL.sub("[redacted]", URL.sub("[URL redacted]", item))
+            return item[:2000] + (" [truncated]" if len(item) > 2000 else "")
+        if isinstance(item, dict):
+            result = {}
+            for index, (key, child) in enumerate(item.items()):
+                if index >= 128 or remaining[0] < 0:
+                    result["_display_truncated"] = True
+                    break
+                if not isinstance(key, str):
+                    continue
+                clean_key = visit(key, depth + 1)
+                result[clean_key] = "[redacted]" if SECRET_KEY.search(key) else visit(child, depth + 1)
+            return result
+        if isinstance(item, (list, tuple)):
+            result = [visit(child, depth + 1) for child in item[:128] if remaining[0] >= 0]
+            if len(item) > len(result):
+                result.append("[display limit]")
+            return result
+        return "[unsupported display value]"
+
+    return visit(value)
+
+
+def project_state(value: dict) -> dict:
+    return {key: value[key] for key in STATE_KEYS if key in value}
+
+
+def project_record(value: dict) -> dict:
+    record = {key: value[key] for key in RECORD_KEYS if key in value}
+    state = value.get("after_state") or value.get("state")
+    if isinstance(state, dict):
+        record["state"] = project_state(state)
+    return record
+
+
+class EventWriter:
+    """One opt-in writer per controller invocation; append restart boundaries.
+
+    Opening/validating an output fails before backend creation. Later telemetry
+    failures disable this optional observer, not the controller. No fsync/audit
+    durability or cross-process writer concurrency guarantee is claimed.
+    """
+
+    def __init__(self, path: str | Path, forbidden: tuple[str | Path | None, ...] = ()):
+        self.path = Path(path)
+        if self.path.is_symlink():
+            raise ValueError("Dashboard output must not be a symlink")
+        for other in forbidden:
+            if other and (self.path.resolve() == Path(other).resolve() or (
+                self.path.exists() and Path(other).exists() and self.path.samefile(other)
+            )):
+                raise ValueError("Dashboard output must be separate from logs and checkpoints")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.path.exists():
+            if not self.path.is_file():
+                raise ValueError("Dashboard output must be a regular file")
+            with self.path.open("rb") as existing:
+                first = existing.readline(MAX_LINE + 1)
+                if first:
+                    try:
+                        valid = len(first) <= MAX_LINE and json.loads(first).get("schema") == SCHEMA
+                    except (ValueError, AttributeError, RecursionError):
+                        valid = False
+                    if not valid:
+                        raise ValueError("Refusing to append dashboard events to an unrelated file")
+                    existing.seek(-1, os.SEEK_END)
+                    if existing.read(1) != b"\n":
+                        raise ValueError("Dashboard output has an incomplete tail; use a new file")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+        self.fd = os.open(self.path, flags, 0o600)
+        if not stat.S_ISREG(os.fstat(self.fd).st_mode):
+            os.close(self.fd)
+            raise ValueError("Dashboard output must be a regular file")
+        self.run_id = uuid.uuid4().hex
+        self.seq = 0
+        self.disabled = False
+        self.lock = threading.Lock()
+        self.secrets = secret_values()
+
+    def emit(self, kind: str, stage: int, **data: Any) -> None:
+        with self.lock:
+            if self.disabled or self.fd is None:
+                return
+            try:
+                self.seq += 1
+                now = time.time()
+                event = {"schema": SCHEMA, "run_id": self.run_id, "seq": self.seq,
+                         "time": now, "at": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+                         "kind": kind, "stage": stage, "data": sanitize(data, self.secrets)}
+                encoded = (json.dumps(event, allow_nan=False, ensure_ascii=True) + "\n").encode()
+                if len(encoded) > MAX_LINE:
+                    event["data"] = {"_display_truncated": "Event exceeds dashboard byte limit"}
+                    encoded = (json.dumps(event) + "\n").encode()
+                if os.write(self.fd, encoded) != len(encoded):
+                    raise OSError("short telemetry write")
+            except Exception:
+                self.disabled = True
+                print("Dashboard telemetry disabled after a display-write failure; gameplay is unchanged.",
+                      file=sys.stderr, flush=True)
+
+    def __enter__(self) -> EventWriter:
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.emit("run_finished", 2, outcome="error" if exc_type else "returned")
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+
+def attach(loop: Any, writer: EventWriter) -> None:
+    """Decorate only this loop instance; delegate every existing call exactly once.
+
+    No global patch, extra observation, policy/predicate evaluation, checkpoint
+    write, provider call, thread, or action is introduced. The tiny synchronous
+    observer has unmeasured wall-clock overhead. It is not research logging.
+    """
+    if getattr(loop, "_dashboard_attached", False):
+        raise ValueError("Dashboard observer is already attached")
+    loop._dashboard_attached = True
+
+    def emit(kind: str, stage: int, **data: Any) -> None:
+        # Projection failures must also remain outside the gameplay error path.
+        try:
+            writer.emit(kind, stage, **data)
+        except Exception:
+            pass
+
+    def measured(kind: str, stage: int, function: Callable, *args, **kwargs):
+        emit(kind + "_started", stage)
+        started = time.perf_counter_ns()
+        try:
+            result = function(*args, **kwargs)
+        except BaseException:
+            elapsed = (time.perf_counter_ns() - started) / 1e6
+            emit(kind + "_failed", stage, duration_ms=elapsed)
+            raise
+        elapsed = (time.perf_counter_ns() - started) / 1e6
+        emit(kind + "_returned", stage, duration_ms=elapsed)
+        return result
+
+    class BackendObserver:
+        def __init__(self, backend):
+            self.backend = backend
+
+        def __getattr__(self, key):
+            return getattr(self.backend, key)
+
+        def act(self, action):
+            emit("action", 6, action=action)
+            return measured("dispatch", 6, self.backend.act, action)
+
+        def execute(self, action, parameters):
+            emit("action", 6, action=action, parameters=parameters)
+            return measured("dispatch", 6, self.backend.execute, action, parameters)
+
+    class ModelObserver:
+        def __init__(self, model):
+            self.model_client = model
+
+        def __getattr__(self, key):
+            return getattr(self.model_client, key)
+
+        def evaluate(self, state, questions):
+            emit("model_request", 5, candidates=state.get("candidate_plans", {}), questions=questions)
+            result = measured("model", 5, self.model_client.evaluate, state, questions)
+            emit("model_response", 5, answers=result, usage=getattr(self.model_client, "last_usage", None),
+                 model=getattr(self.model_client, "last_model", None))
+            return result
+
+    loop.backend = BackendObserver(loop.backend)
+    if loop.jev is not None:
+        loop.jev = ModelObserver(loop.jev)
+
+    def decorate(name: str, wrapper: Callable) -> None:
+        original = getattr(loop, name)
+        setattr(loop, name, lambda *args, **kwargs: wrapper(original, *args, **kwargs))
+
+    def observe(original):
+        snapshot = measured("observation", 2, original)
+        try:
+            emit("observation", 2, state=project_state(snapshot.for_jev()))
+        except Exception:
+            pass
+        return snapshot
+
+    def refresh(original, snapshot):
+        result = original(snapshot)
+        memory = loop.memory
+        emit("goals", 3, goal=memory.active_goal, completed_goals=dict(memory.completed_goals),
+             target=loop.target, status=memory.status)
+        if memory.active_plan is None and not loop.terminal:
+            # Controller is about to compile; not proof a plan has been produced.
+            emit("planning", 4 if loop.catalog is not None else 3)
+        return result
+
+    def save(original):
+        result = original()
+        try:
+            memory = loop.memory
+            emit("controller_state", 2, plan=memory.active_plan, step_index=memory.step_index,
+                 pending=memory.pending, status=memory.status, goal=memory.active_goal,
+                 decision=asdict(loop._decision) if loop._decision else None,
+                 completed_goals=dict(memory.completed_goals))
+        except Exception:
+            pass
+        return result
+
+    def verify(original, snapshot):
+        return measured("verification", 7, original, snapshot)
+
+    def record(original, *args, **kwargs):
+        result = original(*args, **kwargs)
+        try:
+            emit("decision_recorded", 7, record=project_record(result))
+        except Exception:
+            pass
+        return result
+
+    def step(original):
+        emit("cycle_started", 2)
+        return measured("cycle", 2, original)
+
+    decorate("_observe", observe)
+    decorate("_refresh_goals", refresh)
+    decorate("_save", save)
+    decorate("_verify_pending", verify)
+    decorate("_record", record)
+    decorate("step", step)
+    emit("run_started", 2, target=loop.target, policy=loop.policy,
+         model=getattr(loop.jev, "model", None), controller="hierarchical")
+
+
+def open_regular(path: Path):
+    """Read only regular files; replacements with FIFOs must not block the viewer."""
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("not a regular file")
+        return os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+class Tail:
+    """Bounded incremental JSONL reader, tolerant of a writer's partial last line."""
+
+    def __init__(self, path: Path):
+        self.path, self.offset, self.identity = path, 0, None
+        self.pending = b""
+        self.dropping = False
+        self.status = "waiting"
+        self.invalid = 0
+        self.reset = False
+        self.mtime = None
+
+    def poll(self) -> list[dict]:
+        self.reset = False
+        try:
+            with open_regular(self.path) as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    raise OSError("not a regular file")
+                identity = (info.st_dev, info.st_ino)
+                if identity != self.identity or info.st_size < self.offset:
+                    self.identity, self.offset, self.pending = identity, 0, b""
+                    self.dropping, self.reset = False, True
+                    if info.st_size > 2 * 1024 * 1024:
+                        self.offset = info.st_size - 2 * 1024 * 1024
+                        self.dropping = True
+                stream.seek(self.offset)
+                chunk = stream.read(MAX_LINE)
+                self.offset += len(chunk)
+                self.mtime = info.st_mtime
+                self.status = "reading" if self.offset < info.st_size else "following"
+        except OSError:
+            self.status = "unavailable" if self.identity else "waiting"
+            return []
+        self.pending += chunk
+        records = []
+        while b"\n" in self.pending:
+            line, self.pending = self.pending.split(b"\n", 1)
+            if self.dropping:
+                self.dropping = False
+                continue
+            if not line.strip():
+                continue
+            try:
+                if len(line) > MAX_LINE:
+                    raise ValueError("oversized")
+                value = json.loads(line, parse_constant=lambda _: None)
+                if not isinstance(value, dict):
+                    raise ValueError("non-object")
+                records.append(value)
+            except (ValueError, UnicodeError, RecursionError):
+                self.invalid += 1
+        if len(self.pending) > MAX_LINE:
+            self.pending = b""
+            self.dropping = True
+            self.invalid += 1
+        return records
+
+
+class Monitor:
+    """Single reader/reducer shared by all SSE clients; never imports gameplay."""
+
+    def __init__(self, path: Path, legacy: bool = False, supervisor: Path | None = None):
+        self.tail, self.legacy, self.supervisor = Tail(path), legacy, supervisor
+        self.lock = threading.RLock()
+        self.stop = threading.Event()
+        self.secrets = secret_values()
+        self.version = 0
+        self.events: deque[dict] = deque(maxlen=120)
+        self.view: dict = {}
+        self.supervision: dict = {}
+        self.last_run = None
+        self.last_seq = 0
+        self.rejected = 0
+
+    def accept(self, event: dict) -> None:
+        if (event.get("schema") != SCHEMA or not isinstance(event.get("run_id"), str)
+                or type(event.get("seq")) is not int or event["seq"] < 1
+                or type(event.get("stage")) is not int or not 1 <= event["stage"] <= 8
+                or not isinstance(event.get("kind"), str) or not isinstance(event.get("data"), dict)
+                or type(event.get("time")) not in (int, float) or not math.isfinite(event["time"])):
+            self.rejected += 1
+            return
+        if event["run_id"] != self.last_run:
+            self.view, self.last_seq = {}, 0
+            self.events.clear()
+            self.last_run = event["run_id"]
+        if event["seq"] <= self.last_seq:
+            self.rejected += 1
+            return
+        gap = event["seq"] != self.last_seq + 1
+        self.last_seq = event["seq"]
+        kind, data = event["kind"], event["data"]
+        view = self.view
+        view.update(run_id=self.last_run, stage=event["stage"], last_event_time=event["time"], kind=kind)
+        view["gap"] = view.get("gap", False) or gap
+        if kind == "run_started":
+            view.update({key: data[key] for key in ("target", "policy", "model", "controller") if key in data})
+            view["lifecycle"] = "running"
+        elif kind == "run_finished":
+            view["lifecycle"] = data.get("outcome", "returned")
+            view["model_busy"] = False
+        elif kind == "cycle_started":
+            view["seen"] = []
+            view["model_busy"] = False
+            view["request"], view["response"], view["decision"] = None, None, None
+            view["verified"], view["outcome"] = None, None
+        elif kind == "observation":
+            view["state"] = data.get("state") if isinstance(data.get("state"), dict) else {}
+        elif kind in ("goals", "controller_state"):
+            keys = ("goal", "target", "status", "completed_goals", "plan", "pending", "step_index", "decision")
+            view.update({key: data[key] for key in keys if key in data})
+        elif kind == "model_request":
+            view["request"] = data
+            view["response"] = None
+            view["decision"] = None
+        elif kind == "model_started":
+            view["model_busy"] = True
+            view["model_started_at"] = event["time"]
+        elif kind in ("model_returned", "model_failed"):
+            view["model_busy"] = False
+            view["model_ms"] = data.get("duration_ms")
+        elif kind == "model_response":
+            view["response"] = data
+        elif kind == "action":
+            view["action"] = data.get("action")
+            view["parameters"] = data.get("parameters")
+        elif kind == "decision_recorded" and isinstance(data.get("record"), dict):
+            view.update({key: value for key, value in data["record"].items()
+                         if key in RECORD_KEYS or key == "state"})
+        elif kind.endswith("_failed"):
+            view["last_error"] = kind
+        seen = view.setdefault("seen", [])
+        if event["stage"] not in seen:
+            seen.append(event["stage"])
+        self.events.append({"id": f"{self.last_run}:{event['seq']}", "kind": kind,
+                            "stage": event["stage"], "at": event.get("at", ""),
+                            "time": event["time"], "duration_ms": data.get("duration_ms"),
+                            "action": data.get("action")})
+
+    def poll(self) -> None:
+        with self.lock:
+            rows = self.tail.poll()
+            if self.tail.reset:
+                self.events.clear()
+                self.view, self.last_run, self.last_seq = {}, None, 0
+            for row in rows:
+                if self.legacy:
+                    # Legacy records expose completed decisions, NOT in-flight model phases.
+                    if not isinstance(row.get("state"), dict) or "action" not in row:
+                        self.rejected += 1
+                        continue
+                    state = row.get("after_state") or row["state"]
+                    identity = str(row.get("session_id") or state.get("session_id") or "legacy")
+                    row = {"schema": SCHEMA, "run_id": identity, "seq": self.last_seq + 1 if identity == self.last_run else 1,
+                           "time": self.tail.mtime, "at": "", "kind": "decision_recorded", "stage": 7,
+                           "data": {"record": project_record(row)}}
+                self.accept(sanitize(row, self.secrets))
+            self._read_supervisor()
+            self.version += 1
+
+    def _read_supervisor(self) -> None:
+        if self.supervisor is None:
+            self.supervision = {"available": False}
+            return
+        try:
+            with open_regular(self.supervisor) as stream:
+                raw = stream.read(MAX_LINE + 1)
+            if len(raw) > MAX_LINE:
+                raise ValueError("oversized state")
+            state = json.loads(raw)
+            if not isinstance(state, dict):
+                raise ValueError("invalid state")
+            # Exclude paths, command argv, repair logs and credentials.
+            keys = ("session_id", "phase", "cutoff", "started_at", "attempt", "repair_required")
+            selected = {key: state[key] for key in keys if key in state}
+            observed = self.view.get("state")
+            session = (observed.get("session_id") if isinstance(observed, dict) else None) or self.view.get("session_id")
+            self.supervision = {"available": True, "session_match": bool(session and session == state.get("session_id")),
+                                "state": sanitize(selected, self.secrets)}
+        except (OSError, ValueError, TypeError, RecursionError):
+            self.supervision = {"available": False, "error": "Supervisor state unavailable"}
+
+    def snapshot(self) -> dict:
+        with self.lock:
+            return copy.deepcopy({"version": self.version, "view": self.view, "events": list(self.events),
+                                  "source": {"mode": "legacy" if self.legacy else "events", "status": self.tail.status,
+                                             "invalid": self.tail.invalid + self.rejected,
+                                             "partial": bool(self.tail.pending) or self.tail.dropping},
+                                  "supervisor": self.supervision, "server_time": time.time()})
+
+    def follow(self) -> None:
+        while not self.stop.is_set():
+            self.poll()
+            self.stop.wait(0.25)
+
+
+class DashboardServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def get_request(self):
+        connection, address = super().get_request()
+        connection.settimeout(5)
+        return connection, address
+
+    def __init__(self, port: int, monitor: Monitor):
+        self.monitor = monitor
+        self.clients = threading.BoundedSemaphore(8)
+        super().__init__(("127.0.0.1", port), DashboardHandler)
+
+
+class DashboardHandler(BaseHTTPRequestHandler):
+    server: DashboardServer
+
+    def log_message(self, format, *args):
+        pass  # Never echo query strings, local paths or attacker-controlled headers.
+
+    def _headers(self, status: int, content_type: str, length: int | None = None) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; "
+                         "img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; "
+                         "object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+        self.send_header("Permissions-Policy", "camera=(self), microphone=(), display-capture=(self)")
+        if length is not None:
+            self.send_header("Content-Length", str(length))
+        self.end_headers()
+
+    def _allowed(self) -> bool:
+        port = self.server.server_port
+        allowed = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        if self.headers.get("Host") not in allowed:
+            return False
+        origin = self.headers.get("Origin")
+        return (not origin or origin == "http://" + self.headers.get("Host", "")) and \
+            self.headers.get("Sec-Fetch-Site", "same-origin") in {"same-origin", "none"}
+
+    def do_GET(self) -> None:
+        if not self._allowed():
+            self._headers(403, "text/plain", 0)
+            return
+        path = urlsplit(self.path).path
+        if path == "/api/snapshot":
+            raw = json.dumps(self.server.monitor.snapshot(), allow_nan=False).encode()
+            self._headers(200, "application/json; charset=utf-8", len(raw))
+            self.wfile.write(raw)
+        elif path == "/api/events":
+            self._events()
+        else:
+            names = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"),
+                     "/styles.css": ("styles.css", "text/css")}
+            if path not in names:
+                self._headers(404, "text/plain", 0)
+                return
+            name, content_type = names[path]
+            raw = (ASSETS / name).read_bytes()
+            self._headers(200, content_type + "; charset=utf-8", len(raw))
+            self.wfile.write(raw)
+
+    def _events(self) -> None:
+        if not self.server.clients.acquire(blocking=False):
+            self._headers(503, "text/plain", 0)
+            return
+        try:
+            self.connection.settimeout(3)
+            self._headers(200, "text/event-stream; charset=utf-8")
+            # Full bounded snapshots make reconnection independent of a dropped history window.
+            while not self.server.monitor.stop.is_set():
+                snapshot = self.server.monitor.snapshot()
+                raw = json.dumps(snapshot, allow_nan=False, separators=(",", ":"))
+                self.wfile.write(f"event: snapshot\nid: {snapshot['version']}\ndata: {raw}\n\n".encode())
+                self.wfile.flush()
+                self.server.monitor.stop.wait(0.5)
+        except (OSError, TimeoutError):
+            pass
+        finally:
+            self.server.clients.release()
+
+
+def cli() -> None:
+    parser = argparse.ArgumentParser(description="Local, read-only JEV workflow dashboard")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--events", type=Path, help="Live --dashboard-events JSONL (may not exist yet)")
+    source.add_argument("--log-file", type=Path, help="Existing legacy JSONL; completed-decision detail only")
+    parser.add_argument("--supervisor-state", type=Path, help="Optional existing supervisor.json (read-only)")
+    parser.add_argument("--port", type=int, default=8765)
+    args = parser.parse_args()
+    if not 1 <= args.port <= 65535:
+        parser.error("--port must be between 1 and 65535")
+    path = args.events or args.log_file
+    if path.exists() and not path.is_file():
+        parser.error("Telemetry source must be a regular file")
+    monitor = Monitor(path, legacy=args.log_file is not None, supervisor=args.supervisor_state)
+    server = DashboardServer(args.port, monitor)
+    follower = threading.Thread(target=monitor.follow, daemon=True)
+    follower.start()
+    print(f"JEV dashboard: http://127.0.0.1:{server.server_port} (read-only; Ctrl+C stops only the viewer)", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        monitor.stop.set()
+        server.server_close()
+        follower.join(timeout=2)
+
+
+if __name__ == "__main__":
+    cli()
