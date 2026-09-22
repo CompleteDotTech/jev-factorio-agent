@@ -126,7 +126,9 @@ def next_technology(catalog, researched, current='', target='rocket-silo') -> st
         visiting.remove(name)
         return name
     try:
-        return visit(target)
+        from .economics import capability_technology
+        capability = capability_technology(catalog, list(done))
+        return visit(capability or target)
     except ValueError:
         return None
 

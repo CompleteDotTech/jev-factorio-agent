@@ -198,7 +198,9 @@ class HierarchicalLoop(AgentLoop):
             self._trace.emit("decision", {"plan_id": decision.plan_id, "source": decision.source,
                                           "reason": decision.reason, "utilities": decision.utilities,
                                           "model_called": decision.model_called, "policy": self.policy,
-                                          "confidence_floor": self.confidence_floor})
+                                          "confidence_floor": self.confidence_floor,
+                                          "diagnostics": decision.diagnostics,
+                                          "selection_support": getattr(self, "_selection_support", {})})
 
     def _record(self, before: GameSnapshot, action: str, outcome: str,
                 after: GameSnapshot | None = None, verified: bool = False) -> dict:
@@ -216,8 +218,8 @@ class HierarchicalLoop(AgentLoop):
             "decision": asdict(decision) if decision else None,
             "model_call": decision is not None and decision.model_called,
             "requested_model": getattr(self.jev, "model", None),
-            "resolved_model": getattr(self.jev, "last_model", None) if decision else None,
-            "usage": getattr(self.jev, "last_usage", None) if decision else None,
+            "resolved_model": getattr(self.jev, "last_model", None) if decision and decision.model_called else None,
+            "usage": getattr(self.jev, "last_usage", None) if decision and decision.model_called else None,
             "pending": deepcopy(self.memory.pending), "history": deepcopy(self.memory.history[-8:]),
             "process_id": self._process_id, "recorded_at_utc": utc_now(),
             "phases": deepcopy(self._phases), "attempt": deepcopy(self.memory.attempt),
@@ -476,12 +478,16 @@ class HierarchicalLoop(AgentLoop):
 
     def _fallback_plan(self, plans: list[Plan]) -> Plan:
         if self.factory_scheduling == "ready-work" and self.catalog is not None:
-            return plans[0]  # Preserve the compiler's critical-prerequisite priority.
+            evidence = getattr(self, "_selection_support", {})
+            ranking = evidence.get("deterministic_ranking", [])
+            by_id = {plan.id: plan for plan in plans}
+            return next((by_id[key] for key in ranking if key in by_id), plans[0])
         return min(plans, key=lambda plan: (len(plan.steps), plan.id))
 
     @traced_step
     def step(self) -> dict:
         self._decision = None
+        self._selection_support = {}
         self._trace.observation_phase = "before_decision"
         self._phases = []
         snapshot = self._observe()
@@ -508,10 +514,24 @@ class HierarchicalLoop(AgentLoop):
             if not plans:
                 self.memory.status, self.memory.reason = "blocked", blocker or "Plan failure budget exhausted"
                 return self._record(snapshot, "observe", self.memory.reason)
-            if self.policy == "deterministic":
+            if self.factory_scheduling == "ready-work" and self.catalog is not None:
+                from .planning.decision_support import distinct_candidates, scheduling_context
+
+                plans = distinct_candidates(plans)
+                self._selection_support = scheduling_context(
+                    snapshot, self.catalog, plans, self.memory.active_goal)
+                by_id = {plan.id: plan for plan in plans}
+                plans = [by_id[key] for key in self._selection_support["deterministic_ranking"]]
+            singleton = bool(self._selection_support and len(plans) == 1 and self.policy == "hybrid")
+            if self.policy == "deterministic" or singleton:
                 with phase("selection", self._diagnostic_trace):
                     chosen = self._fallback_plan(plans)
-                self._decision = Decision(chosen.id, "deterministic")
+                self._decision = Decision(
+                    chosen.id, "deterministic-singleton" if singleton else "deterministic",
+                    "Only one distinct feasible continuation" if singleton else "",
+                    state=self._selection_support,
+                    diagnostics={"schema": 1, "outcome": "singleton" if singleton else "deterministic",
+                                 "model_skipped": True})
                 self._trace_decision()
             else:
                 facts = self._model_facts(snapshot)
@@ -520,7 +540,7 @@ class HierarchicalLoop(AgentLoop):
                     facts["factory"].pop("connectors", None)
                     facts["factory"]["native_transfer_receipt_count"] = len(receipts)
                 state = {"facts": facts, "active_goal": asdict(GOALS[self.memory.active_goal]),
-                         "history": self.memory.history[-8:]}
+                         "history": self.memory.history[-8:], **self._selection_support}
                 if self.factory_scheduling == "ready-work":
                     state["production_scheduling"] = {
                         "objective": "Advance the next production batch identified in plan descriptions",
@@ -532,7 +552,8 @@ class HierarchicalLoop(AgentLoop):
                         self._decision = select_plan(self._trace.client(self.jev), state, plans, self.confidence_floor,
                                                      self.max_request_bytes)
                 except ValueError as error:
-                    self._decision = Decision(None, "observe", str(error))
+                    self._decision = Decision(None, "observe", str(error), state=state,
+                                              diagnostics={"schema": 1, "outcome": "request_rejected"})
                 chosen = next((p for p in plans if p.id == self._decision.plan_id), None)
                 if chosen is None and self.policy == "hybrid":
                     chosen = self._fallback_plan(plans)

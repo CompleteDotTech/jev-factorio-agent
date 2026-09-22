@@ -96,6 +96,7 @@ class Decision:
     answers: dict = field(default_factory=dict)
     utilities: dict[str, float] = field(default_factory=dict)
     model_called: bool = False
+    diagnostics: dict = field(default_factory=dict)
 
 
 def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
@@ -104,6 +105,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
     if max_bytes < 1 or not 1 <= max_candidates <= 254:
         raise ValueError("Invalid request budget")
     selected = plans[:max_candidates]
+    objective = "local_objective" if "local_objective" in state else "active_goal"
     if len({p.id for p in selected}) != len(selected):
         raise ValueError("Duplicate candidate IDs")
     while selected:
@@ -118,15 +120,23 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "inserts five carried coal. factory_* steps execute the explicit parameters "
                 "using native recipes, paid inventory transfers, machines, physical connections, "
                 "and research. Native crafting waits for its real queue; native machines and "
-                "labs must actually produce or research. Only the active_goal is being judged. "
+                "labs must actually produce or research. Judge the supplied local_objective when present; "
+                "otherwise judge active_goal. Estimates are not facts or execution permission. "
                 "Each action needs a fresh observed postcondition before it counts as success."
             ),
         }
+        if "candidate_evidence" in context:
+            context["candidate_evidence"] = {p.id: state["candidate_evidence"][p.id]
+                                             for p in selected if p.id in state["candidate_evidence"]}
+        if "deterministic_ranking" in context:
+            context["deterministic_ranking"] = [key for key in state["deterministic_ranking"]
+                                                if key in context["candidate_plans"]]
         questions = {
             "candidate": {
                 "type": "choice",
-                "instructions": ("Choose the best supplied candidate plan for `active_goal` using "
-                                 "`facts` and `history`. Select observe when more evidence is needed. "
+                "instructions": (f"Choose the best supplied candidate plan for `{objective}` using "
+                                 "`facts`, `candidate_evidence` when present, and `history`. "
+                                 "Select observe only when evidence needed to start is missing. "
                                  "Do not assume other questions' answers are available."),
                 "criteria": {**{p.id: p.description for p in selected},
                              "observe": "Gather another observation without mutating the factory"},
@@ -137,14 +147,19 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
             questions[plan.id + "/benefit"] = {
                 "type": "score",
                 "instructions": (
-                    f"How directly do the steps in {pointer} advance `active_goal` "
-                    "given `facts` and `execution_contract`? Judge this goal, not later goals."
+                    f"How directly do the steps in {pointer} advance `{objective}` "
+                    "given `facts` and `execution_contract`? Do not demand a full-game plan "
+                    "from one bounded local production action."
                 ),
-                "criteria": [
+                "criteria": ([
+                    "No demonstrated contribution to the bounded production objective",
+                    "Supplies useful inputs or evidenced capacity for the bounded task",
+                    "Directly removes an observed production blocker or prevents due starvation",
+                ] if objective == "local_objective" else [
                     "The steps do not improve the active goal's required state",
                     "The steps make partial progress but leave a required action unplanned",
                     "The steps supply all actions needed to satisfy the active goal",
-                ],
+                ]),
             }
             questions[plan.id + "/disruption"] = {
                 "type": "score",
@@ -180,32 +195,52 @@ def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float 
                 max_bytes: int = 32000) -> Decision:
     _number(confidence_floor)
     context, questions, offered = question_batch(state, plans, max_bytes=max_bytes)
+    diagnostics = {"schema": 1, "input_candidates": len(plans),
+                   "offered_candidates": len(offered),
+                   "pruned_candidate_ids": [p.id for p in plans if p not in offered],
+                   "candidate_rejections": {}}
     try:
         answers = client.evaluate(context, questions)
     except (requests.Timeout, requests.ConnectionError) as error:
         return Decision(None, "observe", f"Transient provider failure: {type(error).__name__}",
-                        context, questions, model_called=True)
+                        context, questions, model_called=True,
+                        diagnostics={**diagnostics, "outcome": "provider_failure"})
     except requests.HTTPError as error:
         status = error.response.status_code if error.response is not None else None
         if status is None or not (500 <= status <= 599 or status in {408, 429}):
             raise
         return Decision(None, "observe", f"Transient provider failure: HTTP {status}",
-                        context, questions, model_called=True)
+                        context, questions, model_called=True,
+                        diagnostics={**diagnostics, "outcome": "provider_failure"})
+    except ValueError as error:
+        return Decision(None, "observe", f"Invalid provider payload: {type(error).__name__}",
+                        context, questions, model_called=True,
+                        diagnostics={**diagnostics, "outcome": "invalid_provider_payload"})
     try:
         validate_answers(questions, answers, quantum=getattr(client, "answer_quantum", 0))
     except InvalidJudgment as error:
         return Decision(None, "observe", str(error), context, questions,
-                        answers if isinstance(answers, dict) else {}, model_called=True)
+                        answers if isinstance(answers, dict) else {}, model_called=True,
+                        diagnostics={**diagnostics, "outcome": "invalid_answer"})
     choice = answers["candidate"]
     if choice["choice"] == "observe" or choice["confidence"] < confidence_floor:
-        return Decision(None, "observe", "Model abstained or choice confidence below floor",
-                        context, questions, answers, model_called=True)
+        outcome = "model_abstention" if choice["choice"] == "observe" else "low_choice_confidence"
+        return Decision(None, "observe", outcome.replace("_", " "),
+                        context, questions, answers, model_called=True,
+                        diagnostics={**diagnostics, "outcome": outcome})
     utilities = {}
     for plan in offered:
         benefit = answers[plan.id + "/benefit"]
         disruption = answers[plan.id + "/disruption"]
-        if (answers[plan.id + "/needs_observation"]["noul"] >= 0.5
-                or min(benefit["confidence"], disruption["confidence"]) < confidence_floor):
+        rejected = []
+        if answers[plan.id + "/needs_observation"]["noul"] >= 0.5:
+            rejected.append("missing_start_evidence")
+        if benefit["confidence"] < confidence_floor:
+            rejected.append("low_benefit_confidence")
+        if disruption["confidence"] < confidence_floor:
+            rejected.append("low_disruption_confidence")
+        if rejected:
+            diagnostics["candidate_rejections"][plan.id] = rejected
             continue
         # Ranking heuristic, NOT a probability of plan success or game victory.
         benefit_maximum = len(questions[plan.id + "/benefit"]["criteria"]) - 1
@@ -218,4 +253,5 @@ def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float 
     source = "mock" if getattr(client, "is_mock", False) else "jev"
     return Decision(selected, source if selected else "observe",
                     "" if selected else "Candidate evidence insufficient",
-                    context, questions, answers, utilities, model_called=True)
+                    context, questions, answers, utilities, model_called=True,
+                    diagnostics={**diagnostics, "outcome": "selected" if selected else "all_candidates_rejected"})
