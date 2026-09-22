@@ -119,10 +119,12 @@ class AgentLoop:
                 break
             if deadline is not None and time.monotonic() >= deadline:
                 break
+            from .planning.scheduling import poll_delay
             delay = self.tick_seconds
             try:
                 self.step()
                 completed += 1
+                delay = poll_delay(self)
             except requests.RequestException as error:
                 status = error.response.status_code if error.response is not None else None
                 if deadline is None or (

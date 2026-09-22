@@ -14,6 +14,7 @@ from ..state import GameSnapshot
 from .catalog import Catalog
 from .demand import SupplyLedger, horizon_demands
 from .service_visits import service_visit
+from .scheduling import scheduled_research_wait, ready_research_work
 from .factory import FactoryPlanner, RAW_ITEMS, compile_factory
 
 
@@ -34,6 +35,13 @@ class ReadyWorkPlanner(FactoryPlanner):
         self.ledger = SupplyLedger.capture(snapshot, catalog)
         self.speculative = False
         self.allow_service_visits = True
+
+    def plan(self):
+        return ready_research_work(self, super().plan())
+
+    def _wait(self, effect, item="", threshold=0, role="", timeout=36000, identity=None):
+        plan = super()._wait(effect, item, threshold, role, timeout, identity)
+        return scheduled_research_wait(self, plan)
 
     def _set_focus(self, item: str, amount: int) -> None:
         self.focus = (item, math.ceil(amount))

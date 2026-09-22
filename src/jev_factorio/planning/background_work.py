@@ -9,29 +9,13 @@ from ..craft_jobs import CraftJob
 from ..skills import Plan, Step
 from .ready_work import ReadyWorkPlanner
 from .demand import SupplyLedger
+from .scheduling import research_schedule, future_research_demands
 
 
 def research_demands(snapshot, catalog, *, early: bool = False) -> list[tuple[str, int]]:
-    """Return at most eight pack demands, capped by remaining native research."""
-    factory = snapshot.factory
-    name = factory.get("research", "")
-    tech = catalog.technologies.get(name)
-    lab = factory.get("entities", {}).get("utility:lab")
-    if not tech or not lab or name in (snapshot.researched or []) or tech.get("trigger"):
-        return []
-    progress = factory.get("research_progress", 0)
-    if type(progress) not in {int, float} or not math.isfinite(progress) or not 0 <= progress <= 1:
-        return []
-    result = []
-    for ingredient in tech.get("ingredients", [])[:8]:
-        item, per_unit = ingredient["name"], ingredient["amount"]
-        available = lab.get("input", {}).get(item, 0)
-        remaining = math.ceil(tech["count"] * (1 - progress) * per_unit)
-        target = min(20, remaining)
-        if target <= available or (not early and available > min(5, target)):
-            continue
-        result.append((item, math.ceil(target - available), available / max(1, per_unit)))
-    return [(item, amount) for item, amount, _ in sorted(result, key=lambda entry: (entry[2], entry[0]))]
+    """Refill before forecast starvation, with the existing bounded quantities."""
+    return [(row["item"], row["amount"]) for row in
+            research_schedule(snapshot, catalog, early=early) if row["due"]]
 
 
 def independent_candidates(goal, snapshot, catalog, job: CraftJob | None = None,
@@ -94,6 +78,18 @@ def independent_candidates(goal, snapshot, catalog, job: CraftJob | None = None,
                     if alternative:
                         candidates.append(alternative)
             except (KeyError, ValueError):
+                continue
+    # Fully supplied research frees the actor to prepare one next batch.
+    # This preview never starts/cancels research or spends future job output.
+    if goal == "rocket_launch":
+        for item, amount in future_research_demands(snapshot, catalog):
+            try:
+                worker = new_planner()
+                candidate = worker._need(item, amount)
+                if candidate and candidate.steps[0].action not in {"factory_research", "factory_wait"}:
+                    candidates.append(replace(candidate, description=f"Prepare next research batch: {amount} {item}. "
+                                              + candidate.description))
+            except (ValueError, KeyError):
                 continue
     if job:
         try:
