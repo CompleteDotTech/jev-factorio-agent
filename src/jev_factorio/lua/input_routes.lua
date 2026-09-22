@@ -110,6 +110,10 @@ local function path(source,start,finish,drill,arm,budget,cache)
     end
 end
 local function survey(role)
+    if campaign.production_input_offer then
+        local managed, cell = campaign.production_input_offer(role)
+        if managed then return cell end
+    end
     local source,out=source_for(role)
     assert(source.force.mining_drill_productivity_bonus==0, "Productivity accounting is unsupported")
     local dp,ip=prototypes.entity["burner-mining-drill"],prototypes.entity["burner-inserter"]
@@ -300,7 +304,7 @@ assert(previous_observe==output.observer or previous_observe==r.observer, "Unexp
 if previous_observe==r.observer then previous_observe=r.previous_observe end
 r.previous_observe=previous_observe
 r.observer=function()
-    local result=previous_observe(); local rows={}
+    local result=previous_observe(); local rows={}; local diagnostics={}
     for _,source in ipairs({"recipe:iron-plate","recipe:copper-plate"}) do
         local cell=r.cells[source] or r.offers[source]
         if cell and not r.cells[source] and not pcall(clear_layout,cell) then cell=nil; r.offers[source]=nil end
@@ -331,7 +335,20 @@ r.observer=function()
                 state=cell.fault and "fault" or (r.cells[source] and (linked and "ready" or "building") or "proposed")}
         end
     end
-    result.input_routes={protocol=1,session_id=storage.jev_session_id,tick=result.tick,sources=rows}
+    for _,role in ipairs({"recipe:iron-plate","recipe:copper-plate"}) do
+        if not rows[role] then
+            local source=campaign.entities[role];local out=output.cells[role]
+            local reason="no_clear_route_within_budget"
+            if not source or not source.valid then reason="producer_missing"
+            elseif not out or not out.flow or out.fault then reason="output_not_commissioned"
+            elseif not source.surface.find_entities_filtered then reason="resource_survey_unavailable"
+            elseif #source.surface.find_entities_filtered{name=ores[role],position=source.position,radius=40,limit=1}==0 then
+                reason="ore_outside_local_survey" end
+            diagnostics[role]={reason=reason,fallback="batched_manual_supply",max_belts=max_belts,survey_radius=40}
+        end
+    end
+    result.input_routes={protocol=1,session_id=storage.jev_session_id,tick=result.tick,sources=rows,diagnostics=diagnostics}
+    if campaign.observe_production_sites then result.production_sites=campaign.observe_production_sites() end
     return result
 end
 campaign.observe=r.observer

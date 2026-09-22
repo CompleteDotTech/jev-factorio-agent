@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 
 from .state import GameSnapshot
-from . import output_buffers, input_routes
+from . import output_buffers, input_routes, production_sites
 
 COMMAND_FIELDS = {
     output_buffers.COMMAND: output_buffers.FIELDS,
@@ -93,6 +93,8 @@ def satisfied(effect: str, item: str, threshold: float, parameters: dict, snapsh
     if effect == "explored":
         return factory.get("exploration_radius", 0) >= threshold
     if effect == "machine":
+        if parameters.get("anchor", "").startswith("cell-site:"):
+            return action == "factory_place" and production_sites.complete(parameters, snapshot)
         return machine.get("name") == parameters["name"]
     if effect == "machine_recipe":
         return machine.get("recipe") == parameters["recipe"]
@@ -159,6 +161,8 @@ def allowed(action: str, parameters: dict, snapshot: GameSnapshot) -> bool:
     if action == "factory_gather":
         return parameters["resource"] in snapshot.nearby_resources
     if action == "factory_place":
+        if parameters["anchor"].startswith("cell-site:") and not production_sites.allowed(parameters, snapshot):
+            return False
         return not machine and snapshot.inventory.get(parameters["name"], 0) >= 1
     if action == "factory_craft_job":
         return (type(factory.get("craft_jobs_protocol")) is int

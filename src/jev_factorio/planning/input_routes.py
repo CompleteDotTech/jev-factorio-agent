@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 from ..input_routes import COMMAND, flow_complete, remaining, sources
+from ..production_sites import sources as production_sites, summary as site_summary
 from ..output_buffers import flow_complete as output_flow_complete
 from .output_buffers import OutputBufferPlanner
 
@@ -12,6 +14,26 @@ class InputRoutePlanner(OutputBufferPlanner):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._acquiring_route = False
+
+    def _machine(self, role, name, path, anchor="factory"):
+        if role not in self.entities and name == "stone-furnace":
+            row = production_sites(self.snapshot).get(role, {})
+            if row.get("state") == "proposed":
+                prerequisite = self._need(name, 1, path)
+                if prerequisite:
+                    return prerequisite
+                return self._plan("factory_place", "machine",
+                    parameters={"role": role, "name": name, "anchor": row["anchor"]},
+                    costs={name: 1}, identity="joint:" + row["anchor"],
+                    description=f"Place paid {name} at joint ore/route/output site for {role}")
+        return super()._machine(role, name, path, anchor)
+
+    def candidates(self):
+        plans = super().candidates()
+        sites = site_summary(self.snapshot)
+        diagnostics = self.factory.get("input_routes", {}).get("diagnostics", {})
+        return [replace(plan, materials={**(plan.materials or {}), "automation_sites": sites,
+                                        "route_diagnostics": diagnostics}) for plan in plans]
 
     def _acquire(self, item, count, path):
         self._acquiring_route = True

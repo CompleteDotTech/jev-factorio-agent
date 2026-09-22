@@ -57,6 +57,10 @@ local function topology(cell)
     return arm and chest and arm.pickup_target == cell.entity and arm.drop_target == chest
 end
 local function offer(role, item)
+    if campaign.production_output_offer then
+        local managed, cell = campaign.production_output_offer(role, item)
+        if managed then return cell end
+    end
     local source = source_for(role)
     local prototype = prototypes.entity["burner-inserter"]
     assert(prototype and prototype.inserter_pickup_position and prototype.inserter_drop_position,

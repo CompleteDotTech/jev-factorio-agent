@@ -6,6 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 
 from .input_routes import MAX_BELTS, current, permits, sources
+from .production_sites import sources as production_sites, summary as site_summary
 from .planning.input_routes import InputRoutePlanner
 from .skills import Plan, Step
 
@@ -31,6 +32,7 @@ class InputRouteMixin:
         snapshot = super()._observe(stage)
         try:
             rows = sources(snapshot)
+            production_sites(snapshot)  # Fail closed for stale or replaced joint-site evidence.
             for source, expected in self.memory.input_commitments.items():
                 row = rows.get(source)
                 if (not row or row["state"] == "proposed" or row["layout"] != expected["layout"]
@@ -79,7 +81,10 @@ class InputRouteMixin:
                 "layout", "source_unit", "ore", "item", "state", "topology", "flow", "reserve_belts")}
             summary[source].update(belt_count=len(row["steps"])-2, paid_components=len(row["parts"]),
                                    next_component=deepcopy(todo[0]) if todo else None)
-        facts["factory"]["input_routes"] = {"protocol": 1, "sources": summary}
+        facts["factory"]["input_routes"] = {"protocol": 1, "sources": summary,
+            "diagnostics": deepcopy(snapshot.factory.get("input_routes", {}).get("diagnostics", {}))}
+        if "production_sites" in facts["factory"]:
+            facts["factory"]["production_sites"] = {"protocol": 1, "sources": site_summary(snapshot)}
         return facts
 
     def _compile_candidates(self, snapshot):
