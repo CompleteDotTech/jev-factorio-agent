@@ -1,0 +1,2641 @@
+{
+  "active_goal": "rocket_launch",
+  "active_plan": null,
+  "attempt": null,
+  "attempt_outcomes": [
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T09:53:05.019448+00:00",
+          "error_code": null,
+          "seconds": 0.018343525007367134,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T09:53:31.311767+00:00",
+      "finished_tick": 1596590,
+      "id": "171acf27335445ca8f0e860752aa5b75",
+      "latency_seconds": 26.416101800015895,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_wait:advanced-material-processing:progress:0.8641185185192295:supplies:automation-science-pack=11,logistic-science-pack=11",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T09:53:04.895601+00:00",
+      "started_tick": 1595137,
+      "step_index": 0,
+      "step_sha256": "d790ec1e921436bbd9d6c98936c1103d493b4420fbb6ebd75dc4be5b2be760f3"
+    },
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T09:53:38.880182+00:00",
+          "error_code": null,
+          "seconds": 0.018844651989638805,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T09:54:03.250798+00:00",
+      "finished_tick": 1598308,
+      "id": "a1d8b4720f1b4e78a64780bda29f26fe",
+      "latency_seconds": 24.45266145700589,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_wait:advanced-material-processing:progress:0.8779481481487288:supplies:automation-science-pack=10,logistic-science-pack=10",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T09:53:38.798079+00:00",
+      "started_tick": 1597011,
+      "step_index": 0,
+      "step_sha256": "5240aae7f5a8e066d2bf579944be3fd07c1cfbe3854580a020c07f93d15e41fc"
+    },
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T09:54:16.193412+00:00",
+          "error_code": null,
+          "seconds": 0.38323453700286336,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T09:54:32.902164+00:00",
+      "finished_tick": 1600071,
+      "id": "260a9fb6fe624017b4e5e801dd7fb232",
+      "latency_seconds": 16.926533663994633,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_wait:advanced-material-processing:progress:0.8912222222226776:supplies:automation-science-pack=9,logistic-science-pack=9",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T09:54:15.975584+00:00",
+      "started_tick": 1599000,
+      "step_index": 0,
+      "step_sha256": "2d9d42e38149808f96c9c234ad6a890d90b34952f3d65509f487531a2789e6e1"
+    },
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T09:54:39.151126+00:00",
+          "error_code": null,
+          "seconds": 0.012596615008078516,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T09:55:00.877428+00:00",
+      "finished_tick": 1601700,
+      "id": "c540b5ffa69c434699e12916677a9c47",
+      "latency_seconds": 21.777791428990895,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_wait:advanced-material-processing:progress:0.9033629629633037:supplies:automation-science-pack=8,logistic-science-pack=8",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T09:54:39.099578+00:00",
+      "started_tick": 1600419,
+      "step_index": 0,
+      "step_sha256": "3b0f2239293ebebd0b3575618a8a33850807b9229127049c47541d6328061079"
+    },
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T09:55:06.994407+00:00",
+          "error_code": null,
+          "seconds": 0.022960677975788713,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T09:55:29.983597+00:00",
+      "finished_tick": 1603341,
+      "id": "096157cb50dd4a6f9d253a3aed66c2da",
+      "latency_seconds": 23.04403543000808,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_wait:advanced-material-processing:progress:0.9154222222224492:supplies:automation-science-pack=7,logistic-science-pack=7",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T09:55:06.939504+00:00",
+      "started_tick": 1602033,
+      "step_index": 0,
+      "step_sha256": "642d4f31b101ab68cf875c1b856e421548244a285a237745a22a556d497cd751"
+    },
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T09:55:40.036027+00:00",
+          "error_code": null,
+          "seconds": 0.021516219014301896,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T09:56:02.023471+00:00",
+      "finished_tick": 1605081,
+      "id": "206553bcd91b42cf8c4fa0da4d8befb2",
+      "latency_seconds": 22.18553404798149,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_wait:advanced-material-processing:progress:0.9278222222223322:supplies:automation-science-pack=6,logistic-science-pack=6",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T09:55:39.837878+00:00",
+      "started_tick": 1603818,
+      "step_index": 0,
+      "step_sha256": "0e1ad02394c607193b0b1e03673e1ef52b2e6cdaf84f437b19c192ad08f6c2a6"
+    },
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T09:56:08.276865+00:00",
+          "error_code": null,
+          "seconds": 0.018532754009356722,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T09:56:32.167649+00:00",
+      "finished_tick": 1606786,
+      "id": "976b5bbb2ffd40958d6191ff88fa8967",
+      "latency_seconds": 23.92652903002454,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_wait:advanced-material-processing:progress:0.940718518518507:supplies:automation-science-pack=5,logistic-science-pack=5",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T09:56:08.241052+00:00",
+      "started_tick": 1605461,
+      "step_index": 0,
+      "step_sha256": "af3bbbc9a8ed0add7e57fcaffcfdd9120f4189eeaf3b7d5b8f6c5ab851aeceaa"
+    },
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T09:56:39.331020+00:00",
+          "error_code": null,
+          "seconds": 0.04917173701687716,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T09:57:05.036486+00:00",
+      "finished_tick": 1608549,
+      "id": "d07b175a1d4b416b8787281736ec7ee5",
+      "latency_seconds": 25.83278472101665,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_wait:advanced-material-processing:progress:0.9532888888887585:supplies:automation-science-pack=4,logistic-science-pack=4",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T09:56:39.203637+00:00",
+      "started_tick": 1607173,
+      "step_index": 0,
+      "step_sha256": "ff29ef8c02533bdf877bf3a07168726e6908961663254d26cd4dc3226050e259"
+    },
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T09:57:13.937677+00:00",
+          "error_code": null,
+          "seconds": 0.01738314999965951,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T09:57:36.580100+00:00",
+      "finished_tick": 1610269,
+      "id": "bcdac4093bd949b695d48f6b88ba11cc",
+      "latency_seconds": 22.69354760600254,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_wait:advanced-material-processing:progress:0.9664518518515972:supplies:automation-science-pack=3,logistic-science-pack=3",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T09:57:13.886499+00:00",
+      "started_tick": 1608998,
+      "step_index": 0,
+      "step_sha256": "c6e63443bee152c07ca3f5bff0741092da49b97363278181bcf961851a574450"
+    },
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T09:57:45.064456+00:00",
+          "error_code": null,
+          "seconds": 0.01779184999759309,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T09:58:08.164511+00:00",
+      "finished_tick": 1611907,
+      "id": "8d159934ccc840d69f9ad6f17351605f",
+      "latency_seconds": 23.2188877829758,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_wait:advanced-material-processing:progress:0.9791111111107371:supplies:automation-science-pack=2,logistic-science-pack=2",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T09:57:44.945561+00:00",
+      "started_tick": 1610707,
+      "step_index": 0,
+      "step_sha256": "fc051889ed1d405dc19d3954108a3e84fcf404d9f61f62fdbd858be6fbbc880c"
+    },
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T09:58:16.679265+00:00",
+          "error_code": null,
+          "seconds": 0.0902492819877807,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T09:58:32.797407+00:00",
+      "finished_tick": 1613356,
+      "id": "d46847bea1a64a609759ef5665daaf73",
+      "latency_seconds": 16.26993551297346,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_wait:advanced-material-processing:progress:0.9923925925920933:supplies:automation-science-pack=1,logistic-science-pack=1",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T09:58:16.527420+00:00",
+      "started_tick": 1612463,
+      "step_index": 0,
+      "step_sha256": "87e59aca9d61fc1e89001bee431d2f963dd8677ae4a529a3a5ad3aab8833c179"
+    },
+    {
+      "action": "factory_research",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T09:58:40.146313+00:00",
+          "error_code": null,
+          "seconds": 0.046539942995877936,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T09:58:42.746007+00:00",
+      "finished_tick": 1613887,
+      "id": "221e0ff4c0534fd48a12f24074b46759",
+      "latency_seconds": 2.6445557000115514,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_research:automation",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T09:58:40.101395+00:00",
+      "started_tick": 1613758,
+      "step_index": 0,
+      "step_sha256": "59e8084184fe37ff25361dbed0ba1cd1e3c5bc6d23c914750421ee9f1a6537d6"
+    },
+    {
+      "action": "factory_gather",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T09:58:48.554014+00:00",
+          "error_code": null,
+          "seconds": 38.17702248800197,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T09:59:28.346532+00:00",
+      "finished_tick": 1616640,
+      "id": "1cb21dbc37de4ed58549fb54b4b042e3",
+      "latency_seconds": 39.8394600120082,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_gather:copper-ore:target:10:site:{\"name\":\"copper-ore\",\"position\":{\"x\":-49.5,\"y\":-84.5},\"surface_index\":1}",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T09:58:48.507024+00:00",
+      "started_tick": 1614250,
+      "step_index": 0,
+      "step_sha256": "78178b0e88330b1e43379f046d350fa5b2a8a136c2792947eb7e949945f6a1fd"
+    },
+    {
+      "action": "factory_insert",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T09:59:34.063576+00:00",
+          "error_code": null,
+          "seconds": 16.189670367981307,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T09:59:34.020397+00:00",
+          "error_code": null,
+          "seconds": 16.57902022401686,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T09:59:50.358431+00:00",
+          "error_code": null,
+          "seconds": 0.034990385989658535,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 243,
+      "finished_at_utc": "2026-09-22T09:59:52.648503+00:00",
+      "finished_tick": 1618044,
+      "id": "5c9f7b99ff584b9fb4b25da3d79baa58",
+      "latency_seconds": 18.66449006300536,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_insert:recipe:copper-plate",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1616833:factory_insert:recipe:copper-plate:copper-ore",
+      "started_at_utc": "2026-09-22T09:59:33.983900+00:00",
+      "started_tick": 1616970,
+      "step_index": 0,
+      "step_sha256": "bb0a3e0861be707b58c42455899f87f29f46fa010ec386b0cdef79d27496770b"
+    },
+    {
+      "action": "factory_gather",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T09:59:59.712144+00:00",
+          "error_code": null,
+          "seconds": 54.29191447500489,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:00:55.284604+00:00",
+      "finished_tick": 1621733,
+      "id": "ae1159bc6a64467aa05dd3c95ac01931",
+      "latency_seconds": 55.62085820600623,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_gather:iron-ore:target:20:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T09:59:59.663695+00:00",
+      "started_tick": 1618424,
+      "step_index": 0,
+      "step_sha256": "ccfe18657d3fcfa6f4d192d30465fef4ed08abb84ce1db9c858158e8f839f46b"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:01:00.754180+00:00",
+          "error_code": null,
+          "seconds": 14.831394198990893,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:01:00.717620+00:00",
+          "error_code": null,
+          "seconds": 14.988931619998766,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:01:15.645281+00:00",
+          "error_code": null,
+          "seconds": 0.028931571985594928,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 609,
+      "finished_at_utc": "2026-09-22T10:01:16.946463+00:00",
+      "finished_tick": 1623017,
+      "id": "fb3db89b0b0e4838b1d04c3267acc38d",
+      "latency_seconds": 16.269797168002697,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:243",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1621926:factory_extract:output-chest:243:copper-plate",
+      "started_at_utc": "2026-09-22T10:01:00.676593+00:00",
+      "started_tick": 1622041,
+      "step_index": 0,
+      "step_sha256": "219f79cfbdb4fb5521df20bd60f11e2f256bfd6e6388e9b5e566f59ca2352e8f"
+    },
+    {
+      "action": "factory_insert",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:01:22.273446+00:00",
+          "error_code": null,
+          "seconds": 0.1183375790133141,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:01:22.229273+00:00",
+          "error_code": null,
+          "seconds": 0.30195783398812637,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:01:22.462230+00:00",
+          "error_code": null,
+          "seconds": 0.03008923100423999,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 334,
+      "finished_at_utc": "2026-09-22T10:01:23.873964+00:00",
+      "finished_tick": 1623414,
+      "id": "b4d1d89d3a9c4bd09918d75a6a387e94",
+      "latency_seconds": 1.6703397020173725,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_insert:recipe:iron-plate",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1623206:factory_insert:recipe:iron-plate:iron-ore",
+      "started_at_utc": "2026-09-22T10:01:22.203569+00:00",
+      "started_tick": 1623321,
+      "step_index": 0,
+      "step_sha256": "5d0affa2689b215fb1dfd7d7b97769538b93705d0148332b4889f08c7d55dd33"
+    },
+    {
+      "action": "factory_gather",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:01:29.101485+00:00",
+          "error_code": null,
+          "seconds": 17.07455143801053,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:01:50.189058+00:00",
+      "finished_tick": 1624899,
+      "id": "ea27fd76610a4aec976715bd4ebea99f",
+      "latency_seconds": 21.113162838999415,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_gather:iron-ore:target:1:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T10:01:29.075823+00:00",
+      "started_tick": 1623724,
+      "step_index": 0,
+      "step_sha256": "e518b843186e8192557ff884ab92327fe5557fa6b28a719a0a8958c624c61d72"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:02:06.965549+00:00",
+          "error_code": null,
+          "seconds": 14.16178515998763,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:02:06.795260+00:00",
+          "error_code": null,
+          "seconds": 14.915652180992765,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:02:21.429753+00:00",
+          "error_code": null,
+          "seconds": 0.03188360499916598,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 495,
+      "finished_at_utc": "2026-09-22T10:02:23.558992+00:00",
+      "finished_tick": 1626858,
+      "id": "214f07602b3342bc8855b0c2bfb11eaa",
+      "latency_seconds": 16.907522894005524,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1625559:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-22T10:02:06.651408+00:00",
+      "started_tick": 1625824,
+      "step_index": 0,
+      "step_sha256": "bc42e8a6d75deaa9e1fd428d10739b7ad765e389103697174cec45092815e58b"
+    },
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:02:31.173222+00:00",
+          "error_code": null,
+          "seconds": 0.1475962229887955,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:02:33.654233+00:00",
+      "finished_tick": 1627474,
+      "id": "70420fdc44724bcda76bc016df20f48c",
+      "latency_seconds": 3.2010939460014924,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_wait:collect:output:334:1:-1:12:9",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T10:02:30.453075+00:00",
+      "started_tick": 1627235,
+      "step_index": 0,
+      "step_sha256": "c02ae1b13c85b8f7f7444201054d574d8f50258527b74511ecfc1ced4ea74a90"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:02:39.156499+00:00",
+          "error_code": null,
+          "seconds": 0.10410858999239281,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:02:39.124975+00:00",
+          "error_code": null,
+          "seconds": 0.24757388897705823,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:02:39.309038+00:00",
+          "error_code": null,
+          "seconds": 0.03229828699841164,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 495,
+      "finished_at_utc": "2026-09-22T10:02:40.445450+00:00",
+      "finished_tick": 1627884,
+      "id": "d5025e38458f48c2ad915751ff9850e1",
+      "latency_seconds": 1.3483855019730981,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1627676:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-22T10:02:39.096979+00:00",
+      "started_tick": 1627798,
+      "step_index": 0,
+      "step_sha256": "03c70a9ec6419dfa4a923eba7bb930716ec6061b9a95c343716408d542edd6ac"
+    },
+    {
+      "action": "factory_craft_job",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:02:45.520696+00:00",
+          "error_code": null,
+          "seconds": 0.10096788502414711,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:02:45.552379+00:00",
+          "error_code": null,
+          "seconds": 0.021847919997526333,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:02:51.712481+00:00",
+      "finished_tick": 1628555,
+      "id": "4a002a2ddff746b087910fc1d253dda6",
+      "latency_seconds": null,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_craft:iron-gear-wheel",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "fe451384cc8c435bb33613dc42d1c782",
+      "started_at_utc": "2026-09-22T10:02:45.490868+00:00",
+      "started_tick": 1628185,
+      "step_index": 0,
+      "step_sha256": "e1a652c2de96d2f747df11329a99e5ad89dcd580ad9fdb0d9d1f36138338f5b1"
+    },
+    {
+      "action": "factory_craft_job",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:02:57.818426+00:00",
+          "error_code": null,
+          "seconds": 0.32083002000581473,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:02:57.949713+00:00",
+          "error_code": null,
+          "seconds": 0.03600170501158573,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:03:56.448272+00:00",
+      "finished_tick": 1632199,
+      "id": "a9516e9e472d415eaa4e46b48650ff53",
+      "latency_seconds": null,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_craft:automation-science-pack",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "e37f4d50e6244542830aaaf85a749c09",
+      "started_at_utc": "2026-09-22T10:02:57.614219+00:00",
+      "started_tick": 1628872,
+      "step_index": 0,
+      "step_sha256": "689bd7a86302c1b049639e22223c816e7c96d3ac5f44a6ad9211e9b350f0ba88"
+    },
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:03:07.593097+00:00",
+          "error_code": null,
+          "seconds": 0.019628453999757767,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:03:56.693171+00:00",
+      "finished_tick": 1632199,
+      "id": "2c9c4e78909a463280c297bd5345b031",
+      "latency_seconds": 49.21253371000057,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "background-wait:e37f4d50e6244542830aaaf85a749c09",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T10:03:07.480575+00:00",
+      "started_tick": 1629411,
+      "step_index": 0,
+      "step_sha256": "5d17c5357f7244a67723d6828f5acaaa0a06e8d8b7eb16d73341eee87de655f2"
+    },
+    {
+      "action": "factory_insert",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:04:03.077255+00:00",
+          "error_code": null,
+          "seconds": 4.458963949000463,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:04:03.016177+00:00",
+          "error_code": null,
+          "seconds": 4.802164983993862,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:04:07.661481+00:00",
+          "error_code": null,
+          "seconds": 0.05108614600612782,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 507,
+      "finished_at_utc": "2026-09-22T10:04:10.027550+00:00",
+      "finished_tick": 1632961,
+      "id": "b85667ddd3bb4a92977bda0a18b202dc",
+      "latency_seconds": 7.059259845991619,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_insert:utility:lab",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1632418:factory_insert:utility:lab:automation-science-pack",
+      "started_at_utc": "2026-09-22T10:04:02.968227+00:00",
+      "started_tick": 1632576,
+      "step_index": 0,
+      "step_sha256": "c87ed8a4ea03ea293671e2a0fc4116ffe1ba9735a5ea87223f85266504d362ad"
+    },
+    {
+      "action": "factory_research",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:06:01.087861+00:00",
+          "error_code": null,
+          "seconds": 0.03384564898442477,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:06:02.378080+00:00",
+      "finished_tick": 1639259,
+      "id": "7146c0ef8ac04a1d817ff7f3e5ca0532",
+      "latency_seconds": 1.325501394981984,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_research:automation-2",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T10:06:01.052516+00:00",
+      "started_tick": 1639181,
+      "step_index": 0,
+      "step_sha256": "1765c39755514f38a5dd8bbd50bbcc7cd3d12c068e2412781f172cdc8818a810"
+    },
+    {
+      "action": "factory_gather",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:06:09.169430+00:00",
+          "error_code": null,
+          "seconds": 58.21064893700532,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:07:09.134892+00:00",
+      "finished_tick": 1643233,
+      "id": "b19925be7aa646388f9edc440a22d94c",
+      "latency_seconds": 60.082905411021784,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_gather:copper-ore:target:20:site:{\"name\":\"copper-ore\",\"position\":{\"x\":-49.5,\"y\":-84.5},\"surface_index\":1}",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T10:06:09.051929+00:00",
+      "started_tick": 1639639,
+      "step_index": 0,
+      "step_sha256": "6323e57f2db98495a13fce71f86eb21eba691315277cc56cfa1bda86e05c2df9"
+    },
+    {
+      "action": "factory_insert",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:07:15.774443+00:00",
+          "error_code": null,
+          "seconds": 15.928855120000662,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:07:15.568296+00:00",
+          "error_code": null,
+          "seconds": 16.216067675995873,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:07:31.862263+00:00",
+          "error_code": null,
+          "seconds": 0.027583457005675882,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 243,
+      "finished_at_utc": "2026-09-22T10:07:33.011918+00:00",
+      "finished_tick": 1644677,
+      "id": "f75cf5adc2d4448f981c6745b8625cd6",
+      "latency_seconds": 17.608984118996887,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_insert:recipe:copper-plate",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1643445:factory_insert:recipe:copper-plate:copper-ore",
+      "started_at_utc": "2026-09-22T10:07:15.402830+00:00",
+      "started_tick": 1643574,
+      "step_index": 0,
+      "step_sha256": "2203f9c890e4074d42f1d028622c8e7a8a0330f0097812823df9288a32a4a6f6"
+    },
+    {
+      "action": "factory_gather",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:07:38.142415+00:00",
+          "error_code": null,
+          "seconds": 18.179570199979935,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:07:57.660925+00:00",
+      "finished_tick": 1646138,
+      "id": "9d4019b7557b4c94bc9c1a798efb940f",
+      "latency_seconds": 19.543985913012875,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_gather:copper-ore:target:1:site:{\"name\":\"copper-ore\",\"position\":{\"x\":-49.5,\"y\":-84.5},\"surface_index\":1}",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T10:07:38.116886+00:00",
+      "started_tick": 1644974,
+      "step_index": 0,
+      "step_sha256": "44e51b2a7abefd82dbb625e916b9e176644705c5cc3e814dbf69d4ae47a1f1e7"
+    },
+    {
+      "action": "factory_gather",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:08:03.141314+00:00",
+          "error_code": null,
+          "seconds": 89.62220620599692,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:09:34.444677+00:00",
+      "finished_tick": 1651920,
+      "id": "e4328caccd3a42e7a1e8e31d5227e684",
+      "latency_seconds": 91.33022527798312,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_gather:iron-ore:target:40:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T10:08:03.114374+00:00",
+      "started_tick": 1646458,
+      "step_index": 0,
+      "step_sha256": "9edccb1befd633665a8cb0c5958fb1cbff8cf815ac600f27330f47304140c406"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:09:40.399020+00:00",
+          "error_code": null,
+          "seconds": 14.849940597021487,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:09:40.344816+00:00",
+          "error_code": null,
+          "seconds": 15.084782051999355,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:09:55.338901+00:00",
+          "error_code": null,
+          "seconds": 0.03578583200578578,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 609,
+      "finished_at_utc": "2026-09-22T10:09:56.953967+00:00",
+      "finished_tick": 1653249,
+      "id": "ee8b7ea79da04550bb75e786ff977085",
+      "latency_seconds": 16.654211474990007,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:243",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1652122:factory_extract:output-chest:243:copper-plate",
+      "started_at_utc": "2026-09-22T10:09:40.299679+00:00",
+      "started_tick": 1652253,
+      "step_index": 0,
+      "step_sha256": "72236277ccc62c1af1696ee351604b3c879c879cb985406cfc823bebe1313058"
+    },
+    {
+      "action": "factory_insert",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:10:02.726658+00:00",
+          "error_code": null,
+          "seconds": 0.11492716299835593,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:10:02.683687+00:00",
+          "error_code": null,
+          "seconds": 0.2862284129951149,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:10:02.905210+00:00",
+          "error_code": null,
+          "seconds": 0.027448359003756195,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 334,
+      "finished_at_utc": "2026-09-22T10:10:04.194691+00:00",
+      "finished_tick": 1653692,
+      "id": "27bdd10d582c4e98aeda4a513c4b486c",
+      "latency_seconds": 1.5436432260030415,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_insert:recipe:iron-plate",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1653467:factory_insert:recipe:iron-plate:iron-ore",
+      "started_at_utc": "2026-09-22T10:10:02.650977+00:00",
+      "started_tick": 1653600,
+      "step_index": 0,
+      "step_sha256": "a05024101a336672cd71dcab2dab52dbea606ad5821b8c8a4ab02a060fc2d226"
+    },
+    {
+      "action": "factory_gather",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:10:10.028025+00:00",
+          "error_code": null,
+          "seconds": 16.83088962099282,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:10:28.102974+00:00",
+      "finished_tick": 1655112,
+      "id": "2e4faee1d94c4b8089373df6222b97d6",
+      "latency_seconds": 18.105254182999488,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_gather:iron-ore:target:21:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T10:10:09.997654+00:00",
+      "started_tick": 1654027,
+      "step_index": 0,
+      "step_sha256": "a295e1b54bde5b1326262110a0a32e4f9d5cbbe1aab538d34a263e02dfb209ae"
+    },
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:10:33.852403+00:00",
+          "error_code": null,
+          "seconds": 0.012641076988074929,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:10:38.219714+00:00",
+      "finished_tick": 1655698,
+      "id": "23e9cd2f7e874d978663cecef0372418",
+      "latency_seconds": 4.396651268994901,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_wait:collect:output:334:1:-1:12:10",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T10:10:33.822983+00:00",
+      "started_tick": 1655441,
+      "step_index": 0,
+      "step_sha256": "7969105fbe3cb578d6341ee2f030d022ee6b41706d6250b51eb0937f2cbf7dad"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:10:45.969202+00:00",
+          "error_code": null,
+          "seconds": 14.222122110018972,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:10:45.930450+00:00",
+          "error_code": null,
+          "seconds": 14.398304656002438,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:11:00.246017+00:00",
+          "error_code": null,
+          "seconds": 0.03440486601903103,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 495,
+      "finished_at_utc": "2026-09-22T10:11:01.842532+00:00",
+      "finished_tick": 1657024,
+      "id": "73f0b0899d8a42fd924b3bf4474f15b0",
+      "latency_seconds": 15.940881571994396,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1655909:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-22T10:10:45.901585+00:00",
+      "started_tick": 1656076,
+      "step_index": 0,
+      "step_sha256": "37b6c41d495c6df08e200a823f56c39fb50d706896f5c3fcbf7d368d446ea6c8"
+    },
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:11:09.798441+00:00",
+          "error_code": null,
+          "seconds": 0.011410717997932807,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:11:12.784270+00:00",
+      "finished_tick": 1657578,
+      "id": "eab4c975b0ec42d381910529654ed037",
+      "latency_seconds": 3.0255983590031974,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_wait:collect:output:334:1:-1:12:9",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T10:11:09.758608+00:00",
+      "started_tick": 1657439,
+      "step_index": 0,
+      "step_sha256": "c02ae1b13c85b8f7f7444201054d574d8f50258527b74511ecfc1ced4ea74a90"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:11:20.590095+00:00",
+          "error_code": null,
+          "seconds": 0.1346154700149782,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:11:20.459447+00:00",
+          "error_code": null,
+          "seconds": 0.8080067780101672,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:11:20.948716+00:00",
+          "error_code": null,
+          "seconds": 0.028668307000771165,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 495,
+      "finished_at_utc": "2026-09-22T10:11:23.627844+00:00",
+      "finished_tick": 1658181,
+      "id": "d6be5a2b6422450c86035850d373d604",
+      "latency_seconds": 3.2530794120102655,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1657825:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-22T10:11:20.374697+00:00",
+      "started_tick": 1658000,
+      "step_index": 0,
+      "step_sha256": "43203a128d63b7e3a71e4e5f6ad308ffbf9aaf5f11d2a42cfc9ceeed434b851c"
+    },
+    {
+      "action": "factory_insert",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:11:31.952470+00:00",
+          "error_code": null,
+          "seconds": 0.12082758400356397,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:11:31.888313+00:00",
+          "error_code": null,
+          "seconds": 0.47609887199359946,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:11:32.187456+00:00",
+          "error_code": null,
+          "seconds": 0.056677184998989105,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 334,
+      "finished_at_utc": "2026-09-22T10:11:34.977788+00:00",
+      "finished_tick": 1658811,
+      "id": "69ebbc187ce0439aafa8813ae3a26c20",
+      "latency_seconds": 3.1381600619934034,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_insert:recipe:iron-plate",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1658419:factory_insert:recipe:iron-plate:iron-ore",
+      "started_at_utc": "2026-09-22T10:11:31.839554+00:00",
+      "started_tick": 1658620,
+      "step_index": 0,
+      "step_sha256": "f7a312a8c43bdacfded9465610605c65939b20916f102ab7cff409a18c0ec329"
+    },
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:11:42.514240+00:00",
+          "error_code": null,
+          "seconds": 0.012117748003220186,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:12:11.482200+00:00",
+      "finished_tick": 1660805,
+      "id": "b2543bcc5c114415b0e0a34477a720e1",
+      "latency_seconds": 29.0219237380079,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_wait:collect:output:334:1:-1:12:10",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T10:11:42.460221+00:00",
+      "started_tick": 1659220,
+      "step_index": 0,
+      "step_sha256": "7969105fbe3cb578d6341ee2f030d022ee6b41706d6250b51eb0937f2cbf7dad"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:12:21.047724+00:00",
+          "error_code": null,
+          "seconds": 0.11939819500548765,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:12:20.908683+00:00",
+          "error_code": null,
+          "seconds": 0.566768663993571,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:12:21.443431+00:00",
+          "error_code": null,
+          "seconds": 0.07042309999815188,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 495,
+      "finished_at_utc": "2026-09-22T10:12:23.692359+00:00",
+      "finished_tick": 1661471,
+      "id": "dd5b75a7338c4c43a08a28eb322da1ae",
+      "latency_seconds": 2.9527604860195424,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1661071:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-22T10:12:20.739517+00:00",
+      "started_tick": 1661310,
+      "step_index": 0,
+      "step_sha256": "f973b2a1d4e1b71f0d325e0fa914c8387a6e2b80f0be3253dc4a35aef63b10cf"
+    },
+    {
+      "action": "factory_wait",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:12:32.080020+00:00",
+          "error_code": null,
+          "seconds": 0.012572164996527135,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:12:48.432557+00:00",
+      "finished_tick": 1662806,
+      "id": "1788cc0401684e34ad5dcfe79328a179",
+      "latency_seconds": 16.397887951985467,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_wait:collect:output:334:1:-1:12:9",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T10:12:32.034606+00:00",
+      "started_tick": 1661914,
+      "step_index": 0,
+      "step_sha256": "c02ae1b13c85b8f7f7444201054d574d8f50258527b74511ecfc1ced4ea74a90"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:12:56.514505+00:00",
+          "error_code": null,
+          "seconds": 0.13068006801768206,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:12:56.448610+00:00",
+          "error_code": null,
+          "seconds": 0.6593015620019287,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:12:56.849882+00:00",
+          "error_code": null,
+          "seconds": 0.026823145017260686,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 495,
+      "finished_at_utc": "2026-09-22T10:12:59.327674+00:00",
+      "finished_tick": 1663420,
+      "id": "ec584d30bd904e889913d7a9ea6414e3",
+      "latency_seconds": 2.9714101369900163,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1663048:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-22T10:12:56.356167+00:00",
+      "started_tick": 1663256,
+      "step_index": 0,
+      "step_sha256": "754361832b057f3799a5cb7cc24dc2234ffebae0be82be8ec8006b837b731d05"
+    },
+    {
+      "action": "factory_craft_job",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:13:07.804438+00:00",
+          "error_code": null,
+          "seconds": 0.19765476702013984,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:13:07.915096+00:00",
+          "error_code": null,
+          "seconds": 0.023438435018761083,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:15:17.709493+00:00",
+      "finished_tick": 1671570,
+      "id": "c8e48fce0682426a92d9cc79687493b9",
+      "latency_seconds": null,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_craft:iron-gear-wheel",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "f827f15b80bd41cdab343a5e6471bd2a",
+      "started_at_utc": "2026-09-22T10:13:07.691847+00:00",
+      "started_tick": 1663851,
+      "step_index": 0,
+      "step_sha256": "dab94bcb1601bb41796c2646c9e52876dc444df66aa90a6d7beea703a0712b65"
+    },
+    {
+      "action": "factory_gather",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:13:19.550460+00:00",
+          "error_code": null,
+          "seconds": 115.47668000598787,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:15:18.378716+00:00",
+      "finished_tick": 1671570,
+      "id": "c6ecc06fd66b4dfdbbf330910a224ffe",
+      "latency_seconds": 118.87350226999843,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_gather:iron-ore:target:51:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T10:13:19.505159+00:00",
+      "started_tick": 1664514,
+      "step_index": 0,
+      "step_sha256": "8a711065097ab1a1223097c4ccb8af04c6d40f475326e946419355d72cef0424"
+    },
+    {
+      "action": "factory_insert",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:15:34.304935+00:00",
+          "error_code": null,
+          "seconds": 14.424861915002111,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:15:34.250001+00:00",
+          "error_code": null,
+          "seconds": 14.648938267986523,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:15:48.819816+00:00",
+          "error_code": null,
+          "seconds": 0.030702127987751737,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 334,
+      "finished_at_utc": "2026-09-22T10:15:50.037125+00:00",
+      "finished_tick": 1673472,
+      "id": "17b73bee3a8f485cbc3f87874dd198fb",
+      "latency_seconds": 15.830133485986153,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_insert:recipe:iron-plate",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1672402:factory_insert:recipe:iron-plate:iron-ore",
+      "started_at_utc": "2026-09-22T10:15:34.206916+00:00",
+      "started_tick": 1672519,
+      "step_index": 0,
+      "step_sha256": "5cab813a045e77e69602164670384fb34e427b630a6fda5bde74173da2ed0771"
+    },
+    {
+      "action": "factory_insert",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:15:55.355224+00:00",
+          "error_code": null,
+          "seconds": 0.1149033050169237,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:15:55.300915+00:00",
+          "error_code": null,
+          "seconds": 0.3174271530006081,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:15:55.545518+00:00",
+          "error_code": null,
+          "seconds": 0.02670870700967498,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 334,
+      "finished_at_utc": "2026-09-22T10:15:56.773303+00:00",
+      "finished_tick": 1673873,
+      "id": "0c097650d1134a0db2ecf1942b6bfffd",
+      "latency_seconds": 1.505463949026307,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_insert:recipe:iron-plate",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1673657:factory_insert:recipe:iron-plate:iron-ore",
+      "started_at_utc": "2026-09-22T10:15:55.267772+00:00",
+      "started_tick": 1673772,
+      "step_index": 0,
+      "step_sha256": "e104daeab7be589d481f0ced620100a9dece97ce2187c16e7ef202efbfb44f88"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:16:01.992106+00:00",
+          "error_code": null,
+          "seconds": 0.10498239001026377,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:16:01.940277+00:00",
+          "error_code": null,
+          "seconds": 0.3231435029883869,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:16:02.188828+00:00",
+          "error_code": null,
+          "seconds": 0.023622254986548796,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 495,
+      "finished_at_utc": "2026-09-22T10:16:03.554968+00:00",
+      "finished_tick": 1674257,
+      "id": "c2e813c2024e4026b63b47cbd3ce552a",
+      "latency_seconds": 1.6565236910246313,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1674044:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-22T10:16:01.898363+00:00",
+      "started_tick": 1674161,
+      "step_index": 0,
+      "step_sha256": "0d3dffb6e50542b399862fb20a1a4e73a8257749c62ad6e1bcb2225289d66d64"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:16:09.090377+00:00",
+          "error_code": null,
+          "seconds": 0.10458655402180739,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:16:09.042379+00:00",
+          "error_code": null,
+          "seconds": 0.4243374229990877,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:16:09.300892+00:00",
+          "error_code": null,
+          "seconds": 0.027493533998494968,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 495,
+      "finished_at_utc": "2026-09-22T10:16:11.396765+00:00",
+      "finished_tick": 1674689,
+      "id": "f218aa76a2ba4ecd992fa98b30b0d80b",
+      "latency_seconds": 2.392922216007719,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1674447:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-22T10:16:09.003777+00:00",
+      "started_tick": 1674563,
+      "step_index": 0,
+      "step_sha256": "6dcde1bea1eeeadca4f3469f6bf9152149cbdbcfd22b507726ef9cffb448e7bf"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:16:19.615648+00:00",
+          "error_code": null,
+          "seconds": 0.12120625498937443,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:16:19.520522+00:00",
+          "error_code": null,
+          "seconds": 0.6282362649799325,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:16:19.937618+00:00",
+          "error_code": null,
+          "seconds": 0.036192197003401816,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 495,
+      "finished_at_utc": "2026-09-22T10:16:22.141547+00:00",
+      "finished_tick": 1675313,
+      "id": "1e8b71d5e63549b2bf25b01db4f175ef",
+      "latency_seconds": 2.678964165999787,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1674936:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-22T10:16:19.462520+00:00",
+      "started_tick": 1675139,
+      "step_index": 0,
+      "step_sha256": "401722ce18892a33009f3f08fe6c4867581e6a4e350b5123f27ac232067a82e7"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:16:28.130030+00:00",
+          "error_code": null,
+          "seconds": 0.1141516009811312,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:16:28.082684+00:00",
+          "error_code": null,
+          "seconds": 0.2938541310140863,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:16:28.298193+00:00",
+          "error_code": null,
+          "seconds": 0.02837676100898534,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 495,
+      "finished_at_utc": "2026-09-22T10:16:30.190380+00:00",
+      "finished_tick": 1675756,
+      "id": "010c9e16f10641ccbe8b6e822c49c740",
+      "latency_seconds": 2.1470273879822344,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1675510:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-22T10:16:28.043279+00:00",
+      "started_tick": 1675657,
+      "step_index": 0,
+      "step_sha256": "57849ad7c0ffad4a3f38f6817dfb4f8b1e887b917fc252fcffa0c40d4101835f"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:16:35.715165+00:00",
+          "error_code": null,
+          "seconds": 0.10990882301121019,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:16:35.680442+00:00",
+          "error_code": null,
+          "seconds": 0.31746001599822193,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:16:35.889534+00:00",
+          "error_code": null,
+          "seconds": 0.03196124199894257,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 495,
+      "finished_at_utc": "2026-09-22T10:16:37.513282+00:00",
+      "finished_tick": 1676210,
+      "id": "7582be9dd1194646b3f7324b73396d4a",
+      "latency_seconds": 1.8599387989961542,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1675993:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-22T10:16:35.653271+00:00",
+      "started_tick": 1676115,
+      "step_index": 0,
+      "step_sha256": "77241fd8b229393a7efa93450dafc04456ec608efbdd4bc1da838be439c637ab"
+    },
+    {
+      "action": "factory_insert",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:16:44.020533+00:00",
+          "error_code": null,
+          "seconds": 0.10377524598152377,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:16:43.914616+00:00",
+          "error_code": null,
+          "seconds": 0.4918692240025848,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:16:44.316477+00:00",
+          "error_code": null,
+          "seconds": 0.048391369986347854,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 334,
+      "finished_at_utc": "2026-09-22T10:16:46.951678+00:00",
+      "finished_tick": 1676716,
+      "id": "f9616564dae44341aeb2f45cf5139b58",
+      "latency_seconds": 3.108499296999071,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_insert:recipe:iron-plate",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1676419:factory_insert:recipe:iron-plate:iron-ore",
+      "started_at_utc": "2026-09-22T10:16:43.843097+00:00",
+      "started_tick": 1676574,
+      "step_index": 0,
+      "step_sha256": "156b57c91427ab6c37d24200d26262fad4eb35830ebc7de1f9515b430890200a"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:16:55.708525+00:00",
+          "error_code": null,
+          "seconds": 0.12362574200960808,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:16:55.651436+00:00",
+          "error_code": null,
+          "seconds": 0.5094010350003373,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:16:56.059456+00:00",
+          "error_code": null,
+          "seconds": 0.03277315097511746,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 495,
+      "finished_at_utc": "2026-09-22T10:16:58.205894+00:00",
+      "finished_tick": 1677354,
+      "id": "90eabf58216e4012a6cf7e8017b90174",
+      "latency_seconds": 2.7123635390016716,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1676966:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-22T10:16:55.493470+00:00",
+      "started_tick": 1677175,
+      "step_index": 0,
+      "step_sha256": "753abcb15f82620a305aedcfd93579aba11eb0307f219f03b09b0cb8012dfa46"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:17:05.256987+00:00",
+          "error_code": null,
+          "seconds": 0.16888610701425932,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:17:05.206389+00:00",
+          "error_code": null,
+          "seconds": 0.4703008679789491,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:17:05.552455+00:00",
+          "error_code": null,
+          "seconds": 0.028853340016212314,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 495,
+      "finished_at_utc": "2026-09-22T10:17:08.089734+00:00",
+      "finished_tick": 1677884,
+      "id": "2a2d7a79508348bd82f9bb748f89716d",
+      "latency_seconds": 2.918962212977931,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1677589:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-22T10:17:05.170704+00:00",
+      "started_tick": 1677759,
+      "step_index": 0,
+      "step_sha256": "acdd88ff3db2fb68499a8138a0a4d8eb4c76e54789966d4adebf7c5e4cfa1968"
+    },
+    {
+      "action": "factory_craft_job",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:15:27.202748+00:00",
+          "error_code": null,
+          "seconds": 0.1471662920084782,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:15:27.248480+00:00",
+          "error_code": null,
+          "seconds": 0.033664652990410104,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:17:15.767843+00:00",
+      "finished_tick": 1678328,
+      "id": "f3151462f305491b8861cf0c528a3afa",
+      "latency_seconds": null,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_craft:automation-science-pack",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "0a00601b008843b0925ca0f67376b0a6",
+      "started_at_utc": "2026-09-22T10:15:27.162076+00:00",
+      "started_tick": 1672100,
+      "step_index": 0,
+      "step_sha256": "a5763f6c5d7de6bf5e5e13fdf9cab38a34d9efb2e4eaab69205a4e5afe406843"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:17:16.098485+00:00",
+          "error_code": null,
+          "seconds": 0.12087887999950908,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:17:16.044364+00:00",
+          "error_code": null,
+          "seconds": 0.53122548898682,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:17:16.387457+00:00",
+          "error_code": null,
+          "seconds": 0.06663855697843246,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 495,
+      "finished_at_utc": "2026-09-22T10:17:19.903727+00:00",
+      "finished_tick": 1678495,
+      "id": "39fd1d9a97d24256bdf4360e0137b7b4",
+      "latency_seconds": 3.8995755549985915,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1678128:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-22T10:17:16.004083+00:00",
+      "started_tick": 1678328,
+      "step_index": 0,
+      "step_sha256": "68be330331a90ce4c352473359c6bfdb51d41c0d0a746d14bf54a26e88e60d5f"
+    },
+    {
+      "action": "factory_insert",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:17:30.675841+00:00",
+          "error_code": null,
+          "seconds": 4.608831038000062,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:17:30.518818+00:00",
+          "error_code": null,
+          "seconds": 5.347688033012673,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:17:35.583271+00:00",
+          "error_code": null,
+          "seconds": 0.05409705999772996,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 507,
+      "finished_at_utc": "2026-09-22T10:17:39.692095+00:00",
+      "finished_tick": 1679591,
+      "id": "a35f717362b148c4b0fe89656a9f972e",
+      "latency_seconds": 9.507362221018411,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_insert:utility:lab",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1678799:factory_insert:utility:lab:automation-science-pack",
+      "started_at_utc": "2026-09-22T10:17:30.184667+00:00",
+      "started_tick": 1679055,
+      "step_index": 0,
+      "step_sha256": "84e54a8e5acca2b603fc0f21ccbfc2078f900910597a224239847d9e24f452ed"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:17:46.891507+00:00",
+          "error_code": null,
+          "seconds": 4.357534734008368,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:17:46.849541+00:00",
+          "error_code": null,
+          "seconds": 4.651979451009538,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:17:51.363843+00:00",
+          "error_code": null,
+          "seconds": 0.023549407022073865,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 495,
+      "finished_at_utc": "2026-09-22T10:17:53.153103+00:00",
+      "finished_tick": 1680423,
+      "id": "ccb1d366f35c4ac4a2ed41f05739daec",
+      "latency_seconds": 6.345177404000424,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1679896:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-22T10:17:46.807860+00:00",
+      "started_tick": 1680042,
+      "step_index": 0,
+      "step_sha256": "712e8312e815babef648ed092aab5dbe8a79f0b7238c7e03c754de34f38b45de"
+    },
+    {
+      "action": "factory_craft_job",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:17:58.659275+00:00",
+          "error_code": null,
+          "seconds": 0.21605943201575428,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:17:58.720112+00:00",
+          "error_code": null,
+          "seconds": 0.023344274988630787,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:18:06.796477+00:00",
+      "finished_tick": 1681225,
+      "id": "6cc82f0e90ab47a29461874d997ce10e",
+      "latency_seconds": null,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_craft:iron-gear-wheel",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "f6a8474eeaf1484389365eff039e5e29",
+      "started_at_utc": "2026-09-22T10:17:58.615569+00:00",
+      "started_tick": 1680746,
+      "step_index": 0,
+      "step_sha256": "8a484c1dcf18bcfb9ce6952a00ca02659e6835d23bc99ff0a1f736b31626f0ee"
+    },
+    {
+      "action": "factory_insert",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:18:06.961446+00:00",
+          "error_code": null,
+          "seconds": 0.10922115002176724,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:18:06.916466+00:00",
+          "error_code": null,
+          "seconds": 0.307798455003649,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:18:07.154206+00:00",
+          "error_code": null,
+          "seconds": 0.02212467699428089,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 334,
+      "finished_at_utc": "2026-09-22T10:18:08.592430+00:00",
+      "finished_tick": 1681330,
+      "id": "4259f270d1934ba99edf62f85080b1dd",
+      "latency_seconds": 1.7008051910088398,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_insert:recipe:iron-plate",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1681075:factory_insert:recipe:iron-plate:iron-ore",
+      "started_at_utc": "2026-09-22T10:18:06.891559+00:00",
+      "started_tick": 1681225,
+      "step_index": 0,
+      "step_sha256": "7b7774c534ee03c1a18e271c4a6bfa64f3734d645a54dc9a393ddb87999d3eba"
+    },
+    {
+      "action": "factory_gather",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:18:13.967393+00:00",
+          "error_code": null,
+          "seconds": 74.8205163370003,
+          "stage": "dispatch",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:19:30.361123+00:00",
+      "finished_tick": 1686214,
+      "id": "c9c2c0e3ba114bb0bf38bef48c4ab7ca",
+      "latency_seconds": 76.43963247301872,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_gather:copper-ore:target:30:site:{\"name\":\"copper-ore\",\"position\":{\"x\":-49.5,\"y\":-84.5},\"surface_index\":1}",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": null,
+      "started_at_utc": "2026-09-22T10:18:13.921432+00:00",
+      "started_tick": 1681647,
+      "step_index": 0,
+      "step_sha256": "a784eb5dd51bde4b409a5afc87a54bd367fd006a57409e19a82ab0ba8c190de7"
+    },
+    {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:19:36.159933+00:00",
+          "error_code": null,
+          "seconds": 16.122936230996856,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:19:36.109285+00:00",
+          "error_code": null,
+          "seconds": 16.95964571501827,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:19:52.488498+00:00",
+          "error_code": null,
+          "seconds": 0.020316936977906153,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 495,
+      "finished_at_utc": "2026-09-22T10:19:54.696989+00:00",
+      "finished_tick": 1687659,
+      "id": "8046edf9bec844c68801291336ac9e99",
+      "latency_seconds": 18.634324926999398,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1686419:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-22T10:19:36.062597+00:00",
+      "started_tick": 1686552,
+      "step_index": 0,
+      "step_sha256": "6403a3701f4614fb78365a258763c4749e2cda70d49eaab58f80f37ae2b99e04"
+    },
+    {
+      "action": "factory_craft_job",
+      "dispatch_phases": {
+        "dispatch": {
+          "at_utc": "2026-09-22T10:20:01.174383+00:00",
+          "error_code": null,
+          "seconds": 0.1591767339850776,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:20:01.225830+00:00",
+          "error_code": null,
+          "seconds": 0.034163353993790224,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": null,
+      "finished_at_utc": "2026-09-22T10:20:07.907823+00:00",
+      "finished_tick": 1688446,
+      "id": "7dda7013a3714a95ba6c96abb07a5f85",
+      "latency_seconds": null,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_craft:transport-belt",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "4d7fdc92530848429d590da92906a434",
+      "started_at_utc": "2026-09-22T10:20:01.128098+00:00",
+      "started_tick": 1688025,
+      "step_index": 0,
+      "step_sha256": "a0a0a36cfd6462a56a65e22d1c3c7a34dc36320c12d7925a978f442d2034673a"
+    },
+    {
+      "action": "factory_insert",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-22T10:20:08.208075+00:00",
+          "error_code": null,
+          "seconds": 0.10775406900211237,
+          "stage": "approach",
+          "status": "returned"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-22T10:20:08.152983+00:00",
+          "error_code": null,
+          "seconds": 0.3566313560004346,
+          "stage": "dispatch",
+          "status": "returned"
+        },
+        "transfer_rpc": {
+          "at_utc": "2026-09-22T10:20:08.411470+00:00",
+          "error_code": null,
+          "seconds": 0.028155617997981608,
+          "stage": "transfer_rpc",
+          "status": "returned"
+        }
+      },
+      "expected_unit_number": 334,
+      "finished_at_utc": "2026-09-22T10:20:10.024231+00:00",
+      "finished_tick": 1688553,
+      "id": "0c13b15f78c44dc396a02516cd84f092",
+      "latency_seconds": 1.9107308099919464,
+      "observation_error": null,
+      "origin": "new",
+      "outcome": "verified",
+      "plan_id": "factory:factory_insert:recipe:iron-plate",
+      "process_id": "1bb06dc343dc426fa2f9ebfa8f734400",
+      "receipt": "1688323:factory_insert:recipe:iron-plate:iron-ore",
+      "started_at_utc": "2026-09-22T10:20:08.113422+00:00",
+      "started_tick": 1688446,
+      "step_index": 0,
+      "step_sha256": "8b0b9df660f509a2509404d6be60f97db61947840ec759b719a9923183fa0a59"
+    }
+  ],
+  "background_attempt": null,
+  "background_job": null,
+  "background_schema": 2,
+  "completed_goals": {
+    "bootstrap_mining": 66980,
+    "stockpile_fuel": 64438
+  },
+  "failures": {},
+  "history": [
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_extract:output-chest:334",
+      "source": "deterministic-fallback",
+      "tick": 1655909
+    },
+    {
+      "action": "factory_extract",
+      "kind": "step_verified",
+      "plan": "factory:factory_extract:output-chest:334",
+      "tick": 1657024
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_wait:collect:output:334:1:-1:12:9",
+      "source": "deterministic-fallback",
+      "tick": 1657242
+    },
+    {
+      "action": "factory_wait",
+      "kind": "step_verified",
+      "plan": "factory:factory_wait:collect:output:334:1:-1:12:9",
+      "tick": 1657578
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_extract:output-chest:334",
+      "source": "deterministic-fallback",
+      "tick": 1657825
+    },
+    {
+      "action": "factory_extract",
+      "kind": "step_verified",
+      "plan": "factory:factory_extract:output-chest:334",
+      "tick": 1658181
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_insert:recipe:iron-plate",
+      "source": "deterministic-fallback",
+      "tick": 1658419
+    },
+    {
+      "action": "factory_insert",
+      "kind": "step_verified",
+      "plan": "factory:factory_insert:recipe:iron-plate",
+      "tick": 1658811
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_wait:collect:output:334:1:-1:12:10",
+      "source": "deterministic-fallback",
+      "tick": 1659037
+    },
+    {
+      "action": "factory_wait",
+      "kind": "step_verified",
+      "plan": "factory:factory_wait:collect:output:334:1:-1:12:10",
+      "tick": 1660805
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_extract:output-chest:334",
+      "source": "deterministic-fallback",
+      "tick": 1661071
+    },
+    {
+      "action": "factory_extract",
+      "kind": "step_verified",
+      "plan": "factory:factory_extract:output-chest:334",
+      "tick": 1661471
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_wait:collect:output:334:1:-1:12:9",
+      "source": "deterministic-fallback",
+      "tick": 1661724
+    },
+    {
+      "action": "factory_wait",
+      "kind": "step_verified",
+      "plan": "factory:factory_wait:collect:output:334:1:-1:12:9",
+      "tick": 1662806
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_extract:output-chest:334",
+      "source": "deterministic-fallback",
+      "tick": 1663048
+    },
+    {
+      "action": "factory_extract",
+      "kind": "step_verified",
+      "plan": "factory:factory_extract:output-chest:334",
+      "tick": 1663420
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_craft:iron-gear-wheel",
+      "source": "deterministic-fallback",
+      "tick": 1663645
+    },
+    {
+      "inputs_paid": {
+        "iron-plate": 40
+      },
+      "job": "f827f15b80bd41cdab343a5e6471bd2a",
+      "kind": "background_job_admitted",
+      "outputs_locked": {
+        "iron-gear-wheel": 20
+      },
+      "plan": "factory:factory_craft:iron-gear-wheel",
+      "tick": 1664055
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_gather:iron-ore:target:51:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}",
+      "source": "deterministic-fallback",
+      "tick": 1664332
+    },
+    {
+      "job": "f827f15b80bd41cdab343a5e6471bd2a",
+      "kind": "background_job_completed",
+      "outputs": {
+        "iron-gear-wheel": 20
+      },
+      "plan": "factory:factory_craft:iron-gear-wheel",
+      "tick": 1671570
+    },
+    {
+      "action": "factory_gather",
+      "kind": "step_verified",
+      "plan": "factory:factory_gather:iron-ore:target:51:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}",
+      "tick": 1671570
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_craft:automation-science-pack",
+      "source": "deterministic-fallback",
+      "tick": 1671910
+    },
+    {
+      "inputs_paid": {
+        "copper-plate": 20,
+        "iron-gear-wheel": 20
+      },
+      "job": "0a00601b008843b0925ca0f67376b0a6",
+      "kind": "background_job_admitted",
+      "outputs_locked": {
+        "automation-science-pack": 20
+      },
+      "plan": "factory:factory_craft:automation-science-pack",
+      "tick": 1672208
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_insert:recipe:iron-plate",
+      "source": "deterministic-fallback",
+      "tick": 1672402
+    },
+    {
+      "action": "factory_insert",
+      "kind": "step_verified",
+      "plan": "factory:factory_insert:recipe:iron-plate",
+      "tick": 1673472
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_insert:recipe:iron-plate",
+      "source": "deterministic-fallback",
+      "tick": 1673657
+    },
+    {
+      "action": "factory_insert",
+      "kind": "step_verified",
+      "plan": "factory:factory_insert:recipe:iron-plate",
+      "tick": 1673873
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_extract:output-chest:334",
+      "source": "deterministic-fallback",
+      "tick": 1674044
+    },
+    {
+      "action": "factory_extract",
+      "kind": "step_verified",
+      "plan": "factory:factory_extract:output-chest:334",
+      "tick": 1674257
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_extract:output-chest:334",
+      "source": "deterministic-fallback",
+      "tick": 1674447
+    },
+    {
+      "action": "factory_extract",
+      "kind": "step_verified",
+      "plan": "factory:factory_extract:output-chest:334",
+      "tick": 1674689
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_extract:output-chest:334",
+      "source": "deterministic-fallback",
+      "tick": 1674936
+    },
+    {
+      "action": "factory_extract",
+      "kind": "step_verified",
+      "plan": "factory:factory_extract:output-chest:334",
+      "tick": 1675313
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_extract:output-chest:334",
+      "source": "deterministic-fallback",
+      "tick": 1675510
+    },
+    {
+      "action": "factory_extract",
+      "kind": "step_verified",
+      "plan": "factory:factory_extract:output-chest:334",
+      "tick": 1675756
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_extract:output-chest:334",
+      "source": "deterministic-fallback",
+      "tick": 1675993
+    },
+    {
+      "action": "factory_extract",
+      "kind": "step_verified",
+      "plan": "factory:factory_extract:output-chest:334",
+      "tick": 1676210
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_insert:recipe:iron-plate",
+      "source": "deterministic-fallback",
+      "tick": 1676419
+    },
+    {
+      "action": "factory_insert",
+      "kind": "step_verified",
+      "plan": "factory:factory_insert:recipe:iron-plate",
+      "tick": 1676716
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_extract:output-chest:334",
+      "source": "deterministic-fallback",
+      "tick": 1676966
+    },
+    {
+      "action": "factory_extract",
+      "kind": "step_verified",
+      "plan": "factory:factory_extract:output-chest:334",
+      "tick": 1677354
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_extract:output-chest:334",
+      "source": "deterministic-fallback",
+      "tick": 1677589
+    },
+    {
+      "action": "factory_extract",
+      "kind": "step_verified",
+      "plan": "factory:factory_extract:output-chest:334",
+      "tick": 1677884
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_extract:output-chest:334",
+      "source": "deterministic-fallback",
+      "tick": 1678128
+    },
+    {
+      "job": "0a00601b008843b0925ca0f67376b0a6",
+      "kind": "background_job_completed",
+      "outputs": {
+        "automation-science-pack": 20
+      },
+      "plan": "factory:factory_craft:automation-science-pack",
+      "tick": 1678328
+    },
+    {
+      "action": "factory_extract",
+      "kind": "step_verified",
+      "plan": "factory:factory_extract:output-chest:334",
+      "tick": 1678495
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_insert:utility:lab",
+      "source": "deterministic-fallback",
+      "tick": 1678799
+    },
+    {
+      "action": "factory_insert",
+      "kind": "step_verified",
+      "plan": "factory:factory_insert:utility:lab",
+      "tick": 1679591
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_extract:output-chest:334",
+      "source": "deterministic-fallback",
+      "tick": 1679896
+    },
+    {
+      "action": "factory_extract",
+      "kind": "step_verified",
+      "plan": "factory:factory_extract:output-chest:334",
+      "tick": 1680423
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_craft:iron-gear-wheel",
+      "source": "deterministic-fallback",
+      "tick": 1680628
+    },
+    {
+      "inputs_paid": {
+        "iron-plate": 20
+      },
+      "job": "f6a8474eeaf1484389365eff039e5e29",
+      "kind": "background_job_admitted",
+      "outputs_locked": {
+        "iron-gear-wheel": 10
+      },
+      "plan": "factory:factory_craft:iron-gear-wheel",
+      "tick": 1680845
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_insert:recipe:iron-plate",
+      "source": "deterministic-fallback",
+      "tick": 1681075
+    },
+    {
+      "job": "f6a8474eeaf1484389365eff039e5e29",
+      "kind": "background_job_completed",
+      "outputs": {
+        "iron-gear-wheel": 10
+      },
+      "plan": "factory:factory_craft:iron-gear-wheel",
+      "tick": 1681225
+    },
+    {
+      "action": "factory_insert",
+      "kind": "step_verified",
+      "plan": "factory:factory_insert:recipe:iron-plate",
+      "tick": 1681330
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_gather:copper-ore:target:30:site:{\"name\":\"copper-ore\",\"position\":{\"x\":-49.5,\"y\":-84.5},\"surface_index\":1}",
+      "source": "deterministic-fallback",
+      "tick": 1681538
+    },
+    {
+      "action": "factory_gather",
+      "kind": "step_verified",
+      "plan": "factory:factory_gather:copper-ore:target:30:site:{\"name\":\"copper-ore\",\"position\":{\"x\":-49.5,\"y\":-84.5},\"surface_index\":1}",
+      "tick": 1686214
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_extract:output-chest:334",
+      "source": "deterministic-fallback",
+      "tick": 1686419
+    },
+    {
+      "action": "factory_extract",
+      "kind": "step_verified",
+      "plan": "factory:factory_extract:output-chest:334",
+      "tick": 1687659
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_craft:transport-belt",
+      "source": "deterministic-fallback",
+      "tick": 1687874
+    },
+    {
+      "inputs_paid": {
+        "iron-gear-wheel": 10,
+        "iron-plate": 10
+      },
+      "job": "4d7fdc92530848429d590da92906a434",
+      "kind": "background_job_admitted",
+      "outputs_locked": {
+        "transport-belt": 20
+      },
+      "plan": "factory:factory_craft:transport-belt",
+      "tick": 1688124
+    },
+    {
+      "kind": "plan_committed",
+      "plan": "factory:factory_insert:recipe:iron-plate",
+      "source": "deterministic-fallback",
+      "tick": 1688323
+    },
+    {
+      "job": "4d7fdc92530848429d590da92906a434",
+      "kind": "background_job_completed",
+      "outputs": {
+        "transport-belt": 20
+      },
+      "plan": "factory:factory_craft:transport-belt",
+      "tick": 1688446
+    },
+    {
+      "action": "factory_insert",
+      "kind": "step_verified",
+      "plan": "factory:factory_insert:recipe:iron-plate",
+      "tick": 1688553
+    }
+  ],
+  "input_commitments": {},
+  "input_routes_schema": 1,
+  "last_tick": 1688553,
+  "pending": null,
+  "reason": "",
+  "reservations": {},
+  "session_id": "3562a7a347b54be5823716bd06be5af1",
+  "stalled_decisions": 0,
+  "status": "running",
+  "step_index": 0,
+  "target": "rocket_launch",
+  "version": 2
+}

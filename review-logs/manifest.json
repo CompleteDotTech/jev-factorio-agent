@@ -1,0 +1,424 @@
+{
+  "capture_started_utc": "2026-09-22T10:18:05.759698+00:00",
+  "capture_finished_utc": "2026-09-22T10:20:10.675659+00:00",
+  "source_run": "autonomous-20260922T0240Z",
+  "base_commit": "cb77cde65a7b031c1ce3f92fc74047e70b16d4e4",
+  "redaction_counts": {
+    "url": 110,
+    "credential": 0,
+    "private_key": 0,
+    "assignment": 0
+  },
+  "files": [
+    {
+      "file": "OPERATIONS.md",
+      "source_bytes_at_open": 3291,
+      "source_mtime_utc": "2026-09-22T07:50:05.988817+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 3291,
+      "sha256": "bfb5045ec331c3d03c5379f5c5934de1f54232c61db41b8896fa02ae027ffb90"
+    },
+    {
+      "file": "audit-reconciliation-20260922/events.jsonl",
+      "source_bytes_at_open": 22384,
+      "source_mtime_utc": "2026-09-22T07:39:36.668997+00:00",
+      "snapshot_lines": 37,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 22384,
+      "sha256": "30ca1e6b6fc2d9537db5bbb29ed9409b2b58f428aa57882b859d6450aa80bd81"
+    },
+    {
+      "file": "audit-reconciliation-20260922/repair-1.json",
+      "source_bytes_at_open": 2933,
+      "source_mtime_utc": "2026-09-22T07:39:36.786629+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 2882,
+      "sha256": "265fc735a283ac9f39e3af0c064d03c6393252f63a4c7eb255501740c6df48f3"
+    },
+    {
+      "file": "audit-reconciliation-20260922/state.json",
+      "source_bytes_at_open": 69406,
+      "source_mtime_utc": "2026-09-22T07:39:36.748238+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 87507,
+      "sha256": "15e8b1d175032b993f7ab0c3f92bb03fc3510b9598884742cb202c71d1bf7f5d"
+    },
+    {
+      "file": "audit-reconciliation-20260922/supervisor.json",
+      "source_bytes_at_open": 204956,
+      "source_mtime_utc": "2026-09-22T07:39:36.576525+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 204957,
+      "sha256": "7539ae4b49d1684f8c93c0266d98edc6dffee985b007aaf4fcb4c911a381ea56"
+    },
+    {
+      "file": "audit-reconciliation-receipt.json",
+      "source_bytes_at_open": 1367,
+      "source_mtime_utc": "2026-09-22T07:43:52.079655+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 1368,
+      "sha256": "374fc73794cca42d5f9db2115a9ed1dc9d2381961675f4f5694c9080f60f4869"
+    },
+    {
+      "file": "audit-recovery-resume-verification.json",
+      "source_bytes_at_open": 603,
+      "source_mtime_utc": "2026-09-22T07:53:51.895287+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 603,
+      "sha256": "7c22cf34a61d50934cf5c512b97fae6c26187a3ad58044a9bfb9fbc8e4fff49e"
+    },
+    {
+      "file": "audit-recovery-validation.log",
+      "source_bytes_at_open": 280,
+      "source_mtime_utc": "2026-09-22T07:43:52.950678+00:00",
+      "snapshot_lines": 4,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 4,
+      "export_bytes": 280,
+      "sha256": "64fd8d640aa09f6b8f766ebcb182b76c6cd62c87ca27893de02336bccaec5810"
+    },
+    {
+      "file": "bootstrap.log",
+      "source_bytes_at_open": 3869,
+      "source_mtime_utc": "2026-09-22T02:42:18.128222+00:00",
+      "snapshot_lines": 54,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 54,
+      "export_bytes": 3821,
+      "sha256": "1629278682092c2e48c76cd872405a1f989c5d36261d3fceec1e4321aced57ac"
+    },
+    {
+      "file": "decisions.jsonl",
+      "source_bytes_at_open": 17637,
+      "source_mtime_utc": "2026-09-22T02:42:18.128222+00:00",
+      "snapshot_lines": 1,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 17637,
+      "sha256": "8bdc70c1f1715ffaec4301fbbe4ee00c2a7fc9b86f448cf6dc124411c16ccd5f"
+    },
+    {
+      "file": "events.jsonl",
+      "source_bytes_at_open": 52348,
+      "source_mtime_utc": "2026-09-22T07:49:47.409973+00:00",
+      "snapshot_lines": 84,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 52348,
+      "sha256": "86571bf18b601c9522aff342d5bda28879343ada38634b9075e94933723dff7d"
+    },
+    {
+      "file": "gameplay.jsonl.gz",
+      "source_bytes_at_open": 127132542,
+      "source_mtime_utc": "2026-09-22T10:18:01.034274+00:00",
+      "snapshot_lines": 1641,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 13039092,
+      "sha256": "2cf74ae2addf10d0f28aa8c4bb1b4ee9f93e61bb2eb87351aa7b7b57fd8170fb"
+    },
+    {
+      "file": "gameplay.log",
+      "source_bytes_at_open": 140587,
+      "source_mtime_utc": "2026-09-22T10:18:08.660509+00:00",
+      "snapshot_lines": 1657,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 1657,
+      "export_bytes": 140443,
+      "sha256": "be478c59cffb59e6f56ab79df4649955bcce909cd7bcdd946785fc693bfc34ad"
+    },
+    {
+      "file": "independent-review-1.json",
+      "source_bytes_at_open": 1349,
+      "source_mtime_utc": "2026-09-22T04:57:31.054916+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 1349,
+      "sha256": "039f4d7bf73931884b92f69b836f471ac4626615476ca1fec3980230ab838c25"
+    },
+    {
+      "file": "independent-review-2.json",
+      "source_bytes_at_open": 1941,
+      "source_mtime_utc": "2026-09-22T05:01:27.050673+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 1941,
+      "sha256": "cdeac1cb085f77035ad67232f4f227a11f2d15936d136bbc8dd239bc5a1bba26"
+    },
+    {
+      "file": "launch-config.json",
+      "source_bytes_at_open": 157,
+      "source_mtime_utc": "2026-09-22T02:41:13.826300+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 157,
+      "sha256": "96efed8cbe59326ae910de7563baeee3e5bc1a3b01cd84f6ebc5670445e87f38"
+    },
+    {
+      "file": "local-process-recovery.json",
+      "source_bytes_at_open": 487,
+      "source_mtime_utc": "2026-09-22T03:42:52.786513+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 488,
+      "sha256": "003335b45cbb4c1a7048bce87daab823161fc1b96092be4795c16a4b19f190b5"
+    },
+    {
+      "file": "recovery-verification.json",
+      "source_bytes_at_open": 732,
+      "source_mtime_utc": "2026-09-22T02:43:38.699123+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 733,
+      "sha256": "afc1bad801b6a48ac861d748135a13b49d6facbe8dc1d5c55d5f4c774c43510f"
+    },
+    {
+      "file": "repair-1.json",
+      "source_bytes_at_open": 2933,
+      "source_mtime_utc": "2026-09-22T05:03:36.964083+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 2882,
+      "sha256": "265fc735a283ac9f39e3af0c064d03c6393252f63a4c7eb255501740c6df48f3"
+    },
+    {
+      "file": "repair-1.txt",
+      "source_bytes_at_open": 4667,
+      "source_mtime_utc": "2026-09-22T04:49:14.069337+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 4667,
+      "sha256": "8f61bf96458fd12cf02048b276a75e31e873b7a30dcfd23924392579aab9cc07"
+    },
+    {
+      "file": "repair-reacceptance-tmpfs.log",
+      "source_bytes_at_open": 73,
+      "source_mtime_utc": "2026-09-22T07:49:04.897797+00:00",
+      "snapshot_lines": 1,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 1,
+      "export_bytes": 73,
+      "sha256": "92dcb5a24283e396dd6e9cfa53feb002a315b55e17b4d394d2d1be24d6c93135"
+    },
+    {
+      "file": "repair-reacceptance.json",
+      "source_bytes_at_open": 398,
+      "source_mtime_utc": "2026-09-22T07:49:04.835852+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 399,
+      "sha256": "da499c4af74ffb84957ea6a241a3eb9e9dbb6a378648794e5e6fec1268a03825"
+    },
+    {
+      "file": "repair-reacceptance.log",
+      "source_bytes_at_open": 274,
+      "source_mtime_utc": "2026-09-22T07:46:33.691859+00:00",
+      "snapshot_lines": 4,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 4,
+      "export_bytes": 274,
+      "sha256": "84b9a14f73c5320f8e790a161397f02f24fc2783c54aebab19f701df2289c0c8"
+    },
+    {
+      "file": "repair.log.gz",
+      "source_bytes_at_open": 4020488,
+      "source_mtime_utc": "2026-09-22T05:06:32.016520+00:00",
+      "snapshot_lines": 17687,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 17540,
+      "export_bytes": 392953,
+      "sha256": "419cbefe3f0e1e95ea494e6af5fc1280f1eb32189fe217c135dadcc3f41ee9ea"
+    },
+    {
+      "file": "research/bootstrap/events.jsonl",
+      "source_bytes_at_open": 47011,
+      "source_mtime_utc": "2026-09-22T02:42:20.133282+00:00",
+      "snapshot_lines": 35,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 50021,
+      "sha256": "09269d90052d6a8eccf9a98d2eeb7b9181f1f639f4775a521f649b05ba429a23"
+    },
+    {
+      "file": "research/bootstrap/integrity.json",
+      "source_bytes_at_open": 306,
+      "source_mtime_utc": "2026-09-22T02:42:20.135987+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 331,
+      "sha256": "580e98b8ce5d2ce44161ed490b7befcaff0189cd98dd3f1efec769244783cdcf"
+    },
+    {
+      "file": "research/bootstrap/manifest.json",
+      "source_bytes_at_open": 1026,
+      "source_mtime_utc": "2026-09-22T02:41:35.577770+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 1337,
+      "sha256": "0b41f7ea1876698229590bd0a2306dcdafe5b43eb7636f2454c46aef222e0a5b"
+    },
+    {
+      "file": "research/invocation-277c2ca0-9003-48e4-ab9d-728245b9b7ac/events.jsonl.gz",
+      "source_bytes_at_open": 17435142,
+      "source_mtime_utc": "2026-09-22T03:33:53.503636+00:00",
+      "snapshot_lines": 6375,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 1414481,
+      "sha256": "900e3d36f0abcf2e83da698048bf17908a55f56dfa590c78486cf92d3ec0dda0"
+    },
+    {
+      "file": "research/invocation-277c2ca0-9003-48e4-ab9d-728245b9b7ac/manifest.json",
+      "source_bytes_at_open": 1040,
+      "source_mtime_utc": "2026-09-22T02:42:28.057019+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 1351,
+      "sha256": "f988946749a085b3d8d890be3adb6c0ae6550130c20b54011fa7a3727e1ab3fe"
+    },
+    {
+      "file": "research/invocation-67e6489c-6672-4e37-9115-5866904853ce/events.jsonl.gz",
+      "source_bytes_at_open": 45326746,
+      "source_mtime_utc": "2026-09-22T04:49:11.236967+00:00",
+      "snapshot_lines": 10636,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 5456998,
+      "sha256": "d988097962f4e846459e0e7a361675f6548dc21adb9158962096c2449d25ab87"
+    },
+    {
+      "file": "research/invocation-67e6489c-6672-4e37-9115-5866904853ce/integrity.json",
+      "source_bytes_at_open": 309,
+      "source_mtime_utc": "2026-09-22T04:49:11.239006+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 334,
+      "sha256": "aa1ee03a2e6c46b37296c6fa28f931fad41a9080de14aad483f7a35771aa640a"
+    },
+    {
+      "file": "research/invocation-67e6489c-6672-4e37-9115-5866904853ce/manifest.json",
+      "source_bytes_at_open": 1040,
+      "source_mtime_utc": "2026-09-22T03:41:58.702146+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 1351,
+      "sha256": "05b3f121229030fd3a233a73a4a4a68f0aef4cd2fd00d474bb50fb9d514707d2"
+    },
+    {
+      "file": "research/invocation-6f5e016c-e752-4cda-b7c4-d3988cc69f86/events.jsonl.gz",
+      "source_bytes_at_open": 72183922,
+      "source_mtime_utc": "2026-09-22T10:19:36.196207+00:00",
+      "snapshot_lines": 15294,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 9083620,
+      "sha256": "b63f716fe340cf491f00ad56ad237b8eb84306b6c2aa81cae309b9633c7e5daf"
+    },
+    {
+      "file": "research/invocation-6f5e016c-e752-4cda-b7c4-d3988cc69f86/manifest.json",
+      "source_bytes_at_open": 1041,
+      "source_mtime_utc": "2026-09-22T07:49:47.727988+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 1352,
+      "sha256": "46679033c3ed8a1de1d7d8101c1d6e6238587b61e43ad3734aa5c1e9abc4ff58"
+    },
+    {
+      "file": "started-at",
+      "source_bytes_at_open": 11,
+      "source_mtime_utc": "2026-09-22T02:41:13.826300+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 11,
+      "sha256": "aa0379dd2a90450767f21d8a2a576986975c2d499f88dc466370c5a58875deb5"
+    },
+    {
+      "file": "state.json",
+      "source_bytes_at_open": 72799,
+      "source_mtime_utc": "2026-09-22T10:20:10.118252+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 91842,
+      "sha256": "15ed38a35dad985d05a772e0788f4436ae8006bdcbe17c9960d743201c15ab12"
+    },
+    {
+      "file": "supervisor.json",
+      "source_bytes_at_open": 100431,
+      "source_mtime_utc": "2026-09-22T10:20:06.778149+00:00",
+      "snapshot_lines": null,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 0,
+      "export_bytes": 100432,
+      "sha256": "63f7fb41f478cb2d4afffb73d9b9fa1c41f74bc3f9149c6869dc4a85645cb8cb"
+    },
+    {
+      "file": "supervisor.log",
+      "source_bytes_at_open": 188,
+      "source_mtime_utc": "2026-09-22T05:06:34.221470+00:00",
+      "snapshot_lines": 4,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 4,
+      "export_bytes": 188,
+      "sha256": "112880e78f8d0d31b52d277a768f7bdec86e78b7ae2c63fe6dc070ef8e99e28f"
+    },
+    {
+      "file": "verification.log",
+      "source_bytes_at_open": 40416,
+      "source_mtime_utc": "2026-09-22T07:49:04.387784+00:00",
+      "snapshot_lines": 423,
+      "omitted_incomplete_tail_bytes": 0,
+      "non_json_lines": 419,
+      "export_bytes": 38988,
+      "sha256": "ebeed313726f4b76358e5ef0fc01bab29762ce2dac5e51a3a7da84d5a965addd"
+    },
+    {
+      "file": "gameplay-recent-100.jsonl",
+      "derived_from": "gameplay.jsonl.gz",
+      "snapshot_lines": 100,
+      "export_bytes": 46734,
+      "sha256": "c418ff3ef90444b7dce549553459bd6fe25495937258b5c72a2ab851d03fce9c"
+    },
+    {
+      "file": "gameplay-recent-100-full.jsonl.gz",
+      "derived_from": "gameplay.jsonl.gz",
+      "snapshot_lines": 100,
+      "export_bytes": 1077776,
+      "sha256": "72230cbd2e69c3da18fd928a1ce3213c0693e62750e0574718ee549f36871a33"
+    }
+  ],
+  "limitations": [
+    "Files are independently bounded snapshots of a running campaign, not one atomic cross-file snapshot.",
+    "Incomplete trailing JSONL bytes are omitted and counted.",
+    "Secrets and endpoint URLs are redacted; diagnostic fields and record history are otherwise retained.",
+    "No environment files, credentials, game saves, or unrelated prior campaigns are included."
+  ]
+}
