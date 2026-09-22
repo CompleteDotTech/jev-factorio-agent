@@ -15,6 +15,7 @@ from .controller import HierarchicalLoop
 from .craft_jobs import CraftJob, InvalidCraftEvidence
 from .memory import CampaignMemory
 from .planning.background_work import background_wait, independent_candidates
+from .planning.ready_work import ReadyWorkPlanner
 from .skills import Plan
 from .telemetry import utc_now, validate_attempt
 
@@ -74,6 +75,7 @@ class BackgroundMemory(CampaignMemory):
 
 class BackgroundWorkLoop(HierarchicalLoop):
     memory_type = BackgroundMemory
+    planner_type = ReadyWorkPlanner
 
     def __init__(self, backend, jev=None, **options) -> None:
         if options.get("factory_scheduling") != "ready-work":
@@ -244,13 +246,15 @@ class BackgroundWorkLoop(HierarchicalLoop):
     def _compile_candidates(self, snapshot):
         job = self._job()
         if job:
-            plans = independent_candidates(self.memory.active_goal, snapshot, self.catalog, job)
+            plans = independent_candidates(
+                self.memory.active_goal, snapshot, self.catalog, job, self.planner_type)
             plans = [plan for plan in plans if self.memory.failures.get(plan.id, 0) < 2]
             return plans or [background_wait(self.memory.active_goal, job, snapshot.tick)], ""
         plans, blocker = super()._compile_candidates(snapshot)
         if (plans and plans[0].steps[0].action == "factory_wait"
                 and plans[0].steps[0].effect == "research_progress"):
-            independent = independent_candidates(self.memory.active_goal, snapshot, self.catalog)
+            independent = independent_candidates(
+                self.memory.active_goal, snapshot, self.catalog, None, self.planner_type)
             plans = [plan for plan in independent
                      if self.memory.failures.get(plan.id, 0) < 2] or plans
         return [self._tracked_plan(plan, snapshot) for plan in plans], blocker

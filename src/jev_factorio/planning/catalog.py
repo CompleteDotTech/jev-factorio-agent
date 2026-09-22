@@ -70,6 +70,11 @@ class Catalog:
 
     def material_plan(self, item: str, amount: int, inventory: dict,
                       researched: list[str]) -> MaterialPlan:
+        return self.material_demands({item: amount}, inventory, researched)
+
+    def material_demands(self, demand: dict[str, int], inventory: dict,
+                         researched: list[str]) -> MaterialPlan:
+        """Expand several tasks against one shared stock ledger."""
         recipes, selected = [], {}
         for recipe in self.recipes.values():
             if (not self.enabled(recipe, researched) or recipe.get("hidden")
@@ -88,4 +93,4 @@ class Catalog:
                     selected[product["name"]] = self.recipe_for(product["name"])["name"]
                 except ValueError:
                     pass
-        return requirements({item: amount}, inventory, recipes, selected=selected)
+        return requirements(demand, inventory, recipes, selected=selected)

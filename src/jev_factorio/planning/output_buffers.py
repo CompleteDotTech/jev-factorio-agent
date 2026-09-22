@@ -7,6 +7,7 @@ from dataclasses import replace
 from ..output_buffers import COMMAND, PARTS, flow_complete, potential, sources
 from ..skills import Plan
 from .ready_work import ReadyWorkPlanner
+from .service_visits import service_visit
 
 
 class OutputBufferPlanner(ReadyWorkPlanner):
@@ -117,6 +118,9 @@ class OutputBufferPlanner(ReadyWorkPlanner):
                                          self.collection_batch, self.max_candidates)
             worker.focus, worker.raw_targets = self.focus, dict(self.raw_targets)
             worker.materials = self.materials or {}
+            worker.ledger, worker.demands = self.ledger, dict(self.demands)
+            worker.speculative = True
+            worker.allow_service_visits = self.allow_service_visits
             try:
                 candidate = worker._need(item, amount)
             except (KeyError, ValueError):
@@ -131,5 +135,5 @@ class OutputBufferPlanner(ReadyWorkPlanner):
                 unique.setdefault(candidate.id, candidate)
         ready = [candidate for candidate in unique.values() if candidate.steps[0].action != "factory_wait"]
         item, amount = self.focus
-        return [replace(candidate, description=f"Next production batch: {amount} {item}. "
-                        + candidate.description) for candidate in (ready or list(unique.values()))[:self.max_candidates]]
+        return [service_visit(self, replace(candidate, description=f"Next production batch: {amount} {item}. "
+                        + candidate.description)) for candidate in (ready or list(unique.values()))[:self.max_candidates]]

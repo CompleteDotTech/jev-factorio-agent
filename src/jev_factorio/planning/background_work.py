@@ -7,7 +7,8 @@ from dataclasses import replace
 
 from ..craft_jobs import CraftJob
 from ..skills import Plan, Step
-from .ready_work import ReadyWorkPlanner, compile_ready_factory
+from .ready_work import ReadyWorkPlanner
+from .demand import SupplyLedger
 
 
 def research_demands(snapshot, catalog, *, early: bool = False) -> list[tuple[str, int]]:
@@ -33,15 +34,27 @@ def research_demands(snapshot, catalog, *, early: bool = False) -> list[tuple[st
     return [(item, amount) for item, amount, _ in sorted(result, key=lambda entry: (entry[2], entry[0]))]
 
 
-def independent_candidates(goal, snapshot, catalog, job: CraftJob | None = None) -> list[Plan]:
-    """Forecast only for lookahead; every action is checked against real stock."""
+def independent_candidates(goal, snapshot, catalog, job: CraftJob | None = None,
+                           planner_type: type[ReadyWorkPlanner] = ReadyWorkPlanner) -> list[Plan]:
+    """Use the active production capabilities even during independent work.
+
+    Forecast outputs allow dependency lookahead only. Admission still uses the
+    original snapshot and the acknowledged job's output/dispatch locks. Never
+    fall back to a less capable planner if a route/buffer plan is unavailable.
+    """
     view = deepcopy(snapshot)
     if job:
         view.factory["crafting_queue"] = 0  # Permit planning, never dispatch permission.
         for item, amount in job.outputs.items():
             view.inventory[item] = max(view.inventory.get(item, 0), job.baseline[item] + amount)
+    ledger = SupplyLedger.capture(snapshot, catalog, job=job)
+    def new_planner():
+        worker = planner_type(catalog, view, goal)
+        worker.ledger = ledger
+        worker.allow_service_visits = False
+        return worker
     candidates = []
-    worker = ReadyWorkPlanner(catalog, view, goal)
+    worker = new_planner()
     # Keep the existing boiler alive while handcrafting; do not build new power.
     if job and "utility:boiler" in worker.entities:
         try:
@@ -56,7 +69,7 @@ def independent_candidates(goal, snapshot, catalog, job: CraftJob | None = None)
             if job and item in job.outputs:
                 continue
             try:
-                worker = ReadyWorkPlanner(catalog, view, goal)
+                worker = new_planner()
                 if snapshot.inventory.get(item, 0) >= amount:
                     plan = worker._transfer("utility:lab", item, amount)
                 else:
@@ -69,8 +82,11 @@ def independent_candidates(goal, snapshot, catalog, job: CraftJob | None = None)
                     if probes >= 32:
                         break
                     probes += 1
-                    probe = ReadyWorkPlanner(catalog, view, goal)
+                    probe = new_planner()
                     probe.focus = worker.focus
+                    probe.raw_targets = dict(worker.raw_targets)
+                    probe.demands = dict(worker.demands)
+                    probe.speculative = True
                     try:
                         alternative = probe._need(material, target)
                     except (KeyError, ValueError):
@@ -80,8 +96,10 @@ def independent_candidates(goal, snapshot, catalog, job: CraftJob | None = None)
             except (KeyError, ValueError):
                 continue
     if job:
-        plans, _ = compile_ready_factory(goal, view, catalog)
-        candidates.extend(plans)
+        try:
+            candidates.extend(new_planner().candidates())
+        except (KeyError, ValueError):
+            pass  # Unsupported lookahead cannot bypass active production rules.
     unique = {}
     for plan in candidates:
         step = plan.steps[0]

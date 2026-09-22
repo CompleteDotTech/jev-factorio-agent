@@ -12,6 +12,8 @@ from dataclasses import replace
 from ..skills import Plan
 from ..state import GameSnapshot
 from .catalog import Catalog
+from .demand import SupplyLedger, horizon_demands
+from .service_visits import service_visit
 from .factory import FactoryPlanner, RAW_ITEMS, compile_factory
 
 
@@ -28,29 +30,19 @@ class ReadyWorkPlanner(FactoryPlanner):
         self.focus: tuple[str, int] | None = None
         self.targets: dict[str, int] = {}
         self.raw_targets: dict[str, int] = {}
+        self.demands: dict[str, int] = {}
+        self.ledger = SupplyLedger.capture(snapshot, catalog)
+        self.speculative = False
+        self.allow_service_visits = True
 
     def _set_focus(self, item: str, amount: int) -> None:
         self.focus = (item, math.ceil(amount))
-        if item in RAW_ITEMS:
-            return
-        # Machine-held stock is forecast supply, NOT spendable player inventory.
-        # It may reduce speculative gathering, but never authorizes a transfer,
-        # craft, or successful verifier. The immediate serial need still wins.
-        stock = dict(self.snapshot.inventory)
-        for machine in self.entities.values():
-            for inventory in ("input", "output"):
-                for material, quantity in machine.get(inventory, {}).items():
-                    stock[material] = stock.get(material, 0) + quantity
-            recipe = self.catalog.recipes.get(machine.get("recipe", ""), {})
-            if machine.get("crafting") is True:
-                for ingredient in recipe.get("ingredients", []):
-                    if ingredient["type"] == "item":
-                        material = ingredient["name"]
-                        stock[material] = stock.get(material, 0) + ingredient["amount"]
+        self.demands = horizon_demands(self.snapshot, self.catalog, self.goal, item, amount)
         try:
-            bill = self.catalog.material_plan(item, amount, stock, self.researched)
+            bill = self.catalog.material_demands(
+                self.demands, self.ledger.forecast_stock(), self.researched)
         except (KeyError, ValueError):
-            return  # Unsupported/cyclic lookahead must not invent prerequisites.
+            return  # Unsupported lookahead never authorizes a speculative action.
         for name, batches in bill.batches.items():
             for ingredient in self.catalog.recipes[name]["ingredients"]:
                 if ingredient["type"] != "item":
@@ -118,6 +110,11 @@ class ReadyWorkPlanner(FactoryPlanner):
             self._set_focus(item, amount)
         if item in self.raw_targets and self.snapshot.inventory.get(item, 0) < amount:
             amount = max(amount, self.raw_targets[item])
+        # Do not create a dedicated trip for the one-unit edge of a speculative
+        # horizon. The immediate prerequisite path is never suppressed.
+        if (self.speculative and item in RAW_ITEMS - {"wood"}
+                and 0 < amount - self.snapshot.inventory.get(item, 0) < self.collection_batch):
+            return None
         plan = super()._need(item, amount, path)
         # Only the item whose need produced this extraction may set its batch
         # target. An ancestor recipe can require many outputs but few plates.
@@ -152,10 +149,13 @@ class ReadyWorkPlanner(FactoryPlanner):
         for item, amount in list(sorted(self.targets.items()))[:32]:
             if self.snapshot.inventory.get(item, 0) >= amount:
                 continue
-            worker = ReadyWorkPlanner(self.catalog, self.snapshot, self.goal,
+            worker = type(self)(self.catalog, self.snapshot, self.goal,
                                       self.collection_batch, self.max_candidates)
             worker.focus, worker.raw_targets = self.focus, dict(self.raw_targets)
             worker.materials = self.materials or {}
+            worker.ledger, worker.demands = self.ledger, dict(self.demands)
+            worker.speculative = True
+            worker.allow_service_visits = self.allow_service_visits
             try:
                 plan = worker._need(item, amount)
             except (KeyError, ValueError):
@@ -175,7 +175,7 @@ class ReadyWorkPlanner(FactoryPlanner):
         selected = ready or list(unique.values()) or [primary]
         item, amount = self.focus
         prefix = f"Next production batch: {amount} {item}. "
-        return [replace(plan, description=prefix + plan.description)
+        return [service_visit(self, replace(plan, description=prefix + plan.description))
                 for plan in selected[:self.max_candidates]]
 
 
