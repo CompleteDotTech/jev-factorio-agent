@@ -65,8 +65,8 @@ concern requires a blocked result, not permission to resume.
 
 Future bug fixes belong in the repair loop: diagnosis, proposals, and unpublished
 patches do not complete a code repair. The repair agent must finish the fix, tests,
-independent review, publication/merge, and origin/fork synchronization before the
-supervisor resumes within the original cutoff, session, and pending identity.
+independent review, publication/merge, and origin synchronization (plus fork when
+configured) before the supervisor resumes within the original cutoff, session, and pending identity.
 These fairness instructions are a repair-agent acceptance contract, not an
 independent runtime fairness detector. Prompt tests verify that the instructions
 remain present; they do not prove fair real-game behavior. Repair evidence must
@@ -92,8 +92,8 @@ distinguish source findings and mock tests from native observation evidence.
   deliberately cannot reconcile once any same-prototype connector already exists.
 - `kind: "code"` requires all of `tests_passed`, `checks_passed`,
   `exact_head_reviewed`, `merged`, and `remotes_synced` true, a full `commit` SHA,
-  and `pr_url`. The watchdog independently verifies local HEAD and origin/fork
-  main match that SHA, the PR is merged at that SHA, an approval refers to the
+  and `pr_url`. The watchdog independently verifies local HEAD, origin main, and
+  a configured fork main match that SHA, the PR is merged at that SHA, an approval refers to the
   exact PR head, no current reviewer requests changes, and checks succeeded.
   Alternatively `independent_review` names a JSON file inside the state directory,
   containing `head`, `verdict: "approved"`, `reviewer`, and nonempty
@@ -131,8 +131,8 @@ establish deployed-source provenance.
 
 Only running/completed checkpoints with the original session can pass repair
 validation. Code repair authorization permits focused commits, PRs, pushes,
-guarded merges, and origin/fork synchronization, never force pushes, bypassed
-checks, leaked credentials, world resets, or erasure of ambiguous pending work.
+guarded merges, and synchronization of origin plus any configured fork, never
+force pushes, bypassed checks, leaked credentials, world resets, or erasure of ambiguous pending work.
 The watchdog does not itself merge or push. It cannot independently prove that
 free-text evidence describes a real observation or that a reviewer is independent;
 those requirements remain part of the repair agent's acceptance contract.
