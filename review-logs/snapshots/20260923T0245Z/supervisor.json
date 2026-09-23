@@ -1,0 +1,2891 @@
+{
+  "attempt": 23,
+  "attempt_incident_id": "2dff9136-9bbc-4c84-9c5e-3e9d372a221f",
+  "attempt_source_before": {
+    "commit": "376a49d4d6c969a234934757790449084f7528c2",
+    "source_sha256": "225b97e412d85c9d9268b94825f490713e75d914db36069cafa59998a1f310a5"
+  },
+  "audit_pending": null,
+  "audit_recovery": {
+    "receipt": "/home/agent/factorio/jev-factorio/runs/autonomous-20260922T0240Z/audit-reconciliation-receipt.json",
+    "superseded_unappended_event": {
+      "at": 1790053594.1917448,
+      "event": "process_prepared",
+      "event_id": "1402e851-26b9-41bf-ba53-795a7b042449",
+      "execution_id": "12f35464-b37f-4005-a676-5c5a6dadc44d",
+      "incident_id": "a9ffeb93-c5ea-4399-9b6b-3dd26409689a",
+      "monotonic_ns": 192998468431984,
+      "phase": "verification",
+      "run_id": "39efb440-25a9-4096-ac34-13826b039ff4",
+      "schema": "jev-factorio.supervisor-event.v1",
+      "segment_id": "seg-000001",
+      "sequence": 22,
+      "session_id": "3562a7a347b54be5823716bd06be5af1",
+      "utc": "2026-09-22T05:06:34.191745+00:00",
+      "writer_pid": 1280
+    }
+  },
+  "audit_sequence": 369,
+  "checkpoint": "/home/agent/factorio/jev-factorio/runs/autonomous-20260922T0240Z/state.json",
+  "code_revision": {
+    "commit": "6c651b8c3da3fd7a29342a1141fdebc4f841da12",
+    "source_sha256": "7eb03869f44dfdb309ecb27c3f8c79b1aa30018c5ca54aa39a2f59a9d706f32d"
+  },
+  "cutoff": 1790216181.0,
+  "cwd": "/home/agent/factorio/jev-factorio",
+  "gameplay_configuration": {
+    "background_work": true,
+    "factory_scheduling": "ready-work",
+    "furnace_input_belts": true,
+    "furnace_output_buffers": true
+  },
+  "incident": null,
+  "last_valid_checkpoint": {
+    "active_goal": "rocket_launch",
+    "active_plan": {
+      "description": "Next production batch: 20 logistic-science-pack. Collect 2 iron-plate from output-chest:334",
+      "goal": "rocket_launch",
+      "id": "factory:factory_extract:output-chest:334",
+      "materials": {
+        "automation_sites": {
+          "recipe:copper-plate": {
+            "fallback": "batched_manual_supply",
+            "reason": "existing_manual_cell",
+            "state": "rejected"
+          },
+          "recipe:iron-plate": {
+            "fallback": "batched_manual_supply",
+            "reason": "existing_manual_cell",
+            "state": "rejected"
+          }
+        },
+        "local_objective": {
+          "inventory_target": 20,
+          "item": "logistic-science-pack",
+          "ultimate_goal": "rocket_launch"
+        },
+        "route_diagnostics": {
+          "recipe:copper-plate": {
+            "fallback": "batched_manual_supply",
+            "max_belts": 64,
+            "reason": "ore_outside_local_survey",
+            "survey_radius": 40
+          },
+          "recipe:iron-plate": {
+            "fallback": "batched_manual_supply",
+            "max_belts": 64,
+            "reason": "ore_outside_local_survey",
+            "survey_radius": 40
+          }
+        }
+      },
+      "steps": [
+        {
+          "action": "factory_extract",
+          "costs": {},
+          "effect": "transfer",
+          "item": "",
+          "parameters": {
+            "item": "iron-plate",
+            "quantity": 2,
+            "receipt": "5260929:factory_extract:output-chest:334:iron-plate",
+            "role": "output-chest:334"
+          },
+          "threshold": 0,
+          "timeout_ticks": 1800,
+          "verification": null
+        }
+      ]
+    },
+    "attempt": {
+      "action": "factory_extract",
+      "dispatch_phases": {
+        "approach": {
+          "at_utc": "2026-09-23T02:58:57.156242+00:00",
+          "error_code": null,
+          "seconds": null,
+          "stage": "approach",
+          "status": "started"
+        },
+        "dispatch": {
+          "at_utc": "2026-09-23T02:58:57.098445+00:00",
+          "error_code": null,
+          "seconds": null,
+          "stage": "dispatch",
+          "status": "started"
+        }
+      },
+      "expected_unit_number": 495,
+      "id": "bf69c69453d74b6286881ec2533072ba",
+      "observation_error": null,
+      "origin": "new",
+      "plan_id": "factory:factory_extract:output-chest:334",
+      "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+      "receipt": "5260929:factory_extract:output-chest:334:iron-plate",
+      "started_at_utc": "2026-09-23T02:58:57.067410+00:00",
+      "started_tick": 5261114,
+      "step_index": 0,
+      "step_sha256": "4bf8c9cf18e973ca2bd41c490e792cc136c24c211867b990f528f235eea26219"
+    },
+    "attempt_outcomes": [
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:32:33.502752+00:00",
+            "error_code": null,
+            "seconds": 0.11185743799433112,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:32:33.483577+00:00",
+            "error_code": null,
+            "seconds": 0.2311825110227801,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:32:33.653121+00:00",
+            "error_code": null,
+            "seconds": 0.031002513016574085,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 495,
+        "finished_at_utc": "2026-09-23T02:32:35.108516+00:00",
+        "finished_tick": 5169049,
+        "id": "47a891a956924bdb8581e8be0a312734",
+        "latency_seconds": 1.6433168210205622,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_extract:output-chest:334",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5168788:factory_extract:output-chest:334:iron-plate",
+        "started_at_utc": "2026-09-23T02:32:33.465157+00:00",
+        "started_tick": 5168957,
+        "step_index": 0,
+        "step_sha256": "bc97275b557e273d24b08c1d7bdbe57bd423d9ae0aed91ffbcd4f6a407a02e1d"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:32:41.001382+00:00",
+            "error_code": null,
+            "seconds": 0.11470527702476829,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:32:40.982688+00:00",
+            "error_code": null,
+            "seconds": 0.29451722104568034,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:32:41.152063+00:00",
+            "error_code": null,
+            "seconds": 0.027661398984491825,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 495,
+        "finished_at_utc": "2026-09-23T02:32:42.668499+00:00",
+        "finished_tick": 5169490,
+        "id": "bba3aac41ecb401c9169037a36504727",
+        "latency_seconds": 1.7040300510125235,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_extract:output-chest:334",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5169244:factory_extract:output-chest:334:iron-plate",
+        "started_at_utc": "2026-09-23T02:32:40.964429+00:00",
+        "started_tick": 5169399,
+        "step_index": 0,
+        "step_sha256": "aeb62e81d329dc062bbd9cedd2fbdb13eeda9853b952e3011052b74e35c3a8ab"
+      },
+      {
+        "action": "factory_insert",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:32:49.144421+00:00",
+            "error_code": null,
+            "seconds": 0.12116817699279636,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:32:49.101786+00:00",
+            "error_code": null,
+            "seconds": 0.3491955309873447,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:32:49.317349+00:00",
+            "error_code": null,
+            "seconds": 0.0807586460141465,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 334,
+        "finished_at_utc": "2026-09-23T02:32:50.978309+00:00",
+        "finished_tick": 5169963,
+        "id": "3cbf7542dee04148ae1d59725dd895fb",
+        "latency_seconds": 1.9069592660525814,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_insert:recipe:iron-plate",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5169684:factory_insert:recipe:iron-plate:iron-ore",
+        "started_at_utc": "2026-09-23T02:32:49.071301+00:00",
+        "started_tick": 5169855,
+        "step_index": 0,
+        "step_sha256": "f559c8eed472fe89304be8d2883fecafc3e7de2e10714513368ab2381771deb8"
+      },
+      {
+        "action": "factory_craft_job",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:32:57.142447+00:00",
+            "error_code": null,
+            "seconds": 0.10087777499575168,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:32:57.174316+00:00",
+            "error_code": null,
+            "seconds": 0.03223564202198759,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:33:07.304986+00:00",
+        "finished_tick": 5170941,
+        "id": "f783ef6fbf3142cfb37d95a74ccedab5",
+        "latency_seconds": null,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_craft:copper-cable",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "746430792b1a4490aa92e645f020f3f2",
+        "started_at_utc": "2026-09-23T02:32:57.118731+00:00",
+        "started_tick": 5170333,
+        "step_index": 0,
+        "step_sha256": "5153c4871e84021a99c161a27c6ec6d715e7809d842d4d2cfeb20f09388fcebe"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:33:07.595648+00:00",
+            "error_code": null,
+            "seconds": 6.567285882949363,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:33:07.487783+00:00",
+            "error_code": null,
+            "seconds": 6.850434448046144,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:33:14.278084+00:00",
+            "error_code": null,
+            "seconds": 0.032011875009629875,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 2524,
+        "finished_at_utc": "2026-09-23T02:33:16.146266+00:00",
+        "finished_tick": 5171441,
+        "id": "317db4e787234f3baedf2a1bbdd3b97f",
+        "latency_seconds": 8.7613324149861,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_extract:recipe:automation-science-pack",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5170612:factory_extract:recipe:automation-science-pack:automation-science-pack",
+        "started_at_utc": "2026-09-23T02:33:07.384875+00:00",
+        "started_tick": 5170941,
+        "step_index": 0,
+        "step_sha256": "16cb5f2d9860c3b81d4a3f4e28dbdba1839adbdfcbd55ab4aa310bca1244f635"
+      },
+      {
+        "action": "factory_craft_job",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:33:22.316152+00:00",
+            "error_code": null,
+            "seconds": 0.11062377505004406,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:33:22.353923+00:00",
+            "error_code": null,
+            "seconds": 0.03835830598836765,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:33:37.758786+00:00",
+        "finished_tick": 5172722,
+        "id": "282c2eedfb23474d9caa1d5fa3cf690e",
+        "latency_seconds": null,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_craft:electronic-circuit",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "fbbd972f079a436f8d5c38e61a535784",
+        "started_at_utc": "2026-09-23T02:33:22.289245+00:00",
+        "started_tick": 5171806,
+        "step_index": 0,
+        "step_sha256": "9068e7f2505180505df511270a0426728844538eb887bfcb4e0583aa981a8270"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:33:30.042884+00:00",
+            "error_code": null,
+            "seconds": 6.306281580007635,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:33:29.976022+00:00",
+            "error_code": null,
+            "seconds": 6.4732928579906,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:33:36.415429+00:00",
+            "error_code": null,
+            "seconds": 0.02059359004488215,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 495,
+        "finished_at_utc": "2026-09-23T02:33:37.866414+00:00",
+        "finished_tick": 5172722,
+        "id": "3d1e38cc38c04b95b96b2f456dff84e8",
+        "latency_seconds": 7.932782908028457,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_extract:output-chest:334",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5172096:factory_extract:output-chest:334:iron-plate",
+        "started_at_utc": "2026-09-23T02:33:29.933565+00:00",
+        "started_tick": 5172244,
+        "step_index": 0,
+        "step_sha256": "ef4ce1c6ae24569baa2714e7a4c44d614656cb41381741f51acb3941a5a4e8c4"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:33:43.753605+00:00",
+            "error_code": null,
+            "seconds": 3.650884831964504,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:33:43.711451+00:00",
+            "error_code": null,
+            "seconds": 3.851783934980631,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:33:47.488209+00:00",
+            "error_code": null,
+            "seconds": 0.03022072499152273,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 2528,
+        "finished_at_utc": "2026-09-23T02:33:48.902992+00:00",
+        "finished_tick": 5173381,
+        "id": "e7fa665b96d448718dbe40a31cdb1551",
+        "latency_seconds": 5.226844879973214,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_extract:recipe:logistic-science-pack",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5172921:factory_extract:recipe:logistic-science-pack:logistic-science-pack",
+        "started_at_utc": "2026-09-23T02:33:43.676078+00:00",
+        "started_tick": 5173071,
+        "step_index": 0,
+        "step_sha256": "45761671fadddeb331bc2eb90bee2412a505d1238533538926ed7ded4e005240"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:33:54.950620+00:00",
+            "error_code": null,
+            "seconds": 4.425943374983035,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:33:54.828694+00:00",
+            "error_code": null,
+            "seconds": 4.755647960002534,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:33:59.514426+00:00",
+            "error_code": null,
+            "seconds": 0.03926771698752418,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 495,
+        "finished_at_utc": "2026-09-23T02:34:00.855035+00:00",
+        "finished_tick": 5174095,
+        "id": "d3528783d859488c8e0d1355f1e165b4",
+        "latency_seconds": 6.077515729004517,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "service:recipe:iron-plate:54801cc611441dd1",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5173576:factory_extract:output-chest:334:iron-plate",
+        "started_at_utc": "2026-09-23T02:33:54.777436+00:00",
+        "started_tick": 5173730,
+        "step_index": 0,
+        "step_sha256": "a257339bd015d245a504dae94ac7fea983bb47e62ba8ee352c3960732f526e67"
+      },
+      {
+        "action": "factory_insert",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:34:05.529627+00:00",
+            "error_code": null,
+            "seconds": 0.10189045703737065,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:34:05.485057+00:00",
+            "error_code": null,
+            "seconds": 0.2866366950329393,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:34:05.700359+00:00",
+            "error_code": null,
+            "seconds": 0.033875878958497196,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 334,
+        "finished_at_utc": "2026-09-23T02:34:07.185030+00:00",
+        "finished_tick": 5174457,
+        "id": "be04f44129b94bf7af664d42004ce69a",
+        "latency_seconds": 1.7330302059999667,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "service:recipe:iron-plate:54801cc611441dd1",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5173576:factory_insert:recipe:iron-plate:iron-ore",
+        "started_at_utc": "2026-09-23T02:34:05.451934+00:00",
+        "started_tick": 5174360,
+        "step_index": 1,
+        "step_sha256": "6d824121661426bd2f0a59ade21717927e992168395d1233498c5019c9f27f6e"
+      },
+      {
+        "action": "factory_craft_job",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:34:12.609885+00:00",
+            "error_code": null,
+            "seconds": 0.12449954898329452,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:34:12.662462+00:00",
+            "error_code": null,
+            "seconds": 0.031732083996757865,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:34:26.147405+00:00",
+        "finished_tick": 5175558,
+        "id": "eee10c0d988d42d4a4c63c39ab98a422",
+        "latency_seconds": null,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_craft:iron-gear-wheel",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "16268c2961634ba4ac1ed82fe6dbdfdd",
+        "started_at_utc": "2026-09-23T02:34:12.569800+00:00",
+        "started_tick": 5174775,
+        "step_index": 0,
+        "step_sha256": "928781eb1d0b3e2b0a4ce5ae5270aa472aaf71073207840e12764121c19b3c4e"
+      },
+      {
+        "action": "factory_insert",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:34:20.014504+00:00",
+            "error_code": null,
+            "seconds": 4.472784829966258,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:34:19.959942+00:00",
+            "error_code": null,
+            "seconds": 4.663168387021869,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:34:24.573947+00:00",
+            "error_code": null,
+            "seconds": 0.02082221902674064,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 507,
+        "finished_at_utc": "2026-09-23T02:34:26.217266+00:00",
+        "finished_tick": 5175558,
+        "id": "ff554e5095cf46b388a8811bd5bfae80",
+        "latency_seconds": 6.303580604027957,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_insert:utility:lab",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5175064:factory_insert:utility:lab:automation-science-pack",
+        "started_at_utc": "2026-09-23T02:34:19.913566+00:00",
+        "started_tick": 5175183,
+        "step_index": 0,
+        "step_sha256": "864842930d32df029043ef8352a8c32f1a836887505ab05181a00e98a563b8b5"
+      },
+      {
+        "action": "factory_insert",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:34:32.125491+00:00",
+            "error_code": null,
+            "seconds": 6.1718041799613275,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:34:32.078445+00:00",
+            "error_code": null,
+            "seconds": 6.3733641460421495,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:34:38.394792+00:00",
+            "error_code": null,
+            "seconds": 0.022658156987745315,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 243,
+        "finished_at_utc": "2026-09-23T02:34:40.019586+00:00",
+        "finished_tick": 5176372,
+        "id": "e50b55b0db454e719e5c7542bd5fce5b",
+        "latency_seconds": 7.9789480729959905,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_insert:recipe:copper-plate",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5175767:factory_insert:recipe:copper-plate:copper-ore",
+        "started_at_utc": "2026-09-23T02:34:32.040569+00:00",
+        "started_tick": 5175905,
+        "step_index": 0,
+        "step_sha256": "69b7217c59c26118af2a704d25b728bc3dea3af0c1cead9fb474f49c4db44204"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:34:45.873047+00:00",
+            "error_code": null,
+            "seconds": 1.9266959200031124,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:34:45.832116+00:00",
+            "error_code": null,
+            "seconds": 2.0867601329809986,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:34:47.864157+00:00",
+            "error_code": null,
+            "seconds": 0.026242257037665695,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 495,
+        "finished_at_utc": "2026-09-23T02:34:49.162633+00:00",
+        "finished_tick": 5176915,
+        "id": "84b36fbe044c45928c0dfce5cae720b4",
+        "latency_seconds": 3.364869192999322,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "service:recipe:iron-plate:1b41b3fda9194d89",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5176570:factory_extract:output-chest:334:iron-plate",
+        "started_at_utc": "2026-09-23T02:34:45.797704+00:00",
+        "started_tick": 5176715,
+        "step_index": 0,
+        "step_sha256": "6c3a40ab4d17b680c9d0b0787511c9a7bcad197ecf73dfa415a2eb67fd4a2850"
+      },
+      {
+        "action": "factory_insert",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:34:53.996821+00:00",
+            "error_code": null,
+            "seconds": 0.12893943395465612,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:34:53.963140+00:00",
+            "error_code": null,
+            "seconds": 0.33030178799526766,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:34:54.203544+00:00",
+            "error_code": null,
+            "seconds": 0.024724101007450372,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 334,
+        "finished_at_utc": "2026-09-23T02:34:55.716535+00:00",
+        "finished_tick": 5177289,
+        "id": "0d3b3973b56643c18a3b0b54248c880b",
+        "latency_seconds": 1.7798291469807737,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "service:recipe:iron-plate:1b41b3fda9194d89",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5176570:factory_insert:recipe:iron-plate:iron-ore",
+        "started_at_utc": "2026-09-23T02:34:53.936615+00:00",
+        "started_tick": 5177184,
+        "step_index": 1,
+        "step_sha256": "cdb989f43e8354bdc99c3ba5f43662da04266d4d779e6d8dcc257be7f271b111"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:35:01.758457+00:00",
+            "error_code": null,
+            "seconds": 3.6632194650010206,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:35:01.720631+00:00",
+            "error_code": null,
+            "seconds": 3.814674737979658,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:35:05.479004+00:00",
+            "error_code": null,
+            "seconds": 0.024042726028710604,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 2528,
+        "finished_at_utc": "2026-09-23T02:35:06.933531+00:00",
+        "finished_tick": 5177945,
+        "id": "741e614ef9bf4144b6202f5fdbb3bf81",
+        "latency_seconds": 5.244083073048387,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_extract:recipe:logistic-science-pack",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5177485:factory_extract:recipe:logistic-science-pack:logistic-science-pack",
+        "started_at_utc": "2026-09-23T02:35:01.687394+00:00",
+        "started_tick": 5177624,
+        "step_index": 0,
+        "step_sha256": "3e6c350bd9135f0a9f49c2bc98122a447e17fa60a5a7aedf30ccff686323941b"
+      },
+      {
+        "action": "factory_insert",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:35:11.620327+00:00",
+            "error_code": null,
+            "seconds": 7.0335201889975,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:35:11.576537+00:00",
+            "error_code": null,
+            "seconds": 7.22370284202043,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:35:18.711183+00:00",
+            "error_code": null,
+            "seconds": 0.02654789504595101,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 507,
+        "finished_at_utc": "2026-09-23T02:35:20.119558+00:00",
+        "finished_tick": 5178730,
+        "id": "2cef917b25154e80b67f4d3f377ec4c8",
+        "latency_seconds": 8.570014399010688,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_insert:utility:lab",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5178141:factory_insert:utility:lab:logistic-science-pack",
+        "started_at_utc": "2026-09-23T02:35:11.549471+00:00",
+        "started_tick": 5178212,
+        "step_index": 0,
+        "step_sha256": "46d5f3dd6a64409e7790acf6eb08748528f5d5c580d17745bdb7fc7d80ce44c1"
+      },
+      {
+        "action": "factory_wait",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:35:25.603426+00:00",
+            "error_code": null,
+            "seconds": 0.016988860035780817,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:36:00.175350+00:00",
+        "finished_tick": 5180936,
+        "id": "424b83a7623941868256cc3951975ccb",
+        "latency_seconds": 34.63253772503231,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_wait:oil-gathering:progress:0.4012999999998092:supplies:automation-science-pack=20,logistic-science-pack=20:scheduled",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:35:25.542764+00:00",
+        "started_tick": 5179009,
+        "step_index": 0,
+        "step_sha256": "bd033abda31ddc845556199a403a3a9b7927c6f50d157f52123a37c113e33b95"
+      },
+      {
+        "action": "factory_wait",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:36:09.389460+00:00",
+            "error_code": null,
+            "seconds": 0.024106751021463424,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:36:39.858548+00:00",
+        "finished_tick": 5183233,
+        "id": "fc7f6024c13947e98b99f529c71771ca",
+        "latency_seconds": 30.526753917045426,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_wait:oil-gathering:progress:0.4141222222220744:supplies:automation-science-pack=19,logistic-science-pack=19:scheduled",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:36:09.331716+00:00",
+        "started_tick": 5181413,
+        "step_index": 0,
+        "step_sha256": "be63cf9daff01b8936db9f4820446ab8505c5410f68cdeb6f3006dbafbb49809"
+      },
+      {
+        "action": "factory_wait",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:36:45.298252+00:00",
+            "error_code": null,
+            "seconds": 0.013161675014998764,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:37:15.402175+00:00",
+        "finished_tick": 5185292,
+        "id": "9aea29e754174efba8d3f405c5fec9f1",
+        "latency_seconds": 30.12845306401141,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_wait:oil-gathering:progress:0.42632777777767095:supplies:automation-science-pack=18,logistic-science-pack=18:scheduled",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:36:45.273669+00:00",
+        "started_tick": 5183542,
+        "step_index": 0,
+        "step_sha256": "266864e30a212cb17de01bbd3aa4a75cfee6e73d9993e913d68cc86aa1249330"
+      },
+      {
+        "action": "factory_wait",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:37:21.503945+00:00",
+            "error_code": null,
+            "seconds": 0.02467875403817743,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:37:53.612638+00:00",
+        "finished_tick": 5187423,
+        "id": "d5cc034577a54713a56c3c4eb5ba59be",
+        "latency_seconds": 32.25889466004446,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_wait:oil-gathering:progress:0.43777222222215373:supplies:automation-science-pack=17,logistic-science-pack=17:scheduled",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:37:21.353681+00:00",
+        "started_tick": 5185627,
+        "step_index": 0,
+        "step_sha256": "a83a23de94cf631364a6b5114c1bc05c7f0753b1486f5547f5b47ecce9eea456"
+      },
+      {
+        "action": "factory_wait",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:38:02.495427+00:00",
+            "error_code": null,
+            "seconds": 0.057136090006679296,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:38:29.924166+00:00",
+        "finished_tick": 5189690,
+        "id": "7ae27d1051934ea18636c77025d318f2",
+        "latency_seconds": 27.588468412985094,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_wait:oil-gathering:progress:0.45069444444441925:supplies:automation-science-pack=15,logistic-science-pack=15:scheduled",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:38:02.335648+00:00",
+        "started_tick": 5187988,
+        "step_index": 0,
+        "step_sha256": "4eefadd464116fbdc6d1a1f2c1b0d54e39e69a6b5bdac604991f21a794bcbd6c"
+      },
+      {
+        "action": "factory_wait",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:38:35.025030+00:00",
+            "error_code": null,
+            "seconds": 0.011033766029868275,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:39:07.334059+00:00",
+        "finished_tick": 5191892,
+        "id": "268f0a97c97d44cc8aa1a261fbbfaa35",
+        "latency_seconds": 32.34839632996591,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_wait:oil-gathering:progress:0.4621777777777911:supplies:automation-science-pack=14,logistic-science-pack=14:scheduled",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:38:34.985604+00:00",
+        "started_tick": 5189983,
+        "step_index": 0,
+        "step_sha256": "38018584af6adddbc7e3d74fe6f3b6a4cc0b4f9aba6b22a19fddf0b7a44e074d"
+      },
+      {
+        "action": "factory_wait",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:39:12.359004+00:00",
+            "error_code": null,
+            "seconds": 0.01088013401022181,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:39:44.292478+00:00",
+        "finished_tick": 5194072,
+        "id": "be82246a781244c9bcefe7f713b06f89",
+        "latency_seconds": 31.9633007789962,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_wait:oil-gathering:progress:0.4744444444444989:supplies:automation-science-pack=13,logistic-science-pack=13:scheduled",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:39:12.329125+00:00",
+        "started_tick": 5192187,
+        "step_index": 0,
+        "step_sha256": "e7dad95bf3fa5ddcd4a9eef99ab5990bfb7e5a3566a41cae2f02cd8bfb2964b0"
+      },
+      {
+        "action": "factory_wait",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:39:49.605467+00:00",
+            "error_code": null,
+            "seconds": 0.018615780980326235,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:40:18.611284+00:00",
+        "finished_tick": 5196087,
+        "id": "8f82302a3c15429691764ff00e77bd01",
+        "latency_seconds": 29.115465666982345,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_wait:oil-gathering:progress:0.48653333333342835:supplies:automation-science-pack=12,logistic-science-pack=12:scheduled",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:39:49.495750+00:00",
+        "started_tick": 5194370,
+        "step_index": 0,
+        "step_sha256": "97c8ce1f8fd8a429a50cf217a422582fd937235ab075947eb5be4618e20e12e9"
+      },
+      {
+        "action": "factory_wait",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:40:23.709491+00:00",
+            "error_code": null,
+            "seconds": 0.014937711996026337,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:40:56.008466+00:00",
+        "finished_tick": 5198274,
+        "id": "37d6a1bfa0f24d8c933e945614bc4bab",
+        "latency_seconds": 32.33184443699429,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_wait:oil-gathering:progress:0.4977333333334659:supplies:automation-science-pack=11,logistic-science-pack=11:scheduled",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:40:23.676581+00:00",
+        "started_tick": 5196382,
+        "step_index": 0,
+        "step_sha256": "aa421b3bd41a6436fe56c2cf83aa3a0b37055755e0693653a46006b9cb39c7de"
+      },
+      {
+        "action": "factory_wait",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:41:01.058485+00:00",
+            "error_code": null,
+            "seconds": 0.011364671983756125,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:41:33.184699+00:00",
+        "finished_tick": 5200422,
+        "id": "2e5f39f9147a4793b5e2da83e0f9e9da",
+        "latency_seconds": 32.15311396296602,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_wait:oil-gathering:progress:0.5099000000001734:supplies:automation-science-pack=10,logistic-science-pack=10:scheduled",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:41:01.031504+00:00",
+        "started_tick": 5198572,
+        "step_index": 0,
+        "step_sha256": "6a3f7ad0b3ab732b29b101716d7f27cbf526c565044f28ed7f4e8d25d86756dc"
+      },
+      {
+        "action": "factory_wait",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:41:39.079760+00:00",
+            "error_code": null,
+            "seconds": 0.012998179998248816,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:42:11.983230+00:00",
+        "finished_tick": 5202587,
+        "id": "b642ee82c3894e81b25960f51fe68ab3",
+        "latency_seconds": 32.93166780099273,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_wait:oil-gathering:progress:0.5218500000002134:supplies:automation-science-pack=8,logistic-science-pack=8:scheduled",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:41:39.051513+00:00",
+        "started_tick": 5200757,
+        "step_index": 0,
+        "step_sha256": "5b1f1134be0f11cc110bc6019c7aa3225ebfa937c35f97770c8eb3391b8a3497"
+      },
+      {
+        "action": "factory_wait",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:42:18.614843+00:00",
+            "error_code": null,
+            "seconds": 0.1491619769949466,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:42:50.080733+00:00",
+        "finished_tick": 5204681,
+        "id": "5c8dec8702224d93b989133cb0855a32",
+        "latency_seconds": 31.510220572003163,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_wait:oil-gathering:progress:0.5340500000002544:supplies:automation-science-pack=7,logistic-science-pack=7:scheduled",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:42:18.570452+00:00",
+        "started_tick": 5202948,
+        "step_index": 0,
+        "step_sha256": "ae58c247f9a3411544abb04b0cbba0fb34ae7ad44a24cd00aafab3c425e32d52"
+      },
+      {
+        "action": "factory_wait",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:42:58.102960+00:00",
+            "error_code": null,
+            "seconds": 0.020950675010681152,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:43:09.000745+00:00",
+        "finished_tick": 5205701,
+        "id": "40a2e90d9c92417ab69bc3282f0d1f68",
+        "latency_seconds": 10.941079327021725,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "wait_replanned",
+        "plan_id": "factory:factory_wait:oil-gathering:progress:0.5457666666669604:supplies:automation-science-pack=6,logistic-science-pack=6:scheduled",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:42:58.059594+00:00",
+        "started_tick": 5205118,
+        "step_index": 0,
+        "step_sha256": "271735af98caa54692968cf2a167d086bb3f19ae0dc306b1b911f64ca8c528e1"
+      },
+      {
+        "action": "factory_craft_job",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:43:14.277036+00:00",
+            "error_code": null,
+            "seconds": 0.19228982500499114,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:43:14.392503+00:00",
+            "error_code": null,
+            "seconds": 0.02143557503586635,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:43:20.036973+00:00",
+        "finished_tick": 5206379,
+        "id": "6fab25c1ee9d4e6e807f613e3dcad157",
+        "latency_seconds": null,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_craft:transport-belt",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "e3c3f24985ef4c0ba36d794855ac4cb7",
+        "started_at_utc": "2026-09-23T02:43:14.230636+00:00",
+        "started_tick": 5206065,
+        "step_index": 0,
+        "step_sha256": "8b8e3d573cf2df29909277f065727ada26c0780afc68e195d328b9df6351944c"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:43:23.721884+00:00",
+            "error_code": null,
+            "seconds": 5.792581261019222,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:43:23.673203+00:00",
+            "error_code": null,
+            "seconds": 5.920462656999007,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:43:29.564413+00:00",
+            "error_code": null,
+            "seconds": 0.0179744940251112,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 609,
+        "finished_at_utc": "2026-09-23T02:43:30.951932+00:00",
+        "finished_tick": 5207039,
+        "id": "0f92bf56dad044f691b38edc1f912773",
+        "latency_seconds": 7.316396404989064,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_extract:output-chest:243",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5206379:factory_extract:output-chest:243:copper-plate",
+        "started_at_utc": "2026-09-23T02:43:23.635481+00:00",
+        "started_tick": 5206601,
+        "step_index": 0,
+        "step_sha256": "1f23c5c48a3ce6936a87ed163c5ff086d642e875f5072bc60c7474ddf5c8a2c0"
+      },
+      {
+        "action": "factory_insert",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:43:37.514768+00:00",
+            "error_code": null,
+            "seconds": 3.1331468280404806,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:43:37.483886+00:00",
+            "error_code": null,
+            "seconds": 3.6044675710145384,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:43:40.866605+00:00",
+            "error_code": null,
+            "seconds": 0.03217781300190836,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 2528,
+        "finished_at_utc": "2026-09-23T02:43:42.677014+00:00",
+        "finished_tick": 5207734,
+        "id": "57fa2e4cdded43d6ae61c16b44930c5a",
+        "latency_seconds": 5.226477677002549,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_insert:recipe:logistic-science-pack",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5207235:factory_insert:recipe:logistic-science-pack:transport-belt",
+        "started_at_utc": "2026-09-23T02:43:37.450470+00:00",
+        "started_tick": 5207416,
+        "step_index": 0,
+        "step_sha256": "04fc7c8989a064f096d35593f503979c85cbcf0fbba93f903ae44eec32ad84d3"
+      },
+      {
+        "action": "factory_craft_job",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:43:49.824338+00:00",
+            "error_code": null,
+            "seconds": 0.15032838395563886,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:43:49.869516+00:00",
+            "error_code": null,
+            "seconds": 0.03407116903690621,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:43:52.022219+00:00",
+        "finished_tick": 5208231,
+        "id": "d842882097f44fc386029f3716e9838b",
+        "latency_seconds": 2.2655218560248613,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_craft:transport-belt",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "aa87bcda830a42f9b05a51f8468c9bd9",
+        "started_at_utc": "2026-09-23T02:43:49.756621+00:00",
+        "started_tick": 5208100,
+        "step_index": 0,
+        "step_sha256": "e3afb69c803dd29cadf1b2d92c4342a5772686b3606a9513f5a75abb1e438dd7"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:43:58.845791+00:00",
+            "error_code": null,
+            "seconds": 4.442155026015826,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:43:58.794960+00:00",
+            "error_code": null,
+            "seconds": 4.705955741985235,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:44:03.396817+00:00",
+            "error_code": null,
+            "seconds": 0.037966228963341564,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 495,
+        "finished_at_utc": "2026-09-23T02:44:05.631158+00:00",
+        "finished_tick": 5209018,
+        "id": "21cc8efcef8e4907b5e1fabeb88dddf8",
+        "latency_seconds": 6.880404706986155,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_extract:output-chest:334",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5208452:factory_extract:output-chest:334:iron-plate",
+        "started_at_utc": "2026-09-23T02:43:58.750544+00:00",
+        "started_tick": 5208632,
+        "step_index": 0,
+        "step_sha256": "015ade497b86ba3830238f46692c262264cede69d1e973775ddd2f861e4ab404"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:44:13.380852+00:00",
+            "error_code": null,
+            "seconds": 0.10980889102211222,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:44:13.337887+00:00",
+            "error_code": null,
+            "seconds": 0.39142422401346266,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:44:13.564456+00:00",
+            "error_code": null,
+            "seconds": 0.032472615013830364,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 495,
+        "finished_at_utc": "2026-09-23T02:44:15.076034+00:00",
+        "finished_tick": 5209592,
+        "id": "10606c47f2fe454e97209bb90121c6d5",
+        "latency_seconds": 1.8381712830159813,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_extract:output-chest:334",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5209244:factory_extract:output-chest:334:iron-plate",
+        "started_at_utc": "2026-09-23T02:44:13.237786+00:00",
+        "started_tick": 5209482,
+        "step_index": 0,
+        "step_sha256": "304cf95279061bcaf3ca3fa681e162e5cd0dff1e781fc4ed2fe360a3a66e76b6"
+      },
+      {
+        "action": "factory_craft_job",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:44:21.054222+00:00",
+            "error_code": null,
+            "seconds": 0.2528679000097327,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:44:21.092404+00:00",
+            "error_code": null,
+            "seconds": 0.026526137022301555,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:44:26.690969+00:00",
+        "finished_tick": 5210271,
+        "id": "a051b17f14d54d2dab45a1cf9c6e2000",
+        "latency_seconds": null,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_craft:iron-gear-wheel",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "4a4c03d8ce4441af9d4fb28bbf6b40fa",
+        "started_at_utc": "2026-09-23T02:44:20.946548+00:00",
+        "started_tick": 5209896,
+        "step_index": 0,
+        "step_sha256": "f2ab36d64fd75f0aebd0f8ecde676e3bd21d4e1517c0d5249592dd2c569afb97"
+      },
+      {
+        "action": "factory_insert",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:44:30.683032+00:00",
+            "error_code": null,
+            "seconds": 6.606390398985241,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:44:30.549810+00:00",
+            "error_code": null,
+            "seconds": 6.870872098021209,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:44:37.365318+00:00",
+            "error_code": null,
+            "seconds": 0.020527568995021284,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 2524,
+        "finished_at_utc": "2026-09-23T02:44:39.043650+00:00",
+        "finished_tick": 5211003,
+        "id": "5b45f28dc3e4411d92d3aca20097d326",
+        "latency_seconds": 8.588014030014165,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "service:recipe:automation-science-pack:ec4da6f4911b90e6",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5210271:factory_insert:recipe:automation-science-pack:iron-gear-wheel",
+        "started_at_utc": "2026-09-23T02:44:30.455570+00:00",
+        "started_tick": 5210486,
+        "step_index": 0,
+        "step_sha256": "527676b3a23545f842bd00cf401e8066667edf224e592b6e5190123130210fe4"
+      },
+      {
+        "action": "factory_insert",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:44:44.451320+00:00",
+            "error_code": null,
+            "seconds": 0.1361499410122633,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:44:44.336569+00:00",
+            "error_code": null,
+            "seconds": 0.5692167179659009,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:44:44.799609+00:00",
+            "error_code": null,
+            "seconds": 0.023441736993845552,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 2524,
+        "finished_at_utc": "2026-09-23T02:44:46.613159+00:00",
+        "finished_tick": 5211421,
+        "id": "bdb97ccac4ce4ef0b61adfcba4cb7601",
+        "latency_seconds": 2.372475534968544,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "service:recipe:automation-science-pack:ec4da6f4911b90e6",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5210271:factory_insert:recipe:automation-science-pack:copper-plate",
+        "started_at_utc": "2026-09-23T02:44:44.240610+00:00",
+        "started_tick": 5211291,
+        "step_index": 1,
+        "step_sha256": "6999732f92d76ea7ffb7102cde74837c56725e2c8513f5367a5fd2ffdd9b845e"
+      },
+      {
+        "action": "factory_craft_job",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:44:53.568917+00:00",
+            "error_code": null,
+            "seconds": 0.13327787502203137,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:44:53.603768+00:00",
+            "error_code": null,
+            "seconds": 0.034744481032248586,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:44:55.420537+00:00",
+        "finished_tick": 5211920,
+        "id": "782c377a0ef54a2380221cf17b9b105d",
+        "latency_seconds": 1.8801205760100856,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_craft:iron-gear-wheel",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "6a503b05c4084681b949ed372c2afc77",
+        "started_at_utc": "2026-09-23T02:44:53.540347+00:00",
+        "started_tick": 5211826,
+        "step_index": 0,
+        "step_sha256": "5c099dbbf700b49e8777d3f5fd0515a85259575283ee9b29578b6ceb7e9299c3"
+      },
+      {
+        "action": "factory_craft_job",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:45:02.437454+00:00",
+            "error_code": null,
+            "seconds": 0.20988799299811944,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:45:02.550080+00:00",
+            "error_code": null,
+            "seconds": 0.02949695399729535,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:45:04.691541+00:00",
+        "finished_tick": 5212421,
+        "id": "f68044f43a85487dbdcbca4d1861311f",
+        "latency_seconds": 2.376941121008713,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_craft:transport-belt",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "9c1498273ce445ce9871165de3d5f277",
+        "started_at_utc": "2026-09-23T02:45:02.314531+00:00",
+        "started_tick": 5212306,
+        "step_index": 0,
+        "step_sha256": "afca68bb045176a563142b8767e8ea226b91361e8cc138e36e1920d2a7bf90d2"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:45:17.374939+00:00",
+            "error_code": null,
+            "seconds": 6.580967789981514,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:45:17.137448+00:00",
+            "error_code": null,
+            "seconds": 7.436040298023727,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:45:24.310739+00:00",
+            "error_code": null,
+            "seconds": 0.050225885992404073,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 495,
+        "finished_at_utc": "2026-09-23T02:45:27.832475+00:00",
+        "finished_tick": 5213672,
+        "id": "77dac7add1474e0f85fd7f02b5efbcf5",
+        "latency_seconds": 10.910741010971833,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_extract:output-chest:334",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5212644:factory_extract:output-chest:334:iron-plate",
+        "started_at_utc": "2026-09-23T02:45:16.921670+00:00",
+        "started_tick": 5213058,
+        "step_index": 0,
+        "step_sha256": "934112bb062221ed05c6b960454326ccdf490689970c2ac69c5cd30e04b93ecc"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:45:43.847482+00:00",
+            "error_code": null,
+            "seconds": 0.13747548800893128,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:45:43.301886+00:00",
+            "error_code": null,
+            "seconds": 3.461513188027311,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:45:45.588952+00:00",
+            "error_code": null,
+            "seconds": 0.03511499299202114,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 495,
+        "finished_at_utc": "2026-09-23T02:45:51.914450+00:00",
+        "finished_tick": 5214970,
+        "id": "9365044ac8cb42e4bc548d4420cd7ce1",
+        "latency_seconds": 8.80581135203829,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_extract:output-chest:334",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5213946:factory_extract:output-chest:334:iron-plate",
+        "started_at_utc": "2026-09-23T02:45:43.108571+00:00",
+        "started_tick": 5214426,
+        "step_index": 0,
+        "step_sha256": "8d1b9d1c4741d316254b703aab3ec43e735b53129f190ca8f6c218288784a659"
+      },
+      {
+        "action": "factory_insert",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:46:10.169982+00:00",
+            "error_code": null,
+            "seconds": 0.12298858998110518,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:46:09.223463+00:00",
+            "error_code": null,
+            "seconds": 4.597927547991276,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:46:12.070605+00:00",
+            "error_code": null,
+            "seconds": 0.03193940094206482,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 334,
+        "finished_at_utc": "2026-09-23T02:46:18.716499+00:00",
+        "finished_tick": 5216518,
+        "id": "d796cdb5e7a14aed9ff7cd565488f39b",
+        "latency_seconds": 10.64687146001961,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_insert:recipe:iron-plate",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5215337:factory_insert:recipe:iron-plate:iron-ore",
+        "started_at_utc": "2026-09-23T02:46:08.069567+00:00",
+        "started_tick": 5215814,
+        "step_index": 0,
+        "step_sha256": "4d881924990a1225b74fabd6782631fe943e4e28c8c34700ac18f69d5bc58079"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:46:35.047619+00:00",
+            "error_code": null,
+            "seconds": 6.586928893986624,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:46:34.146858+00:00",
+            "error_code": null,
+            "seconds": 10.099417988036294,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:46:43.147874+00:00",
+            "error_code": null,
+            "seconds": 0.03140620799968019,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 2524,
+        "finished_at_utc": "2026-09-23T02:46:51.346634+00:00",
+        "finished_tick": 5218310,
+        "id": "db1727a068244fcfa771cb3e77050f65",
+        "latency_seconds": 17.58776551100891,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_extract:recipe:automation-science-pack",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5216872:factory_extract:recipe:automation-science-pack:automation-science-pack",
+        "started_at_utc": "2026-09-23T02:46:33.758795+00:00",
+        "started_tick": 5217300,
+        "step_index": 0,
+        "step_sha256": "885ae61bc96077f4f86514edc46cfaaa527731ce01b943d5dcd91168d0ae12aa"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:47:07.268581+00:00",
+            "error_code": null,
+            "seconds": 0.14024920196970925,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:47:06.367820+00:00",
+            "error_code": null,
+            "seconds": 4.123557290993631,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:47:09.054431+00:00",
+            "error_code": null,
+            "seconds": 0.06789717701030895,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 2524,
+        "finished_at_utc": "2026-09-23T02:47:17.051984+00:00",
+        "finished_tick": 5219828,
+        "id": "f59ef5cbba6c45edb3de8ca17b55c747",
+        "latency_seconds": 11.243723053950816,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_extract:recipe:automation-science-pack",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5218769:factory_extract:recipe:automation-science-pack:automation-science-pack",
+        "started_at_utc": "2026-09-23T02:47:05.808193+00:00",
+        "started_tick": 5219196,
+        "step_index": 0,
+        "step_sha256": "f2d5fc99922978dd06a722f4749e0f23e48b2fdf2a1043365608f26b3c8a38b5"
+      },
+      {
+        "action": "factory_craft_job",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:47:31.988628+00:00",
+            "error_code": null,
+            "seconds": 1.2268886680249125,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:47:33.070485+00:00",
+            "error_code": null,
+            "seconds": 0.05471076996764168,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:47:39.637370+00:00",
+        "finished_tick": 5221124,
+        "id": "0fbbb79ebf48499d933fe7ca23971394",
+        "latency_seconds": 9.066804889997002,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_craft:iron-gear-wheel",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "011209a706644421ae2b7704a2ef29a5",
+        "started_at_utc": "2026-09-23T02:47:30.569658+00:00",
+        "started_tick": 5220511,
+        "step_index": 0,
+        "step_sha256": "e893f2d93e087c1b41d891006c6ecffbad4447a4f22ecedc13885f99754a6afd"
+      },
+      {
+        "action": "factory_insert",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:47:57.155649+00:00",
+            "error_code": null,
+            "seconds": 0.14419709600042552,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:47:56.067255+00:00",
+            "error_code": null,
+            "seconds": 4.818513792997692,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:47:59.814243+00:00",
+            "error_code": null,
+            "seconds": 0.06031807098770514,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 2524,
+        "finished_at_utc": "2026-09-23T02:48:04.944490+00:00",
+        "finished_tick": 5222634,
+        "id": "6ce3c3a07af24e349ebc8727a174acfb",
+        "latency_seconds": 9.64847044396447,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_insert:recipe:automation-science-pack",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5221507:factory_insert:recipe:automation-science-pack:iron-gear-wheel",
+        "started_at_utc": "2026-09-23T02:47:55.295962+00:00",
+        "started_tick": 5222030,
+        "step_index": 0,
+        "step_sha256": "5739c7dce53212d0e433ade5c28fba745402bffc062d315b202ef3994894ff3d"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:48:20.014651+00:00",
+            "error_code": null,
+            "seconds": 6.3109123559552245,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:48:18.758146+00:00",
+            "error_code": null,
+            "seconds": 9.374092641985044,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:48:28.028746+00:00",
+            "error_code": null,
+            "seconds": 0.03442793502472341,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 495,
+        "finished_at_utc": "2026-09-23T02:48:32.755489+00:00",
+        "finished_tick": 5224277,
+        "id": "a17c1e4a6723406ab7aa560193fea9c3",
+        "latency_seconds": 14.815279233967885,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_extract:output-chest:334",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5222988:factory_extract:output-chest:334:iron-plate",
+        "started_at_utc": "2026-09-23T02:48:17.940150+00:00",
+        "started_tick": 5223381,
+        "step_index": 0,
+        "step_sha256": "ff1ed55766052daf0fcd09eaaf4bb9c1fbfb379585b68b2a6fab1b9539cefa48"
+      },
+      {
+        "action": "factory_gather",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:48:46.737538+00:00",
+            "error_code": null,
+            "seconds": 115.41163789300481,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:50:45.039441+00:00",
+        "finished_tick": 5232225,
+        "id": "8945581e475e42f584190b37c05c3721",
+        "latency_seconds": 118.88195371098118,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_gather:iron-ore:target:68:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:48:46.157419+00:00",
+        "started_tick": 5225007,
+        "step_index": 0,
+        "step_sha256": "ada3aa7471a4638e0c4d10eb376d5f5c2374bf5902c24c6d5d1feccffa685de5"
+      },
+      {
+        "action": "factory_gather",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:50:52.752062+00:00",
+            "error_code": null,
+            "seconds": 102.2728588799946,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:52:37.011209+00:00",
+        "finished_tick": 5238866,
+        "id": "48aa150f30bb4abf8a11148109e16e4e",
+        "latency_seconds": 104.31750804098556,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_gather:iron-ore:target:118:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:50:52.693641+00:00",
+        "started_tick": 5232660,
+        "step_index": 0,
+        "step_sha256": "69cb08f0abab65fba6f4cdf9423d425b6832cc37782bf3ceea254fc8c2c7c24a"
+      },
+      {
+        "action": "factory_gather",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:52:43.771479+00:00",
+            "error_code": null,
+            "seconds": 91.59563929704018,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:54:17.469743+00:00",
+        "finished_tick": 5244826,
+        "id": "22e921ad22d14be2991d152c102ba535",
+        "latency_seconds": 93.79133867000928,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_gather:iron-ore:target:163:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:52:43.678331+00:00",
+        "started_tick": 5239247,
+        "step_index": 0,
+        "step_sha256": "e767fcf5b45925fd7cbf1bac60cea5451188d592618d049a16a5215039a99bbf"
+      },
+      {
+        "action": "factory_insert",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:54:25.125820+00:00",
+            "error_code": null,
+            "seconds": 14.514528269006405,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:54:25.063601+00:00",
+            "error_code": null,
+            "seconds": 15.006006269017234,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:54:39.792227+00:00",
+            "error_code": null,
+            "seconds": 0.03944539400981739,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 334,
+        "finished_at_utc": "2026-09-23T02:54:41.844243+00:00",
+        "finished_tick": 5246263,
+        "id": "43878332a56a4f1e8ee5554def78dc09",
+        "latency_seconds": 16.897961032984313,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_insert:recipe:iron-plate",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5245049:factory_insert:recipe:iron-plate:iron-ore",
+        "started_at_utc": "2026-09-23T02:54:24.945955+00:00",
+        "started_tick": 5245244,
+        "step_index": 0,
+        "step_sha256": "1d264cd8379748b4911c55b7a6eb556f20fe23f3ea05c89bbe03fbb8d859c03a"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:54:50.163191+00:00",
+            "error_code": null,
+            "seconds": 6.754068453970831,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:54:50.040894+00:00",
+            "error_code": null,
+            "seconds": 6.994087959988974,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:54:56.994243+00:00",
+            "error_code": null,
+            "seconds": 0.043157259991858155,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 2524,
+        "finished_at_utc": "2026-09-23T02:54:58.780206+00:00",
+        "finished_tick": 5247246,
+        "id": "0d725183ac5e4f2885d93c0c3c68c5e7",
+        "latency_seconds": 8.915484710014425,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_extract:recipe:automation-science-pack",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5246473:factory_extract:recipe:automation-science-pack:automation-science-pack",
+        "started_at_utc": "2026-09-23T02:54:49.863897+00:00",
+        "started_tick": 5246712,
+        "step_index": 0,
+        "step_sha256": "9fda3fa04990bb16978dc6c171f208556a157c98605526bcc900ea9959cb0156"
+      },
+      {
+        "action": "factory_insert",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:55:04.664596+00:00",
+            "error_code": null,
+            "seconds": 2.847493953013327,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:55:04.603444+00:00",
+            "error_code": null,
+            "seconds": 3.03201889898628,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:55:07.578003+00:00",
+            "error_code": null,
+            "seconds": 0.03376548900268972,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 507,
+        "finished_at_utc": "2026-09-23T02:55:09.445225+00:00",
+        "finished_tick": 5247861,
+        "id": "d21a1ecc0e1b4e21a8682420c23b3fea",
+        "latency_seconds": 4.8799579559708945,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_insert:utility:lab",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5247465:factory_insert:utility:lab:automation-science-pack",
+        "started_at_utc": "2026-09-23T02:55:04.565196+00:00",
+        "started_tick": 5247580,
+        "step_index": 0,
+        "step_sha256": "46b85d9c6ca356366d3928a0a3ed7ae673d2a45634af0e8bd6f0101f70081e88"
+      },
+      {
+        "action": "factory_craft_job",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:55:15.954424+00:00",
+            "error_code": null,
+            "seconds": 0.13904542801901698,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:55:15.998463+00:00",
+            "error_code": null,
+            "seconds": 0.0451291500357911,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:55:18.427496+00:00",
+        "finished_tick": 5248326,
+        "id": "c2342300c9724d73bd54849361a617aa",
+        "latency_seconds": 2.499486214015633,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_craft:iron-gear-wheel",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "97959a9d1b1a4dfa964f33c4858df9d6",
+        "started_at_utc": "2026-09-23T02:55:15.927952+00:00",
+        "started_tick": 5248202,
+        "step_index": 0,
+        "step_sha256": "86169efa2ff1070a06105bd33fb4778a857dc40bfb3e2d5b3916c3faa99e1d70"
+      },
+      {
+        "action": "factory_craft_job",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:55:23.794717+00:00",
+            "error_code": null,
+            "seconds": 0.11351847503101453,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:55:23.838041+00:00",
+            "error_code": null,
+            "seconds": 0.024645516998134553,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:55:25.263652+00:00",
+        "finished_tick": 5248745,
+        "id": "7eb3eebc796a4db4a963a12692bbff01",
+        "latency_seconds": 1.5001707110204734,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_craft:transport-belt",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "ae955331c2744024a89e0ca9c439c8d5",
+        "started_at_utc": "2026-09-23T02:55:23.763420+00:00",
+        "started_tick": 5248647,
+        "step_index": 0,
+        "step_sha256": "8f67990e949cd7963eb4568d999f928f08327b5d143418d916fb922dfea0eb84"
+      },
+      {
+        "action": "factory_extract",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:55:32.715482+00:00",
+            "error_code": null,
+            "seconds": 4.395022024982609,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:55:32.666925+00:00",
+            "error_code": null,
+            "seconds": 4.934511169034522,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:55:37.353506+00:00",
+            "error_code": null,
+            "seconds": 0.03512955200858414,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 495,
+        "finished_at_utc": "2026-09-23T02:55:39.290439+00:00",
+        "finished_tick": 5249550,
+        "id": "d63fad3fcdd44a8497c4a0ee5b57ddf2",
+        "latency_seconds": 6.66494089202024,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "service:recipe:iron-plate:67d7b6e0dd7033e8",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5248937:factory_extract:output-chest:334:iron-plate",
+        "started_at_utc": "2026-09-23T02:55:32.625425+00:00",
+        "started_tick": 5249144,
+        "step_index": 0,
+        "step_sha256": "c774d338aeca2a8a5cccd5cf0075dacb095669fad0e42d39160d6f6a78160de5"
+      },
+      {
+        "action": "factory_insert",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:55:44.454456+00:00",
+            "error_code": null,
+            "seconds": 0.0979021120001562,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:55:44.411612+00:00",
+            "error_code": null,
+            "seconds": 0.2940317870234139,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:55:44.640888+00:00",
+            "error_code": null,
+            "seconds": 0.02982532902387902,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 334,
+        "finished_at_utc": "2026-09-23T02:55:46.249898+00:00",
+        "finished_tick": 5249942,
+        "id": "57ffc1b80b6248acace40063012d9782",
+        "latency_seconds": 1.8748524080147035,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "service:recipe:iron-plate:67d7b6e0dd7033e8",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5248937:factory_insert:recipe:iron-plate:iron-ore",
+        "started_at_utc": "2026-09-23T02:55:44.374987+00:00",
+        "started_tick": 5249842,
+        "step_index": 1,
+        "step_sha256": "14bc8057c817db9e218631214c94ee9189ec2e4d71a42ebf029969cf057f8c8c"
+      },
+      {
+        "action": "factory_insert",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:55:53.241647+00:00",
+            "error_code": null,
+            "seconds": 3.67731385899242,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:55:53.208002+00:00",
+            "error_code": null,
+            "seconds": 3.859861737000756,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:55:57.005380+00:00",
+            "error_code": null,
+            "seconds": 0.024493804026860744,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 2528,
+        "finished_at_utc": "2026-09-23T02:55:58.377889+00:00",
+        "finished_tick": 5250668,
+        "id": "d21f44497cb9490ab90354d1dd6a59be",
+        "latency_seconds": 5.227327210013755,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_insert:recipe:logistic-science-pack",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5250156:factory_insert:recipe:logistic-science-pack:transport-belt",
+        "started_at_utc": "2026-09-23T02:55:53.150503+00:00",
+        "started_tick": 5250336,
+        "step_index": 0,
+        "step_sha256": "2c0e0cdf327a6d65fa5f2d58862df76ba85e051ba9c80e3f214a152c88cb6a8e"
+      },
+      {
+        "action": "factory_craft_job",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:56:03.605433+00:00",
+            "error_code": null,
+            "seconds": 0.16950607602484524,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:56:03.645181+00:00",
+            "error_code": null,
+            "seconds": 0.021173228975385427,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:58:14.579878+00:00",
+        "finished_tick": 5258734,
+        "id": "4c9b4428ada34b34b13e02d0f314d393",
+        "latency_seconds": null,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_craft:iron-gear-wheel",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "b6b642d531704472952323bf30be9041",
+        "started_at_utc": "2026-09-23T02:56:03.571418+00:00",
+        "started_tick": 5250966,
+        "step_index": 0,
+        "step_sha256": "6640a603190a9c4afd107eef2c8b7351698bd2b507e7e30a51e67420f88912a5"
+      },
+      {
+        "action": "factory_gather",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:56:12.292936+00:00",
+            "error_code": null,
+            "seconds": 120.32320027297828,
+            "stage": "dispatch",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:58:14.805853+00:00",
+        "finished_tick": 5258734,
+        "id": "78e41c5a2ef74e198299c03232072060",
+        "latency_seconds": 122.65055564098293,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_gather:copper-ore:target:50:site:{\"name\":\"copper-ore\",\"position\":{\"x\":-49.5,\"y\":-84.5},\"surface_index\":1}",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": null,
+        "started_at_utc": "2026-09-23T02:56:12.155239+00:00",
+        "started_tick": 5251450,
+        "step_index": 0,
+        "step_sha256": "8dce779b2f48225bb665e898b0bf3b2f0bf0ce23022c01f167f021b3ce9801a6"
+      },
+      {
+        "action": "factory_craft_job",
+        "dispatch_phases": {
+          "dispatch": {
+            "at_utc": "2026-09-23T02:58:21.220172+00:00",
+            "error_code": null,
+            "seconds": 0.1400241429801099,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:58:21.263438+00:00",
+            "error_code": null,
+            "seconds": 0.042046730988658965,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": null,
+        "finished_at_utc": "2026-09-23T02:58:49.644012+00:00",
+        "finished_tick": 5260713,
+        "id": "60c4eda4f8a447fa88e75271a882aa99",
+        "latency_seconds": null,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_craft:inserter",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "3811d2b654d6439f8992744d5841688d",
+        "started_at_utc": "2026-09-23T02:58:21.191405+00:00",
+        "started_tick": 5259077,
+        "step_index": 0,
+        "step_sha256": "3111008fcb1bd55534e744dca6f71d870eea42d90354be76dda1267391f670c3"
+      },
+      {
+        "action": "factory_insert",
+        "dispatch_phases": {
+          "approach": {
+            "at_utc": "2026-09-23T02:58:31.399554+00:00",
+            "error_code": null,
+            "seconds": 16.143623075040523,
+            "stage": "approach",
+            "status": "returned"
+          },
+          "dispatch": {
+            "at_utc": "2026-09-23T02:58:31.224371+00:00",
+            "error_code": null,
+            "seconds": 16.455153104965575,
+            "stage": "dispatch",
+            "status": "returned"
+          },
+          "transfer_rpc": {
+            "at_utc": "2026-09-23T02:58:47.665034+00:00",
+            "error_code": null,
+            "seconds": 0.07373551704222336,
+            "stage": "transfer_rpc",
+            "status": "returned"
+          }
+        },
+        "expected_unit_number": 243,
+        "finished_at_utc": "2026-09-23T02:58:49.754264+00:00",
+        "finished_tick": 5260713,
+        "id": "9a0b71b01e314ccd82c3891be9069fe3",
+        "latency_seconds": 18.682664852996822,
+        "observation_error": null,
+        "origin": "new",
+        "outcome": "verified",
+        "plan_id": "factory:factory_insert:recipe:copper-plate",
+        "process_id": "5ff4a385d4c14ccf9bdd07b6a80b87f0",
+        "receipt": "5259393:factory_insert:recipe:copper-plate:copper-ore",
+        "started_at_utc": "2026-09-23T02:58:31.071535+00:00",
+        "started_tick": 5259586,
+        "step_index": 0,
+        "step_sha256": "17e75d01f696f3d5d134877c945cbeda99d10f08da0af02334441cd9ebdd6ba9"
+      }
+    ],
+    "background_attempt": null,
+    "background_job": null,
+    "background_schema": 2,
+    "completed_goals": {
+      "bootstrap_mining": 66980,
+      "stockpile_fuel": 64438
+    },
+    "failures": {
+      "factory:factory_insert:recipe:iron-plate": 1,
+      "service:recipe:iron-plate:7165c13cbfaded3e": 1,
+      "service:recipe:iron-plate:c7d58c64ebc26401": 1
+    },
+    "history": [
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_craft:transport-belt",
+        "source": "deterministic-singleton",
+        "tick": 5207934
+      },
+      {
+        "action": "factory_craft_job",
+        "kind": "step_verified",
+        "plan": "factory:factory_craft:transport-belt",
+        "tick": 5208231
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_extract:output-chest:334",
+        "source": "deterministic-fallback",
+        "tick": 5208452
+      },
+      {
+        "action": "factory_extract",
+        "kind": "step_verified",
+        "plan": "factory:factory_extract:output-chest:334",
+        "tick": 5209018
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_extract:output-chest:334",
+        "source": "deterministic-fallback",
+        "tick": 5209244
+      },
+      {
+        "action": "factory_extract",
+        "kind": "step_verified",
+        "plan": "factory:factory_extract:output-chest:334",
+        "tick": 5209592
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_craft:iron-gear-wheel",
+        "source": "deterministic-singleton",
+        "tick": 5209784
+      },
+      {
+        "inputs_paid": {
+          "iron-plate": 10
+        },
+        "job": "4a4c03d8ce4441af9d4fb28bbf6b40fa",
+        "kind": "background_job_admitted",
+        "outputs_locked": {
+          "iron-gear-wheel": 5
+        },
+        "plan": "factory:factory_craft:iron-gear-wheel",
+        "tick": 5210061
+      },
+      {
+        "job": "4a4c03d8ce4441af9d4fb28bbf6b40fa",
+        "kind": "background_job_completed",
+        "outputs": {
+          "iron-gear-wheel": 5
+        },
+        "plan": "factory:factory_craft:iron-gear-wheel",
+        "tick": 5210271
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "service:recipe:automation-science-pack:ec4da6f4911b90e6",
+        "source": "deterministic-fallback",
+        "tick": 5210271
+      },
+      {
+        "action": "factory_insert",
+        "kind": "step_verified",
+        "plan": "service:recipe:automation-science-pack:ec4da6f4911b90e6",
+        "tick": 5211003
+      },
+      {
+        "action": "factory_insert",
+        "kind": "step_verified",
+        "plan": "service:recipe:automation-science-pack:ec4da6f4911b90e6",
+        "tick": 5211421
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_craft:iron-gear-wheel",
+        "source": "deterministic-singleton",
+        "tick": 5211634
+      },
+      {
+        "action": "factory_craft_job",
+        "kind": "step_verified",
+        "plan": "factory:factory_craft:iron-gear-wheel",
+        "tick": 5211920
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_craft:transport-belt",
+        "source": "deterministic-singleton",
+        "tick": 5212134
+      },
+      {
+        "action": "factory_craft_job",
+        "kind": "step_verified",
+        "plan": "factory:factory_craft:transport-belt",
+        "tick": 5212421
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_extract:output-chest:334",
+        "source": "deterministic-fallback",
+        "tick": 5212644
+      },
+      {
+        "action": "factory_extract",
+        "kind": "step_verified",
+        "plan": "factory:factory_extract:output-chest:334",
+        "tick": 5213672
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_extract:output-chest:334",
+        "source": "deterministic-fallback",
+        "tick": 5213946
+      },
+      {
+        "action": "factory_extract",
+        "kind": "step_verified",
+        "plan": "factory:factory_extract:output-chest:334",
+        "tick": 5214970
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_insert:recipe:iron-plate",
+        "source": "deterministic-fallback",
+        "tick": 5215337
+      },
+      {
+        "action": "factory_insert",
+        "kind": "step_verified",
+        "plan": "factory:factory_insert:recipe:iron-plate",
+        "tick": 5216518
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_extract:recipe:automation-science-pack",
+        "source": "deterministic-fallback",
+        "tick": 5216872
+      },
+      {
+        "action": "factory_extract",
+        "kind": "step_verified",
+        "plan": "factory:factory_extract:recipe:automation-science-pack",
+        "tick": 5218310
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_extract:recipe:automation-science-pack",
+        "source": "jev",
+        "tick": 5218769
+      },
+      {
+        "action": "factory_extract",
+        "kind": "step_verified",
+        "plan": "factory:factory_extract:recipe:automation-science-pack",
+        "tick": 5219828
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_craft:iron-gear-wheel",
+        "source": "deterministic-singleton",
+        "tick": 5220223
+      },
+      {
+        "action": "factory_craft_job",
+        "kind": "step_verified",
+        "plan": "factory:factory_craft:iron-gear-wheel",
+        "tick": 5221124
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_insert:recipe:automation-science-pack",
+        "source": "deterministic-fallback",
+        "tick": 5221507
+      },
+      {
+        "action": "factory_insert",
+        "kind": "step_verified",
+        "plan": "factory:factory_insert:recipe:automation-science-pack",
+        "tick": 5222634
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_extract:output-chest:334",
+        "source": "deterministic-fallback",
+        "tick": 5222988
+      },
+      {
+        "action": "factory_extract",
+        "kind": "step_verified",
+        "plan": "factory:factory_extract:output-chest:334",
+        "tick": 5224277
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_gather:iron-ore:target:68:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}",
+        "source": "deterministic-fallback",
+        "tick": 5224643
+      },
+      {
+        "action": "factory_gather",
+        "kind": "step_verified",
+        "plan": "factory:factory_gather:iron-ore:target:68:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}",
+        "tick": 5232225
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_gather:iron-ore:target:118:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}",
+        "source": "deterministic-fallback",
+        "tick": 5232436
+      },
+      {
+        "action": "factory_gather",
+        "kind": "step_verified",
+        "plan": "factory:factory_gather:iron-ore:target:118:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}",
+        "tick": 5238866
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_gather:iron-ore:target:163:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}",
+        "source": "deterministic-fallback",
+        "tick": 5239068
+      },
+      {
+        "action": "factory_gather",
+        "kind": "step_verified",
+        "plan": "factory:factory_gather:iron-ore:target:163:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}",
+        "tick": 5244826
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_insert:recipe:iron-plate",
+        "source": "deterministic-fallback",
+        "tick": 5245049
+      },
+      {
+        "action": "factory_insert",
+        "kind": "step_verified",
+        "plan": "factory:factory_insert:recipe:iron-plate",
+        "tick": 5246263
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_extract:recipe:automation-science-pack",
+        "source": "jev",
+        "tick": 5246473
+      },
+      {
+        "action": "factory_extract",
+        "kind": "step_verified",
+        "plan": "factory:factory_extract:recipe:automation-science-pack",
+        "tick": 5247246
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_insert:utility:lab",
+        "source": "deterministic-singleton",
+        "tick": 5247465
+      },
+      {
+        "action": "factory_insert",
+        "kind": "step_verified",
+        "plan": "factory:factory_insert:utility:lab",
+        "tick": 5247861
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_craft:iron-gear-wheel",
+        "source": "deterministic-singleton",
+        "tick": 5248065
+      },
+      {
+        "action": "factory_craft_job",
+        "kind": "step_verified",
+        "plan": "factory:factory_craft:iron-gear-wheel",
+        "tick": 5248326
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_craft:transport-belt",
+        "source": "deterministic-singleton",
+        "tick": 5248556
+      },
+      {
+        "action": "factory_craft_job",
+        "kind": "step_verified",
+        "plan": "factory:factory_craft:transport-belt",
+        "tick": 5248745
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "service:recipe:iron-plate:67d7b6e0dd7033e8",
+        "source": "deterministic-fallback",
+        "tick": 5248937
+      },
+      {
+        "action": "factory_extract",
+        "kind": "step_verified",
+        "plan": "service:recipe:iron-plate:67d7b6e0dd7033e8",
+        "tick": 5249550
+      },
+      {
+        "action": "factory_insert",
+        "kind": "step_verified",
+        "plan": "service:recipe:iron-plate:67d7b6e0dd7033e8",
+        "tick": 5249942
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_insert:recipe:logistic-science-pack",
+        "source": "deterministic-fallback",
+        "tick": 5250156
+      },
+      {
+        "action": "factory_insert",
+        "kind": "step_verified",
+        "plan": "factory:factory_insert:recipe:logistic-science-pack",
+        "tick": 5250668
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_craft:iron-gear-wheel",
+        "source": "deterministic-singleton",
+        "tick": 5250860
+      },
+      {
+        "inputs_paid": {
+          "iron-plate": 40
+        },
+        "job": "b6b642d531704472952323bf30be9041",
+        "kind": "background_job_admitted",
+        "outputs_locked": {
+          "iron-gear-wheel": 20
+        },
+        "plan": "factory:factory_craft:iron-gear-wheel",
+        "tick": 5251062
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_gather:copper-ore:target:50:site:{\"name\":\"copper-ore\",\"position\":{\"x\":-49.5,\"y\":-84.5},\"surface_index\":1}",
+        "source": "deterministic-fallback",
+        "tick": 5251275
+      },
+      {
+        "job": "b6b642d531704472952323bf30be9041",
+        "kind": "background_job_completed",
+        "outputs": {
+          "iron-gear-wheel": 20
+        },
+        "plan": "factory:factory_craft:iron-gear-wheel",
+        "tick": 5258734
+      },
+      {
+        "action": "factory_gather",
+        "kind": "step_verified",
+        "plan": "factory:factory_gather:copper-ore:target:50:site:{\"name\":\"copper-ore\",\"position\":{\"x\":-49.5,\"y\":-84.5},\"surface_index\":1}",
+        "tick": 5258734
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_craft:inserter",
+        "source": "deterministic-singleton",
+        "tick": 5258968
+      },
+      {
+        "inputs_paid": {
+          "electronic-circuit": 20,
+          "iron-gear-wheel": 20,
+          "iron-plate": 20
+        },
+        "job": "3811d2b654d6439f8992744d5841688d",
+        "kind": "background_job_admitted",
+        "outputs_locked": {
+          "inserter": 20
+        },
+        "plan": "factory:factory_craft:inserter",
+        "tick": 5259185
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_insert:recipe:copper-plate",
+        "source": "deterministic-fallback",
+        "tick": 5259393
+      },
+      {
+        "job": "3811d2b654d6439f8992744d5841688d",
+        "kind": "background_job_completed",
+        "outputs": {
+          "inserter": 20
+        },
+        "plan": "factory:factory_craft:inserter",
+        "tick": 5260713
+      },
+      {
+        "action": "factory_insert",
+        "kind": "step_verified",
+        "plan": "factory:factory_insert:recipe:copper-plate",
+        "tick": 5260713
+      },
+      {
+        "kind": "plan_committed",
+        "plan": "factory:factory_extract:output-chest:334",
+        "source": "jev",
+        "tick": 5260929
+      }
+    ],
+    "input_commitments": {},
+    "input_routes_schema": 1,
+    "last_tick": 5261114,
+    "pending": {
+      "action": "factory_extract",
+      "dispatch": "prepared",
+      "polls": 0,
+      "started_tick": 5261114
+    },
+    "reason": "",
+    "reservations": {
+      "factory:factory_extract:output-chest:334": {}
+    },
+    "session_id": "3562a7a347b54be5823716bd06be5af1",
+    "stalled_decisions": 0,
+    "status": "running",
+    "step_index": 0,
+    "target": "rocket_launch",
+    "transfer_recovery": null,
+    "version": 2
+  },
+  "manual_interventions": 2,
+  "phase": "gameplay",
+  "process": {
+    "identity": "26968103",
+    "pid": 1699445
+  },
+  "repair_attempt_open": false,
+  "repair_required": false,
+  "revision_initialized": true,
+  "run_id": "39efb440-25a9-4096-ac34-13826b039ff4",
+  "run_manifest": null,
+  "run_manifest_sha256": null,
+  "segment": 12,
+  "segment_id": "seg-000012",
+  "session_id": "3562a7a347b54be5823716bd06be5af1",
+  "started_at": 1790043381.0
+}

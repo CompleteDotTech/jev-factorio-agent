@@ -1,0 +1,872 @@
+03d0dfae3eee9367854cc36df063c83efad5982a
+diff --git a/docs/BACKGROUND_WORK.md b/docs/BACKGROUND_WORK.md
+index b7a0380..3134d3b 100644
+--- a/docs/BACKGROUND_WORK.md
++++ b/docs/BACKGROUND_WORK.md
+@@ -28,10 +28,13 @@ catalog and is deliberately rejected for this option. Tests use an explicitly
+ synthetic receipt-capable backend with the real controller instead. Binding,
+ normal speed/reach, native controls, and resource-site checks remain in force.
+ 
+-The live autonomous supervisor has not been migrated to this checkpoint
+-extension. Use only a separately authorized standalone controller for native
+-acceptance until the supervisor/diagnostics/evaluator integration is reconciled.
+-Do not inject the flag into the running supervisor or overwrite its checkpoint.
++The autonomous supervisor accepts these flags and forwards them on every
++gameplay launch. Its repair validation preserves background jobs, attempts, and
++input-route commitments. Diagnostics and research evidence understand these
++extensions. Enable them only for an explicitly authorized campaign; preserve
++checkpoints and native receipts across restarts. Optional furnace automation
++also requires `--furnace-output-buffers`; `--furnace-input-belts` requires that
++output-buffer flag. Native throughput improvements remain unverified.
+ 
+ ## Execution and evidence contract
+ 
+diff --git a/docs/FAIR_PLAY.md b/docs/FAIR_PLAY.md
+index 5ab62cc..97ff5b7 100644
+--- a/docs/FAIR_PLAY.md
++++ b/docs/FAIR_PLAY.md
+@@ -32,6 +32,9 @@ shortcuts.
+   speed other than 1. A short renewed control lease stops input if the controller
+   disappears. Path, progress, and observation timeouts fail closed.
+ - Legacy FLE walking/mining callbacks are quarantined before attachment.
++  Inventory inspection also clears FLE's delayed GUI-close callback, including
++  error paths; it can retain a character that becomes invalid on disconnect.
++  Inventory results and errors are preserved without that cosmetic callback.
+   Inherited `on_tick` callbacks are retained for inspection but never invoked
+   while this adapter owns controls, including idle and terminal job states.
+   This prevents stale callbacks from restarting input after cancellation or
+diff --git a/src/jev_factorio/lua/fair_actions.lua b/src/jev_factorio/lua/fair_actions.lua
+index 0fc53c3..bf1c700 100644
+--- a/src/jev_factorio/lua/fair_actions.lua
++++ b/src/jev_factorio/lua/fair_actions.lua
+@@ -3,6 +3,19 @@ local fair = storage.fair
+ fair.quarantined = true
+ script.on_nth_tick(5, nil)
+ script.on_nth_tick(15, nil)
++script.on_nth_tick(60, nil)
++
++if storage.actions and storage.actions.inspect_inventory
++    and storage.actions.inspect_inventory ~= fair.inspect_inventory then
++    local inspect_inventory = storage.actions.inspect_inventory
++    fair.inspect_inventory = function(...)
++        local result = table.pack(pcall(inspect_inventory, ...))
++        script.on_nth_tick(60, nil)
++        if not result[1] then error(result[2]) end
++        return table.unpack(result, 2, result.n)
++    end
++    storage.actions.inspect_inventory = fair.inspect_inventory
++end
+ 
+ fair.actor = function()
+     local player = game.get_player(1)
+@@ -30,6 +43,7 @@ fair.bind = function()
+     fair.quarantined = true
+     script.on_nth_tick(5, nil)
+     script.on_nth_tick(15, nil)
++    script.on_nth_tick(60, nil)
+     for _, name in pairs({"crafting_queue", "harvest_queues", "walking_queues"}) do
+         assert(not storage[name] or next(storage[name]) == nil,
+             "Legacy scripted work must be reconciled: " .. name)
+diff --git a/src/jev_factorio/supervisor.py b/src/jev_factorio/supervisor.py
+index faac214..222b697 100644
+--- a/src/jev_factorio/supervisor.py
++++ b/src/jev_factorio/supervisor.py
+@@ -53,8 +53,19 @@ class SupervisorConfig:
+     run_id: str | None = None
+     run_manifest: Path | None = None
+     research_dir: Path | None = None
++    factory_scheduling: str = "serial"
++    background_work: bool = False
++    furnace_output_buffers: bool = False
++    furnace_input_belts: bool = False
+ 
+     def validate(self) -> None:
++        if self.factory_scheduling not in {"serial", "ready-work"}:
++            raise ValueError("Unknown factory scheduling mode")
++        if (self.background_work or self.furnace_output_buffers or self.furnace_input_belts
++                ) and self.factory_scheduling != "ready-work":
++            raise ValueError("Production extensions require ready-work scheduling")
++        if self.furnace_input_belts and not self.furnace_output_buffers:
++            raise ValueError("Furnace input belts require furnace output buffers")
+         if self.run_id is not None:
+             identifier(self.run_id)
+         for name in ("started_at", "duration_hours", "poll_seconds", "hang_seconds",
+@@ -275,6 +286,15 @@ class Supervisor:
+         else:
+             self.state = {**identity, "attempt": 0, "phase": "ready", "process": None}
+             self.save()
++        configuration = {
++            name: getattr(self.config, name) for name in (
++                "factory_scheduling", "background_work",
++                "furnace_output_buffers", "furnace_input_belts",
++            )
++        }
++        if self.state.get("gameplay_configuration", configuration) != configuration:
++            raise ValueError("Existing gameplay configuration cannot be changed")
++        self.save(gameplay_configuration=configuration)
+         if record_only and self.state.get("process"):
+             raise ValueError("Manual intervention requires no saved process; recover supervision separately")
+         self.initialize_provenance(existing=existing)
+@@ -366,6 +386,7 @@ class Supervisor:
+             self.sleep(min(self.config.poll_seconds, until - self.clock()))
+ 
+     def gameplay_command(self) -> list[str]:
++        self.config.validate()
+         command = [
+             self.config.python, "-m", "jev_factorio", "--backend", "fle", "--resume",
+             "--resume-controller", "--controller", "hierarchical", "--policy", "hybrid",
+@@ -374,7 +395,11 @@ class Supervisor:
+             "--duration-hours", str(self.remaining() / 3600),
+             "--tick-seconds", str(self.config.tick_seconds),
+             "--log-file", str(self.config.state_dir / "gameplay.jsonl"),
++            "--factory-scheduling", self.config.factory_scheduling,
+         ]
++        for name in ("background_work", "furnace_output_buffers", "furnace_input_belts"):
++            if getattr(self.config, name):
++                command.append("--" + name.replace("_", "-"))
+         if self.config.research_dir is not None:
+             command.extend(["--run-dir", str(
+                 self.config.research_dir.resolve() / f"invocation-{uuid4()}"
+@@ -421,6 +446,7 @@ Research segment: {self.state['segment_id']}
+ Incident: {(self.state.get('incident') or {}).get('incident_id')}
+ Repair attempt: {self.state['attempt']}
+ Controller checkpoint: {self.config.checkpoint}
++Production configuration: scheduling={self.config.factory_scheduling}, background_work={self.config.background_work}, furnace_output_buffers={self.config.furnace_output_buffers}, furnace_input_belts={self.config.furnace_input_belts}
+ Supervisor audit/log directory: {self.config.state_dir}
+ Read {self.config.state_dir / 'OPERATIONS.md'} first if present for native session
+ and repository acceptance details.
+@@ -824,6 +850,10 @@ def cli() -> None:
+     parser.add_argument("--poll-seconds", type=float, default=5)
+     parser.add_argument("--backoff-seconds", type=float, default=30)
+     parser.add_argument("--tick-seconds", type=float, default=1)
++    parser.add_argument("--factory-scheduling", choices=("serial", "ready-work"), default="serial")
++    parser.add_argument("--background-work", action="store_true")
++    parser.add_argument("--furnace-output-buffers", action="store_true")
++    parser.add_argument("--furnace-input-belts", action="store_true")
+     arguments = vars(parser.parse_args())
+     try:
+         manual_path = arguments.pop("record_manual_intervention")
+diff --git a/tests/test_fair_actions.py b/tests/test_fair_actions.py
+index d3b489c..1d454f0 100644
+--- a/tests/test_fair_actions.py
++++ b/tests/test_fair_actions.py
+@@ -102,6 +102,34 @@ def fair_runtime():
+     return runtime
+ 
+ 
++@pytest.mark.parametrize("fails", [False, True])
++def test_inventory_inspection_removes_unsafe_gui_callback(fair_runtime, fails):
++    fair_runtime.globals().inspection_fails = fails
++    fair_runtime.execute("""
++        storage.actions = {inspect_inventory = function(value)
++            script.on_nth_tick(60, function() error("invalid disconnected character") end)
++            if inspection_fails then error("inventory unavailable") end
++            return value, nil, 7
++        end}
++        handlers.nth60 = function() error("stale callback") end
++    """)
++    source = files("jev_factorio").joinpath("lua/fair_actions.lua").read_text()
++    fair_runtime.execute(source)
++    fair_runtime.execute(source)
++    fair_runtime.execute("""
++        assert(handlers.nth60 == nil)
++        local result = table.pack(pcall(storage.actions.inspect_inventory, "contents"))
++        assert(handlers.nth60 == nil)
++        if inspection_fails then
++            assert(not result[1])
++            assert(string.find(result[2], "inventory unavailable"))
++        else
++            assert(result.n == 4 and result[1] and result[2] == "contents")
++            assert(result[3] == nil and result[4] == 7)
++        end
++    """)
++
++
+ def test_native_walk_controls_player_and_stops_at_destination(fair_runtime):
+     fair_runtime.execute("""
+         storage.fair.begin_move{x = 2, y = 0}
+diff --git a/tests/test_supervisor.py b/tests/test_supervisor.py
+index 06da5ff..b087e42 100644
+--- a/tests/test_supervisor.py
++++ b/tests/test_supervisor.py
+@@ -71,6 +71,45 @@ def test_resume_command_preserves_world_and_controller(supervisor):
+     assert command[command.index("--policy") + 1] == "hybrid"
+     assert command[command.index("--target") + 1] == "rocket_launch"
+     assert "--run-dir" not in command
++    assert command[command.index("--factory-scheduling") + 1] == "serial"
++    assert "--background-work" not in command
++    assert "--furnace-output-buffers" not in command
++    assert "--furnace-input-belts" not in command
++
++
++def test_production_extensions_forwarded_on_every_launch(supervisor):
++    supervisor.config.factory_scheduling = "ready-work"
++    supervisor.config.background_work = True
++    supervisor.config.furnace_output_buffers = True
++    supervisor.config.furnace_input_belts = True
++    for _ in range(2):
++        command = supervisor.gameplay_command()
++        assert command[command.index("--factory-scheduling") + 1] == "ready-work"
++        for flag in ("--background-work", "--furnace-output-buffers", "--furnace-input-belts"):
++            assert flag in command
++        assert "--resume" in command and "--resume-controller" in command
++
++
++@pytest.mark.parametrize("extension", [
++    "background_work", "furnace_output_buffers", "furnace_input_belts",
++])
++def test_production_extensions_require_ready_work(supervisor, extension):
++    setattr(supervisor.config, extension, True)
++    with pytest.raises(ValueError, match="ready-work"):
++        supervisor.gameplay_command()
++
++
++def test_input_belts_require_output_buffers(supervisor):
++    supervisor.config.factory_scheduling = "ready-work"
++    supervisor.config.furnace_input_belts = True
++    with pytest.raises(ValueError, match="output buffers"):
++        supervisor.gameplay_command()
++
++
++def test_restart_cannot_silently_change_production_configuration(supervisor):
++    supervisor.config.factory_scheduling = "ready-work"
++    with pytest.raises(ValueError, match="configuration cannot be changed"):
++        supervisor.initialize()
+ 
+ 
+ def test_research_evidence_is_exclusive_per_gameplay_invocation(supervisor, tmp_path):
+ M docs/BACKGROUND_WORK.md
+ M docs/FAIR_PLAY.md
+ M src/jev_factorio/lua/fair_actions.lua
+ M src/jev_factorio/supervisor.py
+ M tests/test_fair_actions.py
+ M tests/test_supervisor.py
+.env.example .github/workflows/dashboard.yml .github/workflows/tests.yml .gitignore AGENTS.md LICENSE README.md docs/ARCHITECTURE.md docs/ATTEMPT_DIAGNOSTICS.md docs/AUTONOMOUS_SUPERVISION.md docs/BACKGROUND_WORK.md docs/BUILD_PLAN.md docs/CAUSAL_LOGGING.md docs/DASHBOARD.md docs/DASHBOARD_ART.md docs/FAIR_PLAY.md docs/FURNACE_INPUT_ROUTES.md docs/FURNACE_OUTPUT_BUFFERS.md docs/HIERARCHICAL_CONTROLLER.md docs/PERFORMANCE_INVESTIGATION_PROMPT.md docs/PRODUCTION_EFFICIENCY.md docs/REPLAY.md docs/RESEARCH_EVALUATION.md docs/RESEARCH_LOGGING.md docs/SUPERVISOR_PROVENANCE.md docs/workflows/README.md docs/workflows/mermaid-config.json docs/workflows/mmd/00-complete-workflow.mmd docs/workflows/mmd/01-campaign-supervision.mmd docs/workflows/mmd/02-hierarchical-controller.mmd docs/workflows/mmd/03-goals-and-bootstrap.mmd docs/workflows/mmd/04-factory-dependency-planner.mmd docs/workflows/mmd/05-jev-candidate-judgment.mmd docs/workflows/mmd/06-native-action-execution.mmd docs/workflows/mmd/07-pending-action-verification.mmd docs/workflows/mmd/08-automatic-codex-repair.mmd docs/workflows/pngs/00-complete-workflow.png docs/workflows/pngs/01-campaign-supervision.png docs/workflows/pngs/02-hierarchical-controller.png docs/workflows/pngs/03-goals-and-bootstrap.png docs/workflows/pngs/04-factory-dependency-planner.png docs/workflows/pngs/05-jev-candidate-judgment.png docs/workflows/pngs/06-native-action-execution.png docs/workflows/pngs/07-pending-action-verification.png docs/workflows/pngs/08-automatic-codex-repair.png docs/workflows/pngs/manifest.json docs/workflows/render-svg-tiles.mjs docs/workflows/render.py pyproject.toml src/jev_factorio/__init__.py src/jev_factorio/__main__.py src/jev_factorio/backends/__init__.py src/jev_factorio/backends/base.py src/jev_factorio/backends/craft_jobs.py src/jev_factorio/backends/fair_actions.py src/jev_factorio/backends/fle.py src/jev_factorio/backends/input_routes.py src/jev_factorio/backends/mock.py src/jev_factorio/backends/native_factory.py src/jev_factorio/backends/output_buffers.py src/jev_factorio/backends/play_api.py src/jev_factorio/background.py src/jev_factorio/buffer_controller.py src/jev_factorio/causal_trace.py src/jev_factorio/controller.py src/jev_factorio/craft_jobs.py src/jev_factorio/dashboard.py src/jev_factorio/dashboard_assets/app.js src/jev_factorio/dashboard_assets/factory-steel.png src/jev_factorio/dashboard_assets/index.html src/jev_factorio/dashboard_assets/styles.css src/jev_factorio/diagnostics.py src/jev_factorio/evaluation.py src/jev_factorio/factory_contract.py src/jev_factorio/input_controller.py src/jev_factorio/input_routes.py src/jev_factorio/jev_client.py src/jev_factorio/judgments.py src/jev_factorio/loop.py src/jev_factorio/lua/catalog.lua src/jev_factorio/lua/craft_jobs.lua src/jev_factorio/lua/factory.lua src/jev_factorio/lua/fair_actions.lua src/jev_factorio/lua/input_routes.lua src/jev_factorio/lua/output_buffers.lua src/jev_factorio/main.py src/jev_factorio/memory.py src/jev_factorio/output_buffers.py src/jev_factorio/planning/__init__.py src/jev_factorio/planning/background_work.py src/jev_factorio/planning/catalog.py src/jev_factorio/planning/connections.py src/jev_factorio/planning/factory.py src/jev_factorio/planning/goals.py src/jev_factorio/planning/input_routes.py src/jev_factorio/planning/materials.py src/jev_factorio/planning/output_buffers.py src/jev_factorio/planning/ready_work.py src/jev_factorio/provenance.py src/jev_factorio/questions.py src/jev_factorio/replay.py src/jev_factorio/replay_causal.py src/jev_factorio/replay_source.py src/jev_factorio/research_core_evaluation.py src/jev_factorio/research_evaluation.py src/jev_factorio/research_events.py src/jev_factorio/research_log.py src/jev_factorio/research_reports.py src/jev_factorio/skills.py src/jev_factorio/state.py src/jev_factorio/supervisor.py src/jev_factorio/telemetry.py tests/attempt_helpers.py tests/fixtures/input_routes_runtime.lua tests/fixtures/output_buffers_runtime.lua tests/fixtures/replay/event-v1/events.jsonl tests/fixtures/replay/event-v1/manifest.json tests/input_routes_fixtures.py tests/test_attempt_integration.py tests/test_attempts.py tests/test_background_work.py tests/test_causal_native_integration.py tests/test_causal_trace.py tests/test_config.py tests/test_connections.py tests/test_craft_jobs.py tests/test_craft_jobs_lua.py tests/test_dashboard.py tests/test_dashboard_browser.py tests/test_dashboard_integration.py tests/test_diagnostics.py tests/test_duration.py tests/test_evaluation.py tests/test_extension_tracing.py tests/test_factory.py tests/test_fair_actions.py tests/test_fle.py tests/test_hierarchical.py tests/test_input_route_contract.py tests/test_input_route_integration.py tests/test_input_routes_lua.py tests/test_judgments.py tests/test_output_buffer_contract.py tests/test_output_buffer_integration.py tests/test_output_buffers_lua.py tests/test_planning.py tests/test_provenance.py tests/test_provenance_gameplay.py tests/test_provenance_races.py tests/test_provider_failures.py tests/test_questions.py tests/test_ready_work.py tests/test_replay.py tests/test_replay_controller_integration.py tests/test_replay_research.py tests/test_research_cli.py tests/test_research_core_evaluation.py tests/test_research_evaluation.py tests/test_research_log.py tests/test_supervisor.py tests/test_supervisor_provenance.py cb77cde65a7b031c1ce3f92fc74047e70b16d4e4
+cb77cde65a7b031c1ce3f92fc74047e70b16d4e4	refs/heads/main
+cb77cde65a7b031c1ce3f92fc74047e70b16d4e4	refs/heads/main
+{"headRefOid": "222b19a9001e35baaf73678116320dd1ddc9528c", "mergeCommit": {"oid": "cb77cde65a7b031c1ce3f92fc74047e70b16d4e4"}, "reviews": [{"id": "PRR_kwDOUjLM9s8AAAABOl9aZg", "author": {"login": "chatgpt-codex-connector"}, "authorAssociation": "NONE", "body": "\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `6cc3462bc2`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo]([REDACTED] Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>", "submittedAt": "2026-09-22T05:04:02Z", "includesCreatedEdit": false, "reactionGroups": [], "state": "COMMENTED", "commit": {"oid": "6cc3462bc2f35533f39247f993b24214bd995351"}}], "state": "MERGED", "statusCheckRollup": [{"__typename": "CheckRun", "completedAt": "2026-09-22T05:01:50Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "chromium", "startedAt": "2026-09-22T05:00:11Z", "status": "COMPLETED", "workflowName": "Dashboard browser tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T05:00:51Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.10)", "startedAt": "2026-09-22T05:00:09Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T05:00:52Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.12)", "startedAt": "2026-09-22T05:00:09Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T05:00:35Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.10)", "startedAt": "2026-09-22T05:00:09Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T05:00:28Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.12)", "startedAt": "2026-09-22T05:00:10Z", "status": "COMPLETED", "workflowName": "Python tests"}]}
+============================= test session starts ==============================
+platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/agent/factorio/jev-factorio
+configfile: pyproject.toml
+plugins: anyio-4.15.1
+collected 1338 items
+
+tests/test_attempt_integration.py ..............                         [  1%]
+tests/test_attempts.py ......................................            [  3%]
+tests/test_background_work.py ......................                     [  5%]
+tests/test_causal_native_integration.py ..............                   [  6%]
+tests/test_causal_trace.py ............................................. [  9%]
+..................                                                       [ 11%]
+tests/test_config.py .......                                             [ 11%]
+tests/test_connections.py ....................                           [ 13%]
+tests/test_craft_jobs.py ............................................... [ 16%]
+...........                                                              [ 17%]
+tests/test_craft_jobs_lua.py .............                               [ 18%]
+tests/test_dashboard.py ...............................                  [ 20%]
+tests/test_dashboard_browser.py ......................                   [ 22%]
+tests/test_dashboard_integration.py ...........                          [ 23%]
+tests/test_diagnostics.py .............                                  [ 24%]
+tests/test_duration.py ...                                               [ 24%]
+tests/test_evaluation.py ..........                                      [ 25%]
+tests/test_extension_tracing.py ...........                              [ 26%]
+tests/test_factory.py .................................................. [ 29%]
+........................................................................ [ 35%]
+...............................                                          [ 37%]
+tests/test_fair_actions.py ...................................           [ 40%]
+tests/test_fle.py ..................                                     [ 41%]
+tests/test_hierarchical.py ......................                        [ 43%]
+tests/test_input_route_contract.py ..................................... [ 45%]
+............                                                             [ 46%]
+tests/test_input_route_integration.py ....................               [ 48%]
+tests/test_input_routes_lua.py ...............................           [ 50%]
+tests/test_judgments.py ......................                           [ 52%]
+tests/test_output_buffer_contract.py .................................   [ 54%]
+tests/test_output_buffer_integration.py .............                    [ 55%]
+tests/test_output_buffers_lua.py ...............                         [ 56%]
+tests/test_planning.py ......................                            [ 58%]
+tests/test_provenance.py ......................                          [ 60%]
+tests/test_provenance_gameplay.py ..                                     [ 60%]
+tests/test_provenance_races.py ....                                      [ 60%]
+tests/test_provider_failures.py ............................             [ 62%]
+tests/test_questions.py .......                                          [ 63%]
+tests/test_ready_work.py ............................................    [ 66%]
+tests/test_replay.py ................................................... [ 70%]
+..................................                                       [ 72%]
+tests/test_replay_controller_integration.py ..                           [ 73%]
+tests/test_replay_research.py .....................                      [ 74%]
+tests/test_research_cli.py ............................................. [ 77%]
+.....                                                                    [ 78%]
+tests/test_research_core_evaluation.py .........................ss       [ 80%]
+tests/test_research_evaluation.py ...................................... [ 83%]
+..........................ss..............                               [ 86%]
+tests/test_research_log.py ............................................. [ 89%]
+.................................................                        [ 93%]
+tests/test_supervisor.py ..........................................      [ 96%]
+tests/test_supervisor_provenance.py .................................... [ 99%]
+...........                                                              [100%]
+
+================= 1334 passed, 4 skipped in 105.21s (0:01:45) ==================
+cb77cde65a7b031c1ce3f92fc74047e70b16d4e4
+cb77cde65a7b031c1ce3f92fc74047e70b16d4e4
+cb77cde65a7b031c1ce3f92fc74047e70b16d4e4	refs/heads/main
+cb77cde65a7b031c1ce3f92fc74047e70b16d4e4	refs/heads/main
+{"headRefOid": "222b19a9001e35baaf73678116320dd1ddc9528c", "mergeCommit": {"oid": "cb77cde65a7b031c1ce3f92fc74047e70b16d4e4"}, "reviews": [{"id": "PRR_kwDOUjLM9s8AAAABOl9aZg", "author": {"login": "chatgpt-codex-connector"}, "authorAssociation": "NONE", "body": "\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `6cc3462bc2`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo]([REDACTED] Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>", "submittedAt": "2026-09-22T05:04:02Z", "includesCreatedEdit": false, "reactionGroups": [], "state": "COMMENTED", "commit": {"oid": "6cc3462bc2f35533f39247f993b24214bd995351"}}], "state": "MERGED", "statusCheckRollup": [{"__typename": "CheckRun", "completedAt": "2026-09-22T05:01:50Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "chromium", "startedAt": "2026-09-22T05:00:11Z", "status": "COMPLETED", "workflowName": "Dashboard browser tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T05:00:51Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.10)", "startedAt": "2026-09-22T05:00:09Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T05:00:52Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.12)", "startedAt": "2026-09-22T05:00:09Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T05:00:35Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.10)", "startedAt": "2026-09-22T05:00:09Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T05:00:28Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.12)", "startedAt": "2026-09-22T05:00:10Z", "status": "COMPLETED", "workflowName": "Python tests"}]}
+============================= test session starts ==============================
+platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/agent/factorio/jev-factorio
+configfile: pyproject.toml
+plugins: anyio-4.15.1
+collected 1338 items
+
+tests/test_attempt_integration.py ..............                         [  1%]
+tests/test_attempts.py ......................................            [  3%]
+tests/test_background_work.py ......................                     [  5%]
+tests/test_causal_native_integration.py ..............                   [  6%]
+tests/test_causal_trace.py ............................................. [  9%]
+..................                                                       [ 11%]
+tests/test_config.py .......                                             [ 11%]
+tests/test_connections.py ....................                           [ 13%]
+tests/test_craft_jobs.py ............................................... [ 16%]
+...........                                                              [ 17%]
+tests/test_craft_jobs_lua.py .............                               [ 18%]
+tests/test_dashboard.py ...............................                  [ 20%]
+tests/test_dashboard_browser.py cb77cde65a7b031c1ce3f92fc74047e70b16d4e4
+cb77cde65a7b031c1ce3f92fc74047e70b16d4e4	refs/heads/main
+cb77cde65a7b031c1ce3f92fc74047e70b16d4e4	refs/heads/main
+{"headRefOid": "222b19a9001e35baaf73678116320dd1ddc9528c", "mergeCommit": {"oid": "cb77cde65a7b031c1ce3f92fc74047e70b16d4e4"}, "reviews": [{"id": "PRR_kwDOUjLM9s8AAAABOl9aZg", "author": {"login": "chatgpt-codex-connector"}, "authorAssociation": "NONE", "body": "\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `6cc3462bc2`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo]([REDACTED] Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>", "submittedAt": "2026-09-22T05:04:02Z", "includesCreatedEdit": false, "reactionGroups": [], "state": "COMMENTED", "commit": {"oid": "6cc3462bc2f35533f39247f993b24214bd995351"}}], "state": "MERGED", "statusCheckRollup": [{"__typename": "CheckRun", "completedAt": "2026-09-22T05:01:50Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "chromium", "startedAt": "2026-09-22T05:00:11Z", "status": "COMPLETED", "workflowName": "Dashboard browser tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T05:00:51Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.10)", "startedAt": "2026-09-22T05:00:09Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T05:00:52Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.12)", "startedAt": "2026-09-22T05:00:09Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T05:00:35Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.10)", "startedAt": "2026-09-22T05:00:09Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T05:00:28Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.12)", "startedAt": "2026-09-22T05:00:10Z", "status": "COMPLETED", "workflowName": "Python tests"}]}
+============================= test session starts ==============================
+platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/agent/factorio/jev-factorio
+configfile: pyproject.toml
+plugins: anyio-4.15.1
+collected 1338 items
+
+tests/test_attempt_integration.py ..............                         [  1%]
+tests/test_attempts.py ......................................            [  3%]
+tests/test_background_work.py ......................                     [  5%]
+tests/test_causal_native_integration.py ..............                   [  6%]
+tests/test_causal_trace.py ............................................. [  9%]
+..................                                                       [ 11%]
+tests/test_config.py .......                                             [ 11%]
+tests/test_connections.py ....................                           [ 13%]
+tests/test_craft_jobs.py ............................................... [ 16%]
+...........                                                              [ 17%]
+tests/test_craft_jobs_lua.py .............                               [ 18%]
+tests/test_dashboard.py ...............................                  [ 20%]
+tests/test_dashboard_browser.py ...cb77cde65a7b031c1ce3f92fc74047e70b16d4e4
+cb77cde65a7b031c1ce3f92fc74047e70b16d4e4	refs/heads/main
+cb77cde65a7b031c1ce3f92fc74047e70b16d4e4	refs/heads/main
+{"headRefOid": "222b19a9001e35baaf73678116320dd1ddc9528c", "mergeCommit": {"oid": "cb77cde65a7b031c1ce3f92fc74047e70b16d4e4"}, "reviews": [{"id": "PRR_kwDOUjLM9s8AAAABOl9aZg", "author": {"login": "chatgpt-codex-connector"}, "authorAssociation": "NONE", "body": "\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `6cc3462bc2`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo]([REDACTED] Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>", "submittedAt": "2026-09-22T05:04:02Z", "includesCreatedEdit": false, "reactionGroups": [], "state": "COMMENTED", "commit": {"oid": "6cc3462bc2f35533f39247f993b24214bd995351"}}], "state": "MERGED", "statusCheckRollup": [{"__typename": "CheckRun", "completedAt": "2026-09-22T05:01:50Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "chromium", "startedAt": "2026-09-22T05:00:11Z", "status": "COMPLETED", "workflowName": "Dashboard browser tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T05:00:51Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.10)", "startedAt": "2026-09-22T05:00:09Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T05:00:52Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.12)", "startedAt": "2026-09-22T05:00:09Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T05:00:35Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.10)", "startedAt": "2026-09-22T05:00:09Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T05:00:28Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.12)", "startedAt": "2026-09-22T05:00:10Z", "status": "COMPLETED", "workflowName": "Python tests"}]}
+============================= test session starts ==============================
+platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/agent/factorio/jev-factorio
+configfile: pyproject.toml
+plugins: anyio-4.15.1
+collected 1338 items
+
+tests/test_attempt_integration.py ..............                         [  1%]
+tests/test_attempts.py ......................................            [  3%]
+tests/test_background_work.py ......................                     [  5%]
+tests/test_causal_native_integration.py ..............                   [  6%]
+tests/test_causal_trace.py ............................................. [  9%]
+..................                                                       [ 11%]
+tests/test_config.py .......                                             [ 11%]
+tests/test_connections.py ....................                           [ 13%]
+tests/test_craft_jobs.py ............................................... [ 16%]
+...........                                                              [ 17%]
+tests/test_craft_jobs_lua.py .............                               [ 18%]
+tests/test_dashboard.py ...............................                  [ 20%]
+tests/test_dashboard_browser.py ......................                   [ 22%]
+tests/test_dashboard_integration.py ...........                          [ 23%]
+tests/test_diagnostics.py .............                                  [ 24%]
+tests/test_duration.py ...                                               [ 24%]
+tests/test_evaluation.py ..........                                      [ 25%]
+tests/test_extension_tracing.py ...........                              [ 26%]
+tests/test_factory.py .................................................. [ 29%]
+........................................................................ [ 35%]
+...............................                                          [ 37%]
+tests/test_fair_actions.py ...................................           [ 40%]
+tests/test_fle.py ..................                                     [ 41%]
+tests/test_hierarchical.py ......................                        [ 43%]
+tests/test_input_route_contract.py ..................................... [ 45%]
+............                                                             [ 46%]
+tests/test_input_route_integration.py ....................               [ 48%]
+tests/test_input_routes_lua.py ...............................           [ 50%]
+tests/test_judgments.py ......................                           [ 52%]
+tests/test_output_buffer_contract.py .................................   [ 54%]
+tests/test_output_buffer_integration.py .............                    [ 55%]
+tests/test_output_buffers_lua.py ...............                         [ 56%]
+tests/test_planning.py ......................                            [ 58%]
+tests/test_provenance.py ......................                          [ 60%]
+tests/test_provenance_gameplay.py ..                                     [ 60%]
+tests/test_provenance_races.py ....                                      [ 60%]
+tests/test_provider_failures.py ............................             [ 62%]
+tests/test_questions.py .......                                          [ 63%]
+tests/test_ready_work.py ............................................    [ 66%]
+tests/test_replay.py ................................................... [ 70%]
+..................................                                       [ 72%]
+tests/test_replay_controller_integration.py ..                           [ 73%]
+tests/test_replay_research.py .....................                      [ 74%]
+tests/test_research_cli.py ............................................. [ 77%]
+.....                                                                    [ 78%]
+tests/test_research_core_evaluation.py .........................ss       [ 80%]
+tests/test_research_evaluation.py ...................................... [ 83%]
+..........................ss..............                               [ 86%]
+tests/test_research_log.py ............................................. [ 89%]
+.................................................                        [ 93%]
+tests/test_supervisor.py ..........................................      [ 96%]
+tests/test_supervisor_provenance.py .................................... [ 99%]
+...........                                                              [100%]
+
+================= 1334 passed, 4 skipped in 124.80s (0:02:04) ==================
+cb77cde65a7b031c1ce3f92fc74047e70b16d4e4
+7f4023cfca2ab436c72bb7b872f727002e462fa9
+.env.example .github/workflows/dashboard.yml .github/workflows/tests.yml .gitignore AGENTS.md LICENSE README.md docs/ARCHITECTURE.md docs/ATTEMPT_DIAGNOSTICS.md docs/AUTONOMOUS_SUPERVISION.md docs/BACKGROUND_WORK.md docs/BUILD_PLAN.md docs/CAUSAL_LOGGING.md docs/DASHBOARD.md docs/DASHBOARD_ART.md docs/DEADLINE_SCHEDULING.md docs/DEMAND_AND_SERVICE_VISITS.md docs/ECONOMIC_PRODUCTION.md docs/FAIR_PLAY.md docs/FURNACE_INPUT_ROUTES.md docs/FURNACE_OUTPUT_BUFFERS.md docs/HIERARCHICAL_CONTROLLER.md docs/JOINT_PRODUCTION_SITES.md docs/LOCAL_DECISION_SELECTION.md docs/PERFORMANCE_INVESTIGATION_PROMPT.md docs/PLANNER_CAPABILITIES.md docs/PRODUCTION_EFFICIENCY.md docs/REPLAY.md docs/RESEARCH_EVALUATION.md docs/RESEARCH_LOGGING.md docs/SUPERVISOR_PROVENANCE.md docs/workflows/README.md docs/workflows/mermaid-config.json docs/workflows/mmd/00-complete-workflow.mmd docs/workflows/mmd/01-campaign-supervision.mmd docs/workflows/mmd/02-hierarchical-controller.mmd docs/workflows/mmd/03-goals-and-bootstrap.mmd docs/workflows/mmd/04-factory-dependency-planner.mmd docs/workflows/mmd/05-jev-candidate-judgment.mmd docs/workflows/mmd/06-native-action-execution.mmd docs/workflows/mmd/07-pending-action-verification.mmd docs/workflows/mmd/08-automatic-codex-repair.mmd docs/workflows/pngs/00-complete-workflow.png docs/workflows/pngs/01-campaign-supervision.png docs/workflows/pngs/02-hierarchical-controller.png docs/workflows/pngs/03-goals-and-bootstrap.png docs/workflows/pngs/04-factory-dependency-planner.png docs/workflows/pngs/05-jev-candidate-judgment.png docs/workflows/pngs/06-native-action-execution.png docs/workflows/pngs/07-pending-action-verification.png docs/workflows/pngs/08-automatic-codex-repair.png docs/workflows/pngs/manifest.json docs/workflows/render-svg-tiles.mjs docs/workflows/render.py pyproject.toml src/jev_factorio/__init__.py src/jev_factorio/__main__.py src/jev_factorio/backends/__init__.py src/jev_factorio/backends/base.py src/jev_factorio/backends/craft_jobs.py src/jev_factorio/backends/fair_actions.py src/jev_factorio/backends/fle.py src/jev_factorio/backends/input_routes.py src/jev_factorio/backends/mock.py src/jev_factorio/backends/native_factory.py src/jev_factorio/backends/output_buffers.py src/jev_factorio/backends/play_api.py src/jev_factorio/background.py src/jev_factorio/buffer_controller.py src/jev_factorio/causal_trace.py src/jev_factorio/controller.py src/jev_factorio/craft_jobs.py src/jev_factorio/dashboard.py src/jev_factorio/dashboard_assets/app.js src/jev_factorio/dashboard_assets/factory-steel.png src/jev_factorio/dashboard_assets/index.html src/jev_factorio/dashboard_assets/styles.css src/jev_factorio/diagnostics.py src/jev_factorio/evaluation.py src/jev_factorio/factory_contract.py src/jev_factorio/input_controller.py src/jev_factorio/input_routes.py src/jev_factorio/jev_client.py src/jev_factorio/judgments.py src/jev_factorio/loop.py src/jev_factorio/lua/catalog.lua src/jev_factorio/lua/craft_jobs.lua src/jev_factorio/lua/factory.lua src/jev_factorio/lua/fair_actions.lua src/jev_factorio/lua/input_routes.lua src/jev_factorio/lua/output_buffers.lua src/jev_factorio/lua/production_sites.lua src/jev_factorio/main.py src/jev_factorio/memory.py src/jev_factorio/output_buffers.py src/jev_factorio/planning/__init__.py src/jev_factorio/planning/background_work.py src/jev_factorio/planning/catalog.py src/jev_factorio/planning/connections.py src/jev_factorio/planning/decision_support.py src/jev_factorio/planning/demand.py src/jev_factorio/planning/economics.py src/jev_factorio/planning/factory.py src/jev_factorio/planning/goals.py src/jev_factorio/planning/input_routes.py src/jev_factorio/planning/materials.py src/jev_factorio/planning/output_buffers.py src/jev_factorio/planning/ready_work.py src/jev_factorio/planning/scheduling.py src/jev_factorio/planning/service_visits.py src/jev_factorio/production_sites.py src/jev_factorio/provenance.py src/jev_factorio/questions.py src/jev_factorio/replay.py src/jev_factorio/replay_causal.py src/jev_factorio/replay_source.py src/jev_factorio/research_core_evaluation.py src/jev_factorio/research_evaluation.py src/jev_factorio/research_events.py src/jev_factorio/research_log.py src/jev_factorio/research_reports.py src/jev_factorio/skills.py src/jev_factorio/state.py src/jev_factorio/supervisor.py src/jev_factorio/telemetry.py tests/attempt_helpers.py tests/fixtures/input_routes_runtime.lua tests/fixtures/output_buffers_runtime.lua tests/fixtures/replay/event-v1/events.jsonl tests/fixtures/replay/event-v1/manifest.json tests/input_routes_fixtures.py tests/test_attempt_integration.py tests/test_attempts.py tests/test_background_work.py tests/test_causal_native_integration.py tests/test_causal_trace.py tests/test_config.py tests/test_connections.py tests/test_craft_jobs.py tests/test_craft_jobs_lua.py tests/test_dashboard.py tests/test_dashboard_browser.py tests/test_dashboard_integration.py tests/test_deadline_scheduling.py tests/test_demand_service.py tests/test_diagnostics.py tests/test_duration.py tests/test_economic_production.py tests/test_evaluation.py tests/test_extension_tracing.py tests/test_factory.py tests/test_fair_actions.py tests/test_fle.py tests/test_hierarchical.py tests/test_input_route_contract.py tests/test_input_route_integration.py tests/test_input_routes_lua.py tests/test_judgments.py tests/test_local_decisions.py tests/test_output_buffer_contract.py tests/test_output_buffer_integration.py tests/test_output_buffers_lua.py tests/test_planner_consistency.py tests/test_planning.py tests/test_production_sites.py tests/test_provenance.py tests/test_provenance_gameplay.py tests/test_provenance_races.py tests/test_provider_failures.py tests/test_questions.py tests/test_ready_work.py tests/test_replay.py tests/test_replay_controller_integration.py tests/test_replay_research.py tests/test_research_cli.py tests/test_research_core_evaluation.py tests/test_research_evaluation.py tests/test_research_log.py tests/test_supervisor.py tests/test_supervisor_provenance.py 870544df5988b67cfd9264bd18cd6dfe15f5852b
+870544df5988b67cfd9264bd18cd6dfe15f5852b	refs/heads/main
+870544df5988b67cfd9264bd18cd6dfe15f5852b	refs/heads/main
+{"headRefOid": "09a19140c607118d11a615fd51475feece98a9c6", "mergeCommit": {"oid": "870544df5988b67cfd9264bd18cd6dfe15f5852b"}, "reviews": [{"id": "PRR_kwDOUjLM9s8AAAABOqTBMw", "author": {"login": "chatgpt-codex-connector"}, "authorAssociation": "NONE", "body": "\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `09a19140c6`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo]([REDACTED] Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>", "submittedAt": "2026-09-22T13:38:05Z", "includesCreatedEdit": false, "reactionGroups": [], "state": "COMMENTED", "commit": {"oid": "09a19140c607118d11a615fd51475feece98a9c6"}}], "state": "MERGED", "statusCheckRollup": [{"__typename": "CheckRun", "completedAt": "2026-09-22T13:34:04Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "chromium", "startedAt": "2026-09-22T13:32:32Z", "status": "COMPLETED", "workflowName": "Dashboard browser tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T13:33:52Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.10)", "startedAt": "2026-09-22T13:33:00Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T13:33:48Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.12)", "startedAt": "2026-09-22T13:33:00Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T13:33:48Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.13)", "startedAt": "2026-09-22T13:33:00Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T13:33:19Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.10)", "startedAt": "2026-09-22T13:33:00Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T13:33:18Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.12)", "startedAt": "2026-09-22T13:33:00Z", "status": "COMPLETED", "workflowName": "Python tests"}]}
+============================= test session starts ==============================
+platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/agent/factorio/jev-factorio
+configfile: pyproject.toml
+plugins: anyio-4.15.1
+collected 1453 items
+
+tests/test_attempt_integration.py ..............                         [  0%]
+tests/test_attempts.py ......................................            [  3%]
+tests/test_background_work.py ......................                     [  5%]
+tests/test_causal_native_integration.py ..............                   [  6%]
+tests/test_causal_trace.py ............................................. [  9%]
+..................                                                       [ 10%]
+tests/test_config.py .......                                             [ 10%]
+tests/test_connections.py ....................                           [ 12%]
+tests/test_craft_jobs.py ............................................... [ 15%]
+...........                                                              [ 16%]
+tests/test_craft_jobs_lua.py .............                               [ 17%]
+tests/test_dashboard.py ...............................                  [ 19%]
+tests/test_dashboard_browser.py ......................                   [ 20%]
+tests/test_dashboard_integration.py ...........                          [ 21%]
+tests/test_deadline_scheduling.py ...........                            [ 22%]
+tests/test_demand_service.py ..............                              [ 23%]
+tests/test_diagnostics.py .............                                  [ 24%]
+tests/test_duration.py ...                                               [ 24%]
+tests/test_economic_production.py .....................                  [ 25%]
+tests/test_evaluation.py ..........                                      [ 26%]
+tests/test_extension_tracing.py ...........                              [ 27%]
+tests/test_factory.py .................................................. [ 30%]
+........................................................................ [ 35%]
+...............................                                          [ 37%]
+tests/test_fair_actions.py ...................................           [ 40%]
+tests/test_fle.py ..................                                     [ 41%]
+tests/test_hierarchical.py ......................                        [ 42%]
+tests/test_input_route_contract.py ..................................... [ 45%]
+............                                                             [ 46%]
+tests/test_input_route_integration.py ....................               [ 47%]
+tests/test_input_routes_lua.py ...............................           [ 49%]
+tests/test_judgments.py ......................                           [ 51%]
+tests/test_local_decisions.py ............................               [ 53%]
+tests/test_output_buffer_contract.py .................................   [ 55%]
+tests/test_output_buffer_integration.py .............                    [ 56%]
+tests/test_output_buffers_lua.py ...............                         [ 57%]
+tests/test_planner_consistency.py ................                       [ 58%]
+tests/test_planning.py ......................                            [ 60%]
+tests/test_production_sites.py .......................                   [ 61%]
+tests/test_provenance.py ......................                          [ 63%]
+tests/test_provenance_gameplay.py ..                                     [ 63%]
+tests/test_provenance_races.py ....                                      [ 63%]
+tests/test_provider_failures.py ............................             [ 65%]
+tests/test_questions.py .......                                          [ 66%]
+tests/test_ready_work.py ............................................    [ 69%]
+tests/test_replay.py ................................................... [ 72%]
+..................................                                       [ 74%]
+tests/test_replay_controller_integration.py ..                           [ 75%]
+tests/test_replay_research.py .....................                      [ 76%]
+tests/test_research_cli.py ............................................. [ 79%]
+.....                                                                    [ 79%]
+tests/test_research_core_evaluation.py .........................ss       [ 81%]
+tests/test_research_evaluation.py ...................................... [ 84%]
+..........................ss..............                               [ 87%]
+tests/test_research_log.py ............................................. [ 90%]
+.................................................                        [ 93%]
+tests/test_supervisor.py ............................................    [ 96%]
+tests/test_supervisor_provenance.py .................................... [ 99%]
+...........                                                              [100%]
+
+================== 1449 passed, 4 skipped in 98.31s (0:01:38) ==================
+870544df5988b67cfd9264bd18cd6dfe15f5852b
+870544df5988b67cfd9264bd18cd6dfe15f5852b
+.env.example .github/workflows/dashboard.yml .github/workflows/tests.yml .gitignore AGENTS.md LICENSE README.md docs/ARCHITECTURE.md docs/ATTEMPT_DIAGNOSTICS.md docs/AUTONOMOUS_SUPERVISION.md docs/BACKGROUND_WORK.md docs/BUILD_PLAN.md docs/CAUSAL_LOGGING.md docs/DASHBOARD.md docs/DASHBOARD_ART.md docs/DEADLINE_SCHEDULING.md docs/DEMAND_AND_SERVICE_VISITS.md docs/ECONOMIC_PRODUCTION.md docs/FAIR_PLAY.md docs/FURNACE_INPUT_ROUTES.md docs/FURNACE_OUTPUT_BUFFERS.md docs/HIERARCHICAL_CONTROLLER.md docs/JOINT_PRODUCTION_SITES.md docs/LOCAL_DECISION_SELECTION.md docs/PERFORMANCE_INVESTIGATION_PROMPT.md docs/PLANNER_CAPABILITIES.md docs/PRODUCTION_EFFICIENCY.md docs/REPLAY.md docs/RESEARCH_EVALUATION.md docs/RESEARCH_LOGGING.md docs/SUPERVISOR_PROVENANCE.md docs/workflows/README.md docs/workflows/mermaid-config.json docs/workflows/mmd/00-complete-workflow.mmd docs/workflows/mmd/01-campaign-supervision.mmd docs/workflows/mmd/02-hierarchical-controller.mmd docs/workflows/mmd/03-goals-and-bootstrap.mmd docs/workflows/mmd/04-factory-dependency-planner.mmd docs/workflows/mmd/05-jev-candidate-judgment.mmd docs/workflows/mmd/06-native-action-execution.mmd docs/workflows/mmd/07-pending-action-verification.mmd docs/workflows/mmd/08-automatic-codex-repair.mmd docs/workflows/pngs/00-complete-workflow.png docs/workflows/pngs/01-campaign-supervision.png docs/workflows/pngs/02-hierarchical-controller.png docs/workflows/pngs/03-goals-and-bootstrap.png docs/workflows/pngs/04-factory-dependency-planner.png docs/workflows/pngs/05-jev-candidate-judgment.png docs/workflows/pngs/06-native-action-execution.png docs/workflows/pngs/07-pending-action-verification.png docs/workflows/pngs/08-automatic-codex-repair.png docs/workflows/pngs/manifest.json docs/workflows/render-svg-tiles.mjs docs/workflows/render.py pyproject.toml src/jev_factorio/__init__.py src/jev_factorio/__main__.py src/jev_factorio/backends/__init__.py src/jev_factorio/backends/base.py src/jev_factorio/backends/craft_jobs.py src/jev_factorio/backends/fair_actions.py src/jev_factorio/backends/fle.py src/jev_factorio/backends/input_routes.py src/jev_factorio/backends/mock.py src/jev_factorio/backends/native_factory.py src/jev_factorio/backends/output_buffers.py src/jev_factorio/backends/play_api.py src/jev_factorio/background.py src/jev_factorio/buffer_controller.py src/jev_factorio/causal_trace.py src/jev_factorio/controller.py src/jev_factorio/craft_jobs.py src/jev_factorio/dashboard.py src/jev_factorio/dashboard_assets/app.js src/jev_factorio/dashboard_assets/factory-steel.png src/jev_factorio/dashboard_assets/index.html src/jev_factorio/dashboard_assets/styles.css src/jev_factorio/diagnostics.py src/jev_factorio/evaluation.py src/jev_factorio/factory_contract.py src/jev_factorio/input_controller.py src/jev_factorio/input_routes.py src/jev_factorio/jev_client.py src/jev_factorio/judgments.py src/jev_factorio/loop.py src/jev_factorio/lua/catalog.lua src/jev_factorio/lua/craft_jobs.lua src/jev_factorio/lua/factory.lua src/jev_factorio/lua/fair_actions.lua src/jev_factorio/lua/input_routes.lua src/jev_factorio/lua/output_buffers.lua src/jev_factorio/lua/production_sites.lua src/jev_factorio/main.py src/jev_factorio/memory.py src/jev_factorio/output_buffers.py src/jev_factorio/planning/__init__.py src/jev_factorio/planning/background_work.py src/jev_factorio/planning/catalog.py src/jev_factorio/planning/connections.py src/jev_factorio/planning/decision_support.py src/jev_factorio/planning/demand.py src/jev_factorio/planning/economics.py src/jev_factorio/planning/factory.py src/jev_factorio/planning/goals.py src/jev_factorio/planning/input_routes.py src/jev_factorio/planning/materials.py src/jev_factorio/planning/output_buffers.py src/jev_factorio/planning/ready_work.py src/jev_factorio/planning/scheduling.py src/jev_factorio/planning/service_visits.py src/jev_factorio/production_sites.py src/jev_factorio/provenance.py src/jev_factorio/questions.py src/jev_factorio/replay.py src/jev_factorio/replay_causal.py src/jev_factorio/replay_source.py src/jev_factorio/research_core_evaluation.py src/jev_factorio/research_evaluation.py src/jev_factorio/research_events.py src/jev_factorio/research_log.py src/jev_factorio/research_reports.py src/jev_factorio/skills.py src/jev_factorio/state.py src/jev_factorio/supervisor.py src/jev_factorio/telemetry.py tests/attempt_helpers.py tests/fixtures/input_routes_runtime.lua tests/fixtures/output_buffers_runtime.lua tests/fixtures/replay/event-v1/events.jsonl tests/fixtures/replay/event-v1/manifest.json tests/input_routes_fixtures.py tests/test_attempt_integration.py tests/test_attempts.py tests/test_background_work.py tests/test_causal_native_integration.py tests/test_causal_trace.py tests/test_config.py tests/test_connections.py tests/test_craft_jobs.py tests/test_craft_jobs_lua.py tests/test_dashboard.py tests/test_dashboard_browser.py tests/test_dashboard_integration.py tests/test_deadline_scheduling.py tests/test_demand_service.py tests/test_diagnostics.py tests/test_duration.py tests/test_economic_production.py tests/test_evaluation.py tests/test_extension_tracing.py tests/test_factory.py tests/test_fair_actions.py tests/test_fle.py tests/test_hierarchical.py tests/test_input_route_contract.py tests/test_input_route_integration.py tests/test_input_routes_lua.py tests/test_judgments.py tests/test_local_decisions.py tests/test_output_buffer_contract.py tests/test_output_buffer_integration.py tests/test_output_buffers_lua.py tests/test_planner_consistency.py tests/test_planning.py tests/test_production_sites.py tests/test_provenance.py tests/test_provenance_gameplay.py tests/test_provenance_races.py tests/test_provider_failures.py tests/test_questions.py tests/test_ready_work.py tests/test_replay.py tests/test_replay_controller_integration.py tests/test_replay_research.py tests/test_research_cli.py tests/test_research_core_evaluation.py tests/test_research_evaluation.py tests/test_research_log.py tests/test_supervisor.py tests/test_supervisor_provenance.py 9d49b4f1b6d796556628557881f2a8361cd829dc
+9d49b4f1b6d796556628557881f2a8361cd829dc	refs/heads/main
+9d49b4f1b6d796556628557881f2a8361cd829dc	refs/heads/main
+{"headRefOid": "09f92a387bda2e2e8b6b3ff5a0834e262a738bf2", "mergeCommit": {"oid": "9d49b4f1b6d796556628557881f2a8361cd829dc"}, "reviews": [{"id": "PRR_kwDOUjLM9s8AAAABOq_vYw", "author": {"login": "chatgpt-codex-connector"}, "authorAssociation": "NONE", "body": "\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `09f92a387b`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo]([REDACTED] Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>", "submittedAt": "2026-09-22T14:35:52Z", "includesCreatedEdit": false, "reactionGroups": [], "state": "COMMENTED", "commit": {"oid": "09f92a387bda2e2e8b6b3ff5a0834e262a738bf2"}}], "state": "MERGED", "statusCheckRollup": [{"__typename": "CheckRun", "completedAt": "2026-09-22T14:30:25Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "chromium", "startedAt": "2026-09-22T14:28:54Z", "status": "COMPLETED", "workflowName": "Dashboard browser tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T14:29:40Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.10)", "startedAt": "2026-09-22T14:28:55Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T14:29:34Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.12)", "startedAt": "2026-09-22T14:28:54Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T14:29:45Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.13)", "startedAt": "2026-09-22T14:28:54Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T14:29:09Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.10)", "startedAt": "2026-09-22T14:28:54Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T14:29:10Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.12)", "startedAt": "2026-09-22T14:28:54Z", "status": "COMPLETED", "workflowName": "Python tests"}]}
+============================= test session starts ==============================
+platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/agent/factorio/jev-factorio
+configfile: pyproject.toml
+plugins: anyio-4.15.1
+collected 1460 items
+
+tests/test_attempt_integration.py ..............                         [  0%]
+tests/test_attempts.py ............................................      [  3%]
+tests/test_background_work.py ......................                     [  5%]
+tests/test_causal_native_integration.py ..............                   [  6%]
+tests/test_causal_trace.py ............................................. [  9%]
+..................                                                       [ 10%]
+tests/test_config.py .......                                             [ 11%]
+tests/test_connections.py ....................                           [ 12%]
+tests/test_craft_jobs.py ............................................... [ 15%]
+...........                                                              [ 16%]
+tests/test_craft_jobs_lua.py .............                               [ 17%]
+tests/test_dashboard.py ...............................                  [ 19%]
+tests/test_dashboard_browser.py ......................                   [ 21%]
+tests/test_dashboard_integration.py ...........                          [ 21%]
+tests/test_deadline_scheduling.py ...........                            [ 22%]
+tests/test_demand_service.py ..............                              [ 23%]
+tests/test_diagnostics.py .............                                  [ 24%]
+tests/test_duration.py ...                                               [ 24%]
+tests/test_economic_production.py .....................                  [ 26%]
+tests/test_evaluation.py ..........                                      [ 26%]
+tests/test_extension_tracing.py ...........                              [ 27%]
+tests/test_factory.py .................................................. [ 30%]
+........................................................................ [ 35%]
+................................                                         [ 38%]
+tests/test_fair_actions.py ...................................           [ 40%]
+tests/test_fle.py ..................                                     [ 41%]
+tests/test_hierarchical.py ......................                        [ 43%]
+tests/test_input_route_contract.py ..................................... [ 45%]
+............                                                             [ 46%]
+tests/test_input_route_integration.py ....................               [ 47%]
+tests/test_input_routes_lua.py ...............................           [ 50%]
+tests/test_judgments.py ......................                           [ 51%]
+tests/test_local_decisions.py ............................               [ 53%]
+tests/test_output_buffer_contract.py .................................   [ 55%]
+tests/test_output_buffer_integration.py .............                    [ 56%]
+tests/test_output_buffers_lua.py ...............                         [ 57%]
+tests/test_planner_consistency.py ................                       [ 58%]
+tests/test_planning.py ......................                            [ 60%]
+tests/test_production_sites.py .......................                   [ 61%]
+tests/test_provenance.py ......................                          [ 63%]
+tests/test_provenance_gameplay.py ..                                     [ 63%]
+tests/test_provenance_races.py ....                                      [ 63%]
+tests/test_provider_failures.py ............................             [ 65%]
+tests/test_questions.py .......                                          [ 66%]
+tests/test_ready_work.py ............................................    [ 69%]
+tests/test_replay.py ................................................... [ 72%]
+..................................                                       [ 75%]
+tests/test_replay_controller_integration.py ..                           [ 75%]
+tests/test_replay_research.py .....................                      [ 76%]
+tests/test_research_cli.py ............................................. [ 79%]
+.....                                                                    [ 80%]
+tests/test_research_core_evaluation.py .........................ss       [ 81%]
+tests/test_research_evaluation.py ...................................... [ 84%]
+..........................ss..............                               [ 87%]
+tests/test_research_log.py ............................................. [ 90%]
+.................................................                        [ 93%]
+tests/test_supervisor.py ............................................    [ 96%]
+tests/test_supervisor_provenance.py .................................... [ 99%]
+...........                                                              [100%]
+
+================== 1456 passed, 4 skipped in 95.52s (0:01:35) ==================
+9d49b4f1b6d796556628557881f2a8361cd829dc
+9d49b4f1b6d796556628557881f2a8361cd829dc
+.env.example .github/workflows/dashboard.yml .github/workflows/tests.yml .gitignore AGENTS.md LICENSE README.md docs/ARCHITECTURE.md docs/ATTEMPT_DIAGNOSTICS.md docs/AUTONOMOUS_SUPERVISION.md docs/BACKGROUND_WORK.md docs/BUILD_PLAN.md docs/CAUSAL_LOGGING.md docs/DASHBOARD.md docs/DASHBOARD_ART.md docs/DEADLINE_SCHEDULING.md docs/DEMAND_AND_SERVICE_VISITS.md docs/ECONOMIC_PRODUCTION.md docs/FAIR_PLAY.md docs/FURNACE_INPUT_ROUTES.md docs/FURNACE_OUTPUT_BUFFERS.md docs/HIERARCHICAL_CONTROLLER.md docs/JOINT_PRODUCTION_SITES.md docs/LOCAL_DECISION_SELECTION.md docs/PERFORMANCE_INVESTIGATION_PROMPT.md docs/PLANNER_CAPABILITIES.md docs/PRODUCTION_EFFICIENCY.md docs/REPLAY.md docs/RESEARCH_EVALUATION.md docs/RESEARCH_LOGGING.md docs/SUPERVISOR_PROVENANCE.md docs/workflows/README.md docs/workflows/mermaid-config.json docs/workflows/mmd/00-complete-workflow.mmd docs/workflows/mmd/01-campaign-supervision.mmd docs/workflows/mmd/02-hierarchical-controller.mmd docs/workflows/mmd/03-goals-and-bootstrap.mmd docs/workflows/mmd/04-factory-dependency-planner.mmd docs/workflows/mmd/05-jev-candidate-judgment.mmd docs/workflows/mmd/06-native-action-execution.mmd docs/workflows/mmd/07-pending-action-verification.mmd docs/workflows/mmd/08-automatic-codex-repair.mmd docs/workflows/pngs/00-complete-workflow.png docs/workflows/pngs/01-campaign-supervision.png docs/workflows/pngs/02-hierarchical-controller.png docs/workflows/pngs/03-goals-and-bootstrap.png docs/workflows/pngs/04-factory-dependency-planner.png docs/workflows/pngs/05-jev-candidate-judgment.png docs/workflows/pngs/06-native-action-execution.png docs/workflows/pngs/07-pending-action-verification.png docs/workflows/pngs/08-automatic-codex-repair.png docs/workflows/pngs/manifest.json docs/workflows/render-svg-tiles.mjs docs/workflows/render.py pyproject.toml src/jev_factorio/__init__.py src/jev_factorio/__main__.py src/jev_factorio/backends/__init__.py src/jev_factorio/backends/base.py src/jev_factorio/backends/craft_jobs.py src/jev_factorio/backends/fair_actions.py src/jev_factorio/backends/fle.py src/jev_factorio/backends/input_routes.py src/jev_factorio/backends/mock.py src/jev_factorio/backends/native_factory.py src/jev_factorio/backends/output_buffers.py src/jev_factorio/backends/play_api.py src/jev_factorio/background.py src/jev_factorio/buffer_controller.py src/jev_factorio/causal_trace.py src/jev_factorio/controller.py src/jev_factorio/craft_jobs.py src/jev_factorio/dashboard.py src/jev_factorio/dashboard_assets/app.js src/jev_factorio/dashboard_assets/factory-steel.png src/jev_factorio/dashboard_assets/index.html src/jev_factorio/dashboard_assets/styles.css src/jev_factorio/diagnostics.py src/jev_factorio/evaluation.py src/jev_factorio/factory_contract.py src/jev_factorio/input_controller.py src/jev_factorio/input_routes.py src/jev_factorio/jev_client.py src/jev_factorio/judgments.py src/jev_factorio/loop.py src/jev_factorio/lua/catalog.lua src/jev_factorio/lua/craft_jobs.lua src/jev_factorio/lua/factory.lua src/jev_factorio/lua/fair_actions.lua src/jev_factorio/lua/input_routes.lua src/jev_factorio/lua/output_buffers.lua src/jev_factorio/lua/production_sites.lua src/jev_factorio/main.py src/jev_factorio/memory.py src/jev_factorio/output_buffers.py src/jev_factorio/planning/__init__.py src/jev_factorio/planning/background_work.py src/jev_factorio/planning/catalog.py src/jev_factorio/planning/connections.py src/jev_factorio/planning/decision_support.py src/jev_factorio/planning/demand.py src/jev_factorio/planning/economics.py src/jev_factorio/planning/factory.py src/jev_factorio/planning/goals.py src/jev_factorio/planning/input_routes.py src/jev_factorio/planning/materials.py src/jev_factorio/planning/output_buffers.py src/jev_factorio/planning/ready_work.py src/jev_factorio/planning/scheduling.py src/jev_factorio/planning/service_visits.py src/jev_factorio/production_sites.py src/jev_factorio/provenance.py src/jev_factorio/questions.py src/jev_factorio/replay.py src/jev_factorio/replay_causal.py src/jev_factorio/replay_source.py src/jev_factorio/research_core_evaluation.py src/jev_factorio/research_evaluation.py src/jev_factorio/research_events.py src/jev_factorio/research_log.py src/jev_factorio/research_reports.py src/jev_factorio/skills.py src/jev_factorio/state.py src/jev_factorio/supervisor.py src/jev_factorio/telemetry.py tests/attempt_helpers.py tests/fixtures/input_routes_runtime.lua tests/fixtures/output_buffers_runtime.lua tests/fixtures/replay/event-v1/events.jsonl tests/fixtures/replay/event-v1/manifest.json tests/input_routes_fixtures.py tests/test_attempt_integration.py tests/test_attempts.py tests/test_background_work.py tests/test_causal_native_integration.py tests/test_causal_trace.py tests/test_config.py tests/test_connections.py tests/test_craft_jobs.py tests/test_craft_jobs_lua.py tests/test_dashboard.py tests/test_dashboard_browser.py tests/test_dashboard_integration.py tests/test_deadline_scheduling.py tests/test_demand_service.py tests/test_diagnostics.py tests/test_duration.py tests/test_economic_production.py tests/test_evaluation.py tests/test_extension_tracing.py tests/test_factory.py tests/test_fair_actions.py tests/test_fle.py tests/test_hierarchical.py tests/test_input_route_contract.py tests/test_input_route_integration.py tests/test_input_routes_lua.py tests/test_judgments.py tests/test_local_decisions.py tests/test_output_buffer_contract.py tests/test_output_buffer_integration.py tests/test_output_buffers_lua.py tests/test_planner_consistency.py tests/test_planning.py tests/test_production_sites.py tests/test_provenance.py tests/test_provenance_gameplay.py tests/test_provenance_races.py tests/test_provider_failures.py tests/test_questions.py tests/test_ready_work.py tests/test_replay.py tests/test_replay_controller_integration.py tests/test_replay_research.py tests/test_research_cli.py tests/test_research_core_evaluation.py tests/test_research_evaluation.py tests/test_research_log.py tests/test_supervisor.py tests/test_supervisor_provenance.py 9cacaed6d4ba359ec219c8724b008e1128371075
+9cacaed6d4ba359ec219c8724b008e1128371075	refs/heads/main
+9cacaed6d4ba359ec219c8724b008e1128371075	refs/heads/main
+{"headRefOid": "3f37eedc7be278b50162363e1efc393eab2eee03", "mergeCommit": {"oid": "9cacaed6d4ba359ec219c8724b008e1128371075"}, "reviews": [], "state": "MERGED", "statusCheckRollup": [{"__typename": "CheckRun", "completedAt": "2026-09-22T15:21:42Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "chromium", "startedAt": "2026-09-22T15:20:14Z", "status": "COMPLETED", "workflowName": "Dashboard browser tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T15:20:50Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.10)", "startedAt": "2026-09-22T15:20:08Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T15:20:54Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.12)", "startedAt": "2026-09-22T15:20:09Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T15:20:59Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.13)", "startedAt": "2026-09-22T15:20:08Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T15:20:25Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.10)", "startedAt": "2026-09-22T15:20:08Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T15:20:28Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.12)", "startedAt": "2026-09-22T15:20:08Z", "status": "COMPLETED", "workflowName": "Python tests"}]}
+============================= test session starts ==============================
+platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/agent/factorio/jev-factorio
+configfile: pyproject.toml
+plugins: anyio-4.15.1
+collected 1461 items
+
+tests/test_attempt_integration.py ..............                         [  0%]
+tests/test_attempts.py ............................................      [  3%]
+tests/test_background_work.py ......................                     [  5%]
+tests/test_causal_native_integration.py ..............                   [  6%]
+tests/test_causal_trace.py ............................................. [  9%]
+..................                                                       [ 10%]
+tests/test_config.py .......                                             [ 11%]
+tests/test_connections.py ....................                           [ 12%]
+tests/test_craft_jobs.py ............................................... [ 15%]
+...........                                                              [ 16%]
+tests/test_craft_jobs_lua.py .............                               [ 17%]
+tests/test_dashboard.py ...............................                  [ 19%]
+tests/test_dashboard_browser.py ......................                   [ 21%]
+tests/test_dashboard_integration.py ...........                          [ 21%]
+tests/test_deadline_scheduling.py ...........                            [ 22%]
+tests/test_demand_service.py ..............                              [ 23%]
+tests/test_diagnostics.py .............                                  [ 24%]
+tests/test_duration.py ...                                               [ 24%]
+tests/test_economic_production.py ......................                 [ 26%]
+tests/test_evaluation.py ..........                                      [ 26%]
+tests/test_extension_tracing.py ...........                              [ 27%]
+tests/test_factory.py .................................................. [ 31%]
+........................................................................ [ 35%]
+................................                                         [ 38%]
+tests/test_fair_actions.py ...................................           [ 40%]
+tests/test_fle.py ..................                                     [ 41%]
+tests/test_hierarchical.py ......................                        [ 43%]
+tests/test_input_route_contract.py ..................................... [ 45%]
+............                                                             [ 46%]
+tests/test_input_route_integration.py ....................               [ 47%]
+tests/test_input_routes_lua.py ...............................           [ 50%]
+tests/test_judgments.py ......................                           [ 51%]
+tests/test_local_decisions.py ............................               [ 53%]
+tests/test_output_buffer_contract.py .................................   [ 55%]
+tests/test_output_buffer_integration.py .............                    [ 56%]
+tests/test_output_buffers_lua.py ...............                         [ 57%]
+tests/test_planner_consistency.py ................                       [ 58%]
+tests/test_planning.py ......................                            [ 60%]
+tests/test_production_sites.py .......................                   [ 61%]
+tests/test_provenance.py ......................                          [ 63%]
+tests/test_provenance_gameplay.py ..                                     [ 63%]
+tests/test_provenance_races.py ....                                      [ 63%]
+tests/test_provider_failures.py ............................             [ 65%]
+tests/test_questions.py .......                                          [ 66%]
+tests/test_ready_work.py ............................................    [ 69%]
+tests/test_replay.py ................................................... [ 72%]
+..................................                                       [ 75%]
+tests/test_replay_controller_integration.py ..                           [ 75%]
+tests/test_replay_research.py .....................                      [ 76%]
+tests/test_research_cli.py ............................................. [ 79%]
+.....                                                                    [ 80%]
+tests/test_research_core_evaluation.py .........................ss       [ 81%]
+tests/test_research_evaluation.py ...................................... [ 84%]
+..........................ss..............                               [ 87%]
+tests/test_research_log.py ............................................. [ 90%]
+.................................................                        [ 93%]
+tests/test_supervisor.py ............................................    [ 96%]
+tests/test_supervisor_provenance.py .................................... [ 99%]
+...........                                                              [100%]
+
+================== 1457 passed, 4 skipped in 96.36s (0:01:36) ==================
+9cacaed6d4ba359ec219c8724b008e1128371075
+9cacaed6d4ba359ec219c8724b008e1128371075
+.env.example .github/workflows/dashboard.yml .github/workflows/tests.yml .gitignore AGENTS.md LICENSE README.md docs/ARCHITECTURE.md docs/ATTEMPT_DIAGNOSTICS.md docs/AUTONOMOUS_SUPERVISION.md docs/BACKGROUND_WORK.md docs/BUILD_PLAN.md docs/CAUSAL_LOGGING.md docs/DASHBOARD.md docs/DASHBOARD_ART.md docs/DEADLINE_SCHEDULING.md docs/DEMAND_AND_SERVICE_VISITS.md docs/ECONOMIC_PRODUCTION.md docs/FAIR_PLAY.md docs/FURNACE_INPUT_ROUTES.md docs/FURNACE_OUTPUT_BUFFERS.md docs/HIERARCHICAL_CONTROLLER.md docs/JOINT_PRODUCTION_SITES.md docs/LOCAL_DECISION_SELECTION.md docs/PERFORMANCE_INVESTIGATION_PROMPT.md docs/PLANNER_CAPABILITIES.md docs/PRODUCTION_EFFICIENCY.md docs/REPLAY.md docs/RESEARCH_EVALUATION.md docs/RESEARCH_LOGGING.md docs/SUPERVISOR_PROVENANCE.md docs/workflows/README.md docs/workflows/mermaid-config.json docs/workflows/mmd/00-complete-workflow.mmd docs/workflows/mmd/01-campaign-supervision.mmd docs/workflows/mmd/02-hierarchical-controller.mmd docs/workflows/mmd/03-goals-and-bootstrap.mmd docs/workflows/mmd/04-factory-dependency-planner.mmd docs/workflows/mmd/05-jev-candidate-judgment.mmd docs/workflows/mmd/06-native-action-execution.mmd docs/workflows/mmd/07-pending-action-verification.mmd docs/workflows/mmd/08-automatic-codex-repair.mmd docs/workflows/pngs/00-complete-workflow.png docs/workflows/pngs/01-campaign-supervision.png docs/workflows/pngs/02-hierarchical-controller.png docs/workflows/pngs/03-goals-and-bootstrap.png docs/workflows/pngs/04-factory-dependency-planner.png docs/workflows/pngs/05-jev-candidate-judgment.png docs/workflows/pngs/06-native-action-execution.png docs/workflows/pngs/07-pending-action-verification.png docs/workflows/pngs/08-automatic-codex-repair.png docs/workflows/pngs/manifest.json docs/workflows/render-svg-tiles.mjs docs/workflows/render.py pyproject.toml src/jev_factorio/__init__.py src/jev_factorio/__main__.py src/jev_factorio/backends/__init__.py src/jev_factorio/backends/base.py src/jev_factorio/backends/craft_jobs.py src/jev_factorio/backends/fair_actions.py src/jev_factorio/backends/fle.py src/jev_factorio/backends/input_routes.py src/jev_factorio/backends/mock.py src/jev_factorio/backends/native_factory.py src/jev_factorio/backends/output_buffers.py src/jev_factorio/backends/play_api.py src/jev_factorio/background.py src/jev_factorio/buffer_controller.py src/jev_factorio/causal_trace.py src/jev_factorio/controller.py src/jev_factorio/craft_jobs.py src/jev_factorio/dashboard.py src/jev_factorio/dashboard_assets/app.js src/jev_factorio/dashboard_assets/factory-steel.png src/jev_factorio/dashboard_assets/index.html src/jev_factorio/dashboard_assets/styles.css src/jev_factorio/diagnostics.py src/jev_factorio/evaluation.py src/jev_factorio/factory_contract.py src/jev_factorio/input_controller.py src/jev_factorio/input_routes.py src/jev_factorio/jev_client.py src/jev_factorio/judgments.py src/jev_factorio/loop.py src/jev_factorio/lua/catalog.lua src/jev_factorio/lua/craft_jobs.lua src/jev_factorio/lua/factory.lua src/jev_factorio/lua/fair_actions.lua src/jev_factorio/lua/input_routes.lua src/jev_factorio/lua/output_buffers.lua src/jev_factorio/lua/production_sites.lua src/jev_factorio/main.py src/jev_factorio/memory.py src/jev_factorio/output_buffers.py src/jev_factorio/planning/__init__.py src/jev_factorio/planning/background_work.py src/jev_factorio/planning/catalog.py src/jev_factorio/planning/connections.py src/jev_factorio/planning/decision_support.py src/jev_factorio/planning/demand.py src/jev_factorio/planning/economics.py src/jev_factorio/planning/factory.py src/jev_factorio/planning/goals.py src/jev_factorio/planning/input_routes.py src/jev_factorio/planning/materials.py src/jev_factorio/planning/output_buffers.py src/jev_factorio/planning/ready_work.py src/jev_factorio/planning/scheduling.py src/jev_factorio/planning/service_visits.py src/jev_factorio/production_sites.py src/jev_factorio/provenance.py src/jev_factorio/questions.py src/jev_factorio/replay.py src/jev_factorio/replay_causal.py src/jev_factorio/replay_source.py src/jev_factorio/research_core_evaluation.py src/jev_factorio/research_evaluation.py src/jev_factorio/research_events.py src/jev_factorio/research_log.py src/jev_factorio/research_reports.py src/jev_factorio/skills.py src/jev_factorio/state.py src/jev_factorio/supervisor.py src/jev_factorio/telemetry.py tests/attempt_helpers.py tests/fixtures/input_routes_runtime.lua tests/fixtures/output_buffers_runtime.lua tests/fixtures/replay/event-v1/events.jsonl tests/fixtures/replay/event-v1/manifest.json tests/input_routes_fixtures.py tests/test_attempt_integration.py tests/test_attempts.py tests/test_background_work.py tests/test_causal_native_integration.py tests/test_causal_trace.py tests/test_config.py tests/test_connections.py tests/test_craft_jobs.py tests/test_craft_jobs_lua.py tests/test_dashboard.py tests/test_dashboard_browser.py tests/test_dashboard_integration.py tests/test_deadline_scheduling.py tests/test_demand_service.py tests/test_diagnostics.py tests/test_duration.py tests/test_economic_production.py tests/test_evaluation.py tests/test_extension_tracing.py tests/test_factory.py tests/test_fair_actions.py tests/test_fle.py tests/test_hierarchical.py tests/test_input_route_contract.py tests/test_input_route_integration.py tests/test_input_routes_lua.py tests/test_judgments.py tests/test_local_decisions.py tests/test_output_buffer_contract.py tests/test_output_buffer_integration.py tests/test_output_buffers_lua.py tests/test_planner_consistency.py tests/test_planning.py tests/test_production_sites.py tests/test_provenance.py tests/test_provenance_gameplay.py tests/test_provenance_races.py tests/test_provider_failures.py tests/test_questions.py tests/test_ready_work.py tests/test_replay.py tests/test_replay_controller_integration.py tests/test_replay_research.py tests/test_research_cli.py tests/test_research_core_evaluation.py tests/test_research_evaluation.py tests/test_research_log.py tests/test_supervisor.py tests/test_supervisor_provenance.py ff737426027b0b807028f0994ac6ac68c8dcbb8c
+ff737426027b0b807028f0994ac6ac68c8dcbb8c	refs/heads/main
+ff737426027b0b807028f0994ac6ac68c8dcbb8c	refs/heads/main
+{"headRefOid": "f299b09f8b307787b11e57eb5db1fb324186cd63", "mergeCommit": {"oid": "ff737426027b0b807028f0994ac6ac68c8dcbb8c"}, "reviews": [{"id": "PRR_kwDOUjLM9s8AAAABOs72vA", "author": {"login": "chatgpt-codex-connector"}, "authorAssociation": "NONE", "body": "\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `9b3db18207`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo]([REDACTED] Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>", "submittedAt": "2026-09-22T17:44:25Z", "includesCreatedEdit": false, "reactionGroups": [], "state": "COMMENTED", "commit": {"oid": "9b3db1820714d6b225dcfe48b044642d612d4206"}}], "state": "MERGED", "statusCheckRollup": [{"__typename": "CheckRun", "completedAt": "2026-09-22T17:47:01Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "chromium", "startedAt": "2026-09-22T17:45:28Z", "status": "COMPLETED", "workflowName": "Dashboard browser tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T17:46:14Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.10)", "startedAt": "2026-09-22T17:45:27Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T17:46:13Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.12)", "startedAt": "2026-09-22T17:45:28Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T17:46:09Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.13)", "startedAt": "2026-09-22T17:45:27Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T17:45:44Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.10)", "startedAt": "2026-09-22T17:45:27Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T17:45:42Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.12)", "startedAt": "2026-09-22T17:45:27Z", "status": "COMPLETED", "workflowName": "Python tests"}]}
+============================= test session starts ==============================
+platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/agent/factorio/jev-factorio
+configfile: pyproject.toml
+plugins: anyio-4.15.1
+collected 1466 items
+
+tests/test_attempt_integration.py ..............                         [  0%]
+tests/test_attempts.py ................................................. [  4%]
+                                                                         [  4%]
+tests/test_background_work.py ......................                     [  5%]
+tests/test_causal_native_integration.py ..............                   [  6%]
+tests/test_causal_trace.py ............................................. [  9%]
+..................                                                       [ 11%]
+tests/test_config.py .......                                             [ 11%]
+tests/test_connections.py ....................                           [ 12%]
+tests/test_craft_jobs.py ............................................... [ 16%]
+...........                                                              [ 16%]
+tests/test_craft_jobs_lua.py .............                               [ 17%]
+tests/test_dashboard.py ...............................                  [ 19%]
+tests/test_dashboard_browser.py ......................                   [ 21%]
+tests/test_dashboard_integration.py ...........                          [ 22%]
+tests/test_deadline_scheduling.py ...........                            [ 22%]
+tests/test_demand_service.py ..............                              [ 23%]
+tests/test_diagnostics.py .............                                  [ 24%]
+tests/test_duration.py ...                                               [ 24%]
+tests/test_economic_production.py ......................                 [ 26%]
+tests/test_evaluation.py ..........                                      [ 27%]
+tests/test_extension_tracing.py ...........                              [ 27%]
+tests/test_factory.py .................................................. [ 31%]
+........................................................................ [ 36%]
+................................                                         [ 38%]
+tests/test_fair_actions.py ...................................           [ 40%]
+tests/test_fle.py ..................                                     [ 41%]
+tests/test_hierarchical.py ......................                        [ 43%]
+tests/test_input_route_contract.py ..................................... [ 45%]
+............                                                             [ 46%]
+tests/test_input_route_integration.py ....................               [ 48%]
+tests/test_input_routes_lua.py ...............................           [ 50%]
+tests/test_judgments.py ......................                           [ 51%]
+tests/test_local_decisions.py ............................               [ 53%]
+tests/test_output_buffer_contract.py .................................   [ 55%]
+tests/test_output_buffer_integration.py .............                    [ 56%]
+tests/test_output_buffers_lua.py ...............                         [ 57%]
+tests/test_planner_consistency.py ................                       [ 58%]
+tests/test_planning.py ......................                            [ 60%]
+tests/test_production_sites.py .......................                   [ 62%]
+tests/test_provenance.py ......................                          [ 63%]
+tests/test_provenance_gameplay.py ..                                     [ 63%]
+tests/test_provenance_races.py ....                                      [ 63%]
+tests/test_provider_failures.py ............................             [ 65%]
+tests/test_questions.py .......                                          [ 66%]
+tests/test_ready_work.py ............................................    [ 69%]
+tests/test_replay.py ................................................... [ 72%]
+..................................                                       [ 75%]
+tests/test_replay_controller_integration.py ..                           [ 75%]
+tests/test_replay_research.py .....................                      [ 76%]
+tests/test_research_cli.py ............................................. [ 79%]
+.....                                                                    [ 80%]
+tests/test_research_core_evaluation.py .........................ss       [ 81%]
+tests/test_research_evaluation.py ...................................... [ 84%]
+..........................ss..............                               [ 87%]
+tests/test_research_log.py ............................................. [ 90%]
+.................................................                        [ 93%]
+tests/test_supervisor.py ............................................    [ 96%]
+tests/test_supervisor_provenance.py .................................... [ 99%]
+...........                                                              [100%]
+
+================== 1462 passed, 4 skipped in 96.99s (0:01:36) ==================
+ff737426027b0b807028f0994ac6ac68c8dcbb8c
+ff737426027b0b807028f0994ac6ac68c8dcbb8c
+.env.example .github/workflows/dashboard.yml .github/workflows/tests.yml .gitignore AGENTS.md LICENSE README.md docs/ARCHITECTURE.md docs/ATTEMPT_DIAGNOSTICS.md docs/AUTONOMOUS_SUPERVISION.md docs/BACKGROUND_WORK.md docs/BUILD_PLAN.md docs/CAUSAL_LOGGING.md docs/DASHBOARD.md docs/DASHBOARD_ART.md docs/DEADLINE_SCHEDULING.md docs/DEMAND_AND_SERVICE_VISITS.md docs/ECONOMIC_PRODUCTION.md docs/FAIR_PLAY.md docs/FURNACE_INPUT_ROUTES.md docs/FURNACE_OUTPUT_BUFFERS.md docs/HIERARCHICAL_CONTROLLER.md docs/JOINT_PRODUCTION_SITES.md docs/LOCAL_DECISION_SELECTION.md docs/PERFORMANCE_INVESTIGATION_PROMPT.md docs/PLANNER_CAPABILITIES.md docs/PRODUCTION_EFFICIENCY.md docs/REPLAY.md docs/RESEARCH_EVALUATION.md docs/RESEARCH_LOGGING.md docs/SUPERVISOR_PROVENANCE.md docs/workflows/README.md docs/workflows/mermaid-config.json docs/workflows/mmd/00-complete-workflow.mmd docs/workflows/mmd/01-campaign-supervision.mmd docs/workflows/mmd/02-hierarchical-controller.mmd docs/workflows/mmd/03-goals-and-bootstrap.mmd docs/workflows/mmd/04-factory-dependency-planner.mmd docs/workflows/mmd/05-jev-candidate-judgment.mmd docs/workflows/mmd/06-native-action-execution.mmd docs/workflows/mmd/07-pending-action-verification.mmd docs/workflows/mmd/08-automatic-codex-repair.mmd docs/workflows/pngs/00-complete-workflow.png docs/workflows/pngs/01-campaign-supervision.png docs/workflows/pngs/02-hierarchical-controller.png docs/workflows/pngs/03-goals-and-bootstrap.png docs/workflows/pngs/04-factory-dependency-planner.png docs/workflows/pngs/05-jev-candidate-judgment.png docs/workflows/pngs/06-native-action-execution.png docs/workflows/pngs/07-pending-action-verification.png docs/workflows/pngs/08-automatic-codex-repair.png docs/workflows/pngs/manifest.json docs/workflows/render-svg-tiles.mjs docs/workflows/render.py pyproject.toml src/jev_factorio/__init__.py src/jev_factorio/__main__.py src/jev_factorio/backends/__init__.py src/jev_factorio/backends/base.py src/jev_factorio/backends/craft_jobs.py src/jev_factorio/backends/fair_actions.py src/jev_factorio/backends/fle.py src/jev_factorio/backends/input_routes.py src/jev_factorio/backends/mock.py src/jev_factorio/backends/native_factory.py src/jev_factorio/backends/output_buffers.py src/jev_factorio/backends/play_api.py src/jev_factorio/background.py src/jev_factorio/buffer_controller.py src/jev_factorio/causal_trace.py src/jev_factorio/controller.py src/jev_factorio/craft_jobs.py src/jev_factorio/dashboard.py src/jev_factorio/dashboard_assets/app.js src/jev_factorio/dashboard_assets/factory-steel.png src/jev_factorio/dashboard_assets/index.html src/jev_factorio/dashboard_assets/styles.css src/jev_factorio/diagnostics.py src/jev_factorio/evaluation.py src/jev_factorio/factory_contract.py src/jev_factorio/input_controller.py src/jev_factorio/input_routes.py src/jev_factorio/jev_client.py src/jev_factorio/judgments.py src/jev_factorio/loop.py src/jev_factorio/lua/catalog.lua src/jev_factorio/lua/craft_jobs.lua src/jev_factorio/lua/factory.lua src/jev_factorio/lua/fair_actions.lua src/jev_factorio/lua/input_routes.lua src/jev_factorio/lua/output_buffers.lua src/jev_factorio/lua/production_sites.lua src/jev_factorio/main.py src/jev_factorio/memory.py src/jev_factorio/output_buffers.py src/jev_factorio/planning/__init__.py src/jev_factorio/planning/background_work.py src/jev_factorio/planning/catalog.py src/jev_factorio/planning/connections.py src/jev_factorio/planning/decision_support.py src/jev_factorio/planning/demand.py src/jev_factorio/planning/economics.py src/jev_factorio/planning/factory.py src/jev_factorio/planning/goals.py src/jev_factorio/planning/input_routes.py src/jev_factorio/planning/materials.py src/jev_factorio/planning/output_buffers.py src/jev_factorio/planning/ready_work.py src/jev_factorio/planning/scheduling.py src/jev_factorio/planning/service_visits.py src/jev_factorio/production_sites.py src/jev_factorio/provenance.py src/jev_factorio/questions.py src/jev_factorio/replay.py src/jev_factorio/replay_causal.py src/jev_factorio/replay_source.py src/jev_factorio/research_core_evaluation.py src/jev_factorio/research_evaluation.py src/jev_factorio/research_events.py src/jev_factorio/research_log.py src/jev_factorio/research_reports.py src/jev_factorio/skills.py src/jev_factorio/state.py src/jev_factorio/supervisor.py src/jev_factorio/telemetry.py tests/attempt_helpers.py tests/fixtures/input_routes_runtime.lua tests/fixtures/output_buffers_runtime.lua tests/fixtures/replay/event-v1/events.jsonl tests/fixtures/replay/event-v1/manifest.json tests/input_routes_fixtures.py tests/test_attempt_integration.py tests/test_attempts.py tests/test_background_work.py tests/test_causal_native_integration.py tests/test_causal_trace.py tests/test_config.py tests/test_connections.py tests/test_craft_jobs.py tests/test_craft_jobs_lua.py tests/test_dashboard.py tests/test_dashboard_browser.py tests/test_dashboard_integration.py tests/test_deadline_scheduling.py tests/test_demand_service.py tests/test_diagnostics.py tests/test_duration.py tests/test_economic_production.py tests/test_evaluation.py tests/test_extension_tracing.py tests/test_factory.py tests/test_fair_actions.py tests/test_fle.py tests/test_hierarchical.py tests/test_input_route_contract.py tests/test_input_route_integration.py tests/test_input_routes_lua.py tests/test_judgments.py tests/test_local_decisions.py tests/test_output_buffer_contract.py tests/test_output_buffer_integration.py tests/test_output_buffers_lua.py tests/test_planner_consistency.py tests/test_planning.py tests/test_production_sites.py tests/test_provenance.py tests/test_provenance_gameplay.py tests/test_provenance_races.py tests/test_provider_failures.py tests/test_questions.py tests/test_ready_work.py tests/test_replay.py tests/test_replay_controller_integration.py tests/test_replay_research.py tests/test_research_cli.py tests/test_research_core_evaluation.py tests/test_research_evaluation.py tests/test_research_log.py tests/test_supervisor.py tests/test_supervisor_provenance.py 871a289c481f83ac53e52af63b377cac5faebe1b
+871a289c481f83ac53e52af63b377cac5faebe1b	refs/heads/main
+871a289c481f83ac53e52af63b377cac5faebe1b	refs/heads/main
+{"headRefOid": "91c85d35a280c21ac40dc2739707bd54832b7787", "mergeCommit": {"oid": "871a289c481f83ac53e52af63b377cac5faebe1b"}, "reviews": [], "state": "MERGED", "statusCheckRollup": [{"__typename": "CheckRun", "completedAt": "2026-09-22T19:55:33Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "chromium", "startedAt": "2026-09-22T19:54:05Z", "status": "COMPLETED", "workflowName": "Dashboard browser tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T19:54:58Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.10)", "startedAt": "2026-09-22T19:54:06Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T19:54:50Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.12)", "startedAt": "2026-09-22T19:54:05Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T19:54:50Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.13)", "startedAt": "2026-09-22T19:54:05Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T19:54:24Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.10)", "startedAt": "2026-09-22T19:54:05Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T19:54:21Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.12)", "startedAt": "2026-09-22T19:54:05Z", "status": "COMPLETED", "workflowName": "Python tests"}]}
+============================= test session starts ==============================
+platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/agent/factorio/jev-factorio
+configfile: pyproject.toml
+plugins: anyio-4.15.1
+collected 1490 items
+
+tests/test_attempt_integration.py ..............                         [  0%]
+tests/test_attempts.py ................................................. [  4%]
+                                                                         [  4%]
+tests/test_background_work.py ......................                     [  5%]
+tests/test_causal_native_integration.py ..............                   [  6%]
+tests/test_causal_trace.py ............................................. [  9%]
+..................                                                       [ 10%]
+tests/test_config.py .......                                             [ 11%]
+tests/test_connections.py ....................                           [ 12%]
+tests/test_craft_jobs.py ............................................... [ 15%]
+...........                                                              [ 16%]
+tests/test_craft_jobs_lua.py .............                               [ 17%]
+tests/test_dashboard.py ...............................                  [ 19%]
+tests/test_dashboard_browser.py ......................                   [ 21%]
+tests/test_dashboard_integration.py ...........                          [ 21%]
+tests/test_deadline_scheduling.py ...........                            [ 22%]
+tests/test_demand_service.py ...............                             [ 23%]
+tests/test_diagnostics.py .............                                  [ 24%]
+tests/test_duration.py ...                                               [ 24%]
+tests/test_economic_production.py ......................                 [ 26%]
+tests/test_evaluation.py ..........                                      [ 26%]
+tests/test_extension_tracing.py ...........                              [ 27%]
+tests/test_factory.py .................................................. [ 30%]
+........................................................................ [ 35%]
+................................                                         [ 37%]
+tests/test_fair_actions.py ...................................           [ 40%]
+tests/test_fle.py ..................                                     [ 41%]
+tests/test_hierarchical.py ......................                        [ 42%]
+tests/test_input_route_contract.py ..................................... [ 45%]
+............                                                             [ 46%]
+tests/test_input_route_integration.py ....................               [ 47%]
+tests/test_input_routes_lua.py ...............................           [ 49%]
+tests/test_judgments.py ......................                           [ 51%]
+tests/test_local_decisions.py ............................               [ 52%]
+tests/test_output_buffer_contract.py .................................   [ 55%]
+tests/test_output_buffer_integration.py .............                    [ 55%]
+tests/test_output_buffers_lua.py ...............                         [ 56%]
+tests/test_planner_consistency.py ................                       [ 58%]
+tests/test_planning.py ......................                            [ 59%]
+tests/test_production_sites.py .......................                   [ 61%]
+tests/test_provenance.py ......................                          [ 62%]
+tests/test_provenance_gameplay.py ..                                     [ 62%]
+tests/test_provenance_races.py ....                                      [ 62%]
+tests/test_provider_failures.py ............................             [ 64%]
+tests/test_questions.py .......                                          [ 65%]
+tests/test_ready_work.py ............................................    [ 68%]
+tests/test_replay.py ................................................... [ 71%]
+..................................                                       [ 73%]
+tests/test_replay_controller_integration.py ..                           [ 74%]
+tests/test_replay_research.py .....................                      [ 75%]
+tests/test_research_cli.py ............................................. [ 78%]
+.....                                                                    [ 78%]
+tests/test_research_core_evaluation.py .........................ss       [ 80%]
+tests/test_research_evaluation.py ...................................... [ 83%]
+..........................ss..............                               [ 86%]
+tests/test_research_log.py ............................................. [ 89%]
+.................................................                        [ 92%]
+tests/test_supervisor.py ............................................    [ 95%]
+tests/test_supervisor_provenance.py .................................... [ 97%]
+...........                                                              [ 98%]
+tests/test_transfer_recovery.py .......................                  [100%]
+
+================== 1486 passed, 4 skipped in 93.39s (0:01:33) ==================
+871a289c481f83ac53e52af63b377cac5faebe1b
+871a289c481f83ac53e52af63b377cac5faebe1b
+.env.example .github/workflows/dashboard.yml .github/workflows/tests.yml .gitignore AGENTS.md LICENSE README.md docs/ARCHITECTURE.md docs/ATTEMPT_DIAGNOSTICS.md docs/AUTONOMOUS_SUPERVISION.md docs/BACKGROUND_WORK.md docs/BUILD_PLAN.md docs/CAUSAL_LOGGING.md docs/DASHBOARD.md docs/DASHBOARD_ART.md docs/DEADLINE_SCHEDULING.md docs/DEMAND_AND_SERVICE_VISITS.md docs/ECONOMIC_PRODUCTION.md docs/FAIR_PLAY.md docs/FURNACE_INPUT_ROUTES.md docs/FURNACE_OUTPUT_BUFFERS.md docs/HIERARCHICAL_CONTROLLER.md docs/JOINT_PRODUCTION_SITES.md docs/LOCAL_DECISION_SELECTION.md docs/PERFORMANCE_INVESTIGATION_PROMPT.md docs/PLANNER_CAPABILITIES.md docs/PRODUCTION_EFFICIENCY.md docs/REPLAY.md docs/RESEARCH_EVALUATION.md docs/RESEARCH_LOGGING.md docs/SUPERVISOR_PROVENANCE.md docs/workflows/README.md docs/workflows/mermaid-config.json docs/workflows/mmd/00-complete-workflow.mmd docs/workflows/mmd/01-campaign-supervision.mmd docs/workflows/mmd/02-hierarchical-controller.mmd docs/workflows/mmd/03-goals-and-bootstrap.mmd docs/workflows/mmd/04-factory-dependency-planner.mmd docs/workflows/mmd/05-jev-candidate-judgment.mmd docs/workflows/mmd/06-native-action-execution.mmd docs/workflows/mmd/07-pending-action-verification.mmd docs/workflows/mmd/08-automatic-codex-repair.mmd docs/workflows/pngs/00-complete-workflow.png docs/workflows/pngs/01-campaign-supervision.png docs/workflows/pngs/02-hierarchical-controller.png docs/workflows/pngs/03-goals-and-bootstrap.png docs/workflows/pngs/04-factory-dependency-planner.png docs/workflows/pngs/05-jev-candidate-judgment.png docs/workflows/pngs/06-native-action-execution.png docs/workflows/pngs/07-pending-action-verification.png docs/workflows/pngs/08-automatic-codex-repair.png docs/workflows/pngs/manifest.json docs/workflows/render-svg-tiles.mjs docs/workflows/render.py pyproject.toml src/jev_factorio/__init__.py src/jev_factorio/__main__.py src/jev_factorio/backends/__init__.py src/jev_factorio/backends/base.py src/jev_factorio/backends/craft_jobs.py src/jev_factorio/backends/fair_actions.py src/jev_factorio/backends/fle.py src/jev_factorio/backends/input_routes.py src/jev_factorio/backends/mock.py src/jev_factorio/backends/native_factory.py src/jev_factorio/backends/output_buffers.py src/jev_factorio/backends/play_api.py src/jev_factorio/background.py src/jev_factorio/buffer_controller.py src/jev_factorio/causal_trace.py src/jev_factorio/controller.py src/jev_factorio/craft_jobs.py src/jev_factorio/dashboard.py src/jev_factorio/dashboard_assets/app.js src/jev_factorio/dashboard_assets/factory-steel.png src/jev_factorio/dashboard_assets/index.html src/jev_factorio/dashboard_assets/styles.css src/jev_factorio/diagnostics.py src/jev_factorio/evaluation.py src/jev_factorio/factory_contract.py src/jev_factorio/input_controller.py src/jev_factorio/input_routes.py src/jev_factorio/jev_client.py src/jev_factorio/judgments.py src/jev_factorio/loop.py src/jev_factorio/lua/catalog.lua src/jev_factorio/lua/craft_jobs.lua src/jev_factorio/lua/factory.lua src/jev_factorio/lua/fair_actions.lua src/jev_factorio/lua/input_routes.lua src/jev_factorio/lua/output_buffers.lua src/jev_factorio/lua/production_sites.lua src/jev_factorio/main.py src/jev_factorio/memory.py src/jev_factorio/output_buffers.py src/jev_factorio/planning/__init__.py src/jev_factorio/planning/background_work.py src/jev_factorio/planning/catalog.py src/jev_factorio/planning/connections.py src/jev_factorio/planning/decision_support.py src/jev_factorio/planning/demand.py src/jev_factorio/planning/economics.py src/jev_factorio/planning/factory.py src/jev_factorio/planning/goals.py src/jev_factorio/planning/input_routes.py src/jev_factorio/planning/materials.py src/jev_factorio/planning/output_buffers.py src/jev_factorio/planning/ready_work.py src/jev_factorio/planning/scheduling.py src/jev_factorio/planning/service_visits.py src/jev_factorio/production_sites.py src/jev_factorio/provenance.py src/jev_factorio/questions.py src/jev_factorio/replay.py src/jev_factorio/replay_causal.py src/jev_factorio/replay_source.py src/jev_factorio/research_core_evaluation.py src/jev_factorio/research_evaluation.py src/jev_factorio/research_events.py src/jev_factorio/research_log.py src/jev_factorio/research_reports.py src/jev_factorio/skills.py src/jev_factorio/state.py src/jev_factorio/supervisor.py src/jev_factorio/telemetry.py src/jev_factorio/transfer_recovery.py tests/attempt_helpers.py tests/fixtures/input_routes_runtime.lua tests/fixtures/output_buffers_runtime.lua tests/fixtures/replay/event-v1/events.jsonl tests/fixtures/replay/event-v1/manifest.json tests/input_routes_fixtures.py tests/test_attempt_integration.py tests/test_attempts.py tests/test_background_work.py tests/test_causal_native_integration.py tests/test_causal_trace.py tests/test_config.py tests/test_connections.py tests/test_craft_jobs.py tests/test_craft_jobs_lua.py tests/test_dashboard.py tests/test_dashboard_browser.py tests/test_dashboard_integration.py tests/test_deadline_scheduling.py tests/test_demand_service.py tests/test_diagnostics.py tests/test_duration.py tests/test_economic_production.py tests/test_evaluation.py tests/test_extension_tracing.py tests/test_factory.py tests/test_fair_actions.py tests/test_fle.py tests/test_hierarchical.py tests/test_input_route_contract.py tests/test_input_route_integration.py tests/test_input_routes_lua.py tests/test_judgments.py tests/test_local_decisions.py tests/test_output_buffer_contract.py tests/test_output_buffer_integration.py tests/test_output_buffers_lua.py tests/test_planner_consistency.py tests/test_planning.py tests/test_production_sites.py tests/test_provenance.py tests/test_provenance_gameplay.py tests/test_provenance_races.py tests/test_provider_failures.py tests/test_questions.py tests/test_ready_work.py tests/test_replay.py tests/test_replay_controller_integration.py tests/test_replay_research.py tests/test_research_cli.py tests/test_research_core_evaluation.py tests/test_research_evaluation.py tests/test_research_log.py tests/test_supervisor.py tests/test_supervisor_provenance.py tests/test_transfer_recovery.py 376a49d4d6c969a234934757790449084f7528c2
+376a49d4d6c969a234934757790449084f7528c2	refs/heads/main
+376a49d4d6c969a234934757790449084f7528c2	refs/heads/main
+{"headRefOid": "29cafba67c8060f036024175590e7cf8740d7094", "mergeCommit": {"oid": "376a49d4d6c969a234934757790449084f7528c2"}, "reviews": [], "state": "MERGED", "statusCheckRollup": [{"__typename": "CheckRun", "completedAt": "2026-09-22T21:28:38Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "chromium", "startedAt": "2026-09-22T21:27:04Z", "status": "COMPLETED", "workflowName": "Dashboard browser tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T21:28:45Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.10)", "startedAt": "2026-09-22T21:27:04Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T21:27:52Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.12)", "startedAt": "2026-09-22T21:27:04Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T21:27:50Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "unit (3.13)", "startedAt": "2026-09-22T21:27:04Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T21:27:19Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.10)", "startedAt": "2026-09-22T21:27:04Z", "status": "COMPLETED", "workflowName": "Python tests"}, {"__typename": "CheckRun", "completedAt": "2026-09-22T21:27:19Z", "conclusion": "SUCCESS", "detailsUrl": "[REDACTED]", "name": "research-export (3.12)", "startedAt": "2026-09-22T21:27:04Z", "status": "COMPLETED", "workflowName": "Python tests"}]}
+============================= test session starts ==============================
+platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/agent/factorio/jev-factorio
+configfile: pyproject.toml
+plugins: anyio-4.15.1
+collected 1495 items
+
+tests/test_attempt_integration.py ..............                         [  0%]
+tests/test_attempts.py ................................................. [  4%]
+...                                                                      [  4%]
+tests/test_background_work.py ......................                     [  5%]
+tests/test_causal_native_integration.py ..............                   [  6%]
+tests/test_causal_trace.py ............................................. [  9%]
+..................                                                       [ 11%]
+tests/test_config.py .......                                             [ 11%]
+tests/test_connections.py ....................                           [ 12%]
+tests/test_craft_jobs.py ............................................... [ 15%]
+...........                                                              [ 16%]
+tests/test_craft_jobs_lua.py .............                               [ 17%]
+tests/test_dashboard.py ...............................                  [ 19%]
+tests/test_dashboard_browser.py ......................                   [ 21%]
+tests/test_dashboard_integration.py ...........                          [ 21%]
+tests/test_deadline_scheduling.py ...........                            [ 22%]
+tests/test_demand_service.py ...............                             [ 23%]
+tests/test_diagnostics.py .............                                  [ 24%]
+tests/test_duration.py ...                                               [ 24%]
+tests/test_economic_production.py ......................                 [ 26%]
+tests/test_evaluation.py ..........                                      [ 26%]
+tests/test_extension_tracing.py ...........                              [ 27%]
+tests/test_factory.py .................................................. [ 30%]
+........................................................................ [ 35%]
+..................................                                       [ 37%]
+tests/test_fair_actions.py ...................................           [ 40%]
+tests/test_fle.py ..................                                     [ 41%]
+tests/test_hierarchical.py ......................                        [ 43%]
+tests/test_input_route_contract.py ..................................... [ 45%]
+............                                                             [ 46%]
+tests/test_input_route_integration.py ....................               [ 47%]
+tests/test_input_routes_lua.py ...............................           [ 49%]
+tests/test_judgments.py ......................                           [ 51%]
+tests/test_local_decisions.py ............................               [ 53%]
+tests/test_output_buffer_contract.py .................................   [ 55%]
+tests/test_output_buffer_integration.py .............                    [ 56%]
+tests/test_output_buffers_lua.py ...............                         [ 57%]
+tests/test_planner_consistency.py ................                       [ 58%]
+tests/test_planning.py ......................                            [ 59%]
+tests/test_production_sites.py .......................                   [ 61%]
+tests/test_provenance.py ......................                          [ 62%]
+tests/test_provenance_gameplay.py ..                                     [ 62%]
+tests/test_provenance_races.py ....                                      [ 63%]
+tests/test_provider_failures.py ............................             [ 64%]
+tests/test_questions.py .......                                          [ 65%]
+tests/test_ready_work.py ............................................    [ 68%]
+tests/test_replay.py ................................................... [ 71%]
+..................................                                       [ 74%]
+tests/test_replay_controller_integration.py ..                           [ 74%]
+tests/test_replay_research.py .....................                      [ 75%]
+tests/test_research_cli.py ............................................. [ 78%]
+.....                                                                    [ 78%]
+tests/test_research_core_evaluation.py .........................ss       [ 80%]
+tests/test_research_evaluation.py ...................................... [ 83%]
+..........................ss..............                               [ 86%]
+tests/test_research_log.py ............................................. [ 89%]
+.................................................                        [ 92%]
+tests/test_supervisor.py ............................................    [ 95%]
+tests/test_supervisor_provenance.py .................................... [ 97%]
+...........                                                              [ 98%]
+tests/test_transfer_recovery.py .......................                  [100%]
+
+================== 1491 passed, 4 skipped in 92.54s (0:01:32) ==================
+376a49d4d6c969a234934757790449084f7528c2

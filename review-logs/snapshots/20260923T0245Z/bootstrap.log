@@ -1,0 +1,54 @@
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at [REDACTED] for additional information.
+27018: Loading action agent/sleep/server.lua into game
+27018: Loading action agent/get_entities/server.lua into game
+27018: Loading action agent/place_entity_next_to/server.lua into game
+27018: Loading action agent/harvest_resource/server.lua into game
+27018: Loading action agent/move_to/server.lua into game
+27018: Loading action admin/request_path/server.lua into game
+27018: Loading action admin/get_path/server.lua into game
+27018: Loading action agent/nearest/server.lua into game
+27018: Loading action agent/get_entity/server.lua into game
+27018: Loading action agent/can_place_entity/server.lua into game
+27018: Loading action agent/set_research/server.lua into game
+27018: Loading action agent/launch_rocket/server.lua into game
+27018: Loading action agent/send_message/server.lua into game
+27018: Loading action admin/render_message/server.lua into game
+27018: Loading action agent/place_entity/server.lua into game
+27018: Loading action agent/pickup_entity/server.lua into game
+27018: Loading action agent/connect_entities/server.lua into game
+27018: Loading action agent/rotate_entity/server.lua into game
+27018: Loading action agent/inspect_inventory/server.lua into game
+27018: Loading action admin/extend_collision_boxes/server.lua into game
+27018: Loading action admin/clear_collision_boxes/server.lua into game
+27018: Loading action agent/extract_item/server.lua into game
+27018: Loading action agent/get_connection_amount/server.lua into game
+27018: Loading action agent/get_research_progress/server.lua into game
+27018: Loading action agent/craft_item/server.lua into game
+27018: Loading action agent/insert_item/server.lua into game
+27018: Loading action agent/nearest_buildable/server.lua into game
+27018: Loading action agent/score/server.lua into game
+27018: Loading action admin/score/server.lua into game
+27018: Loading action agent/set_entity_recipe/server.lua into game
+27018: Loading action agent/get_prototype_recipe/server.lua into game
+27018: Loading action agent/get_resource_patch/server.lua into game
+27018: Loading action admin/save_research_state/server.lua into game
+27018: Loading action admin/load_entity_state/server.lua into game
+27018: Loading action admin/load_research_state/server.lua into game
+27018: Loading action admin/render/server.lua into game
+Sprites not found (searched from /home/agent/factorio/jev-factorio to root and fallback locations). Vision rendering will produce empty images. Run 'fle sprites' to download, or set FLE_SPRITES_DIR.
+27018: Loading action admin/get_factory_centroid/server2.lua into game
+27018: Loading action admin/get_factory_centroid/server.lua into game
+27018: Loading action admin/load_blueprint/server.lua into game
+27018: Loading action admin/get_production_stats/server.lua into game
+27018: Loading action admin/regenerate_resources/server.lua into game
+27018: Loading action admin/clear_entities/server.lua into game
+27018: Loading action admin/reset/server.lua into game
+27018: Loading action admin/create_agent_characters/server.lua into game
+27018: Loading action admin/save_blueprint/server.lua into game
+27018: Loading action admin/save_entity_state/server.lua into game
+27018: Loading action admin/set_inventory/server.lua into game
+27018: Loading action admin/render_simple/server.lua into game
+[t=62119] running: walk_to_coal -> Moved to coal at (62.37890625, -25.41796875)
