@@ -263,6 +263,7 @@ function refreshStatus() {
 function setBroadcast(value) {
   broadcast = value;
   document.body.classList.toggle("broadcast", value);
+  document.documentElement.classList.toggle("obs-scrollbars-hidden", studio || value);
   $("broadcast").setAttribute("aria-pressed", String(value));
 }
 function stopCapture() {

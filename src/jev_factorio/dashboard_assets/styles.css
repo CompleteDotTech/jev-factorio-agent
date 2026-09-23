@@ -267,6 +267,10 @@ footer span:last-child{display:none}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
 }
 
+/* OBS compositions retain scrollable content without painting scrollbar chrome. */
+html.obs-scrollbars-hidden,html.obs-scrollbars-hidden *{scrollbar-width:none}
+html.obs-scrollbars-hidden::-webkit-scrollbar,html.obs-scrollbars-hidden *::-webkit-scrollbar{display:none;width:0;height:0}
+
 @media(min-width:1500px){
 body.studio:not(.broadcast){height:100vh;overflow:hidden;display:flex;flex-direction:column;background:transparent}
 body.studio:not(.broadcast) .topbar{height:48px;min-height:48px;padding:5px 12px;gap:24px}
