@@ -163,6 +163,12 @@ def capacity_fixture():
     state.inventory.update({'iron-ore': 50, 'stone-furnace': 1})
     state.factory['entities']['recipe:iron-plate'] = machine(recipe='iron-plate',
         fuel={'coal': 50}, input={'iron-ore': 30}, crafting=True, products_finished=100)
+    from jev_factorio.planning.capacity_evidence import CapacityHistory
+    history = CapacityHistory()
+    for offset in range(3):
+        state.tick = 10 + offset * 600
+        state.factory['entities']['recipe:iron-plate']['products_finished'] = 100 + offset
+        history.observe(state, data)
     planner = ReadyWorkPlanner(data, state, 'rocket_launch')
     planner._economic_products = {'iron-plate': 200}
     wait = planner._wait('machine_output', 'iron-plate', 10, 'recipe:iron-plate')

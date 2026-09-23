@@ -1,4 +1,5 @@
 """Use the real repository controller in CI; no provider or Factorio calls."""
+from dataclasses import asdict
 import copy
 import json
 from itertools import count
@@ -47,6 +48,7 @@ def test_real_controller_equivalence_and_producer_consumer(tmp_path, capsys, mon
     monkeypatch.setattr("jev_factorio.controller.utc_now", lambda: "2026-09-22T00:00:00+00:00")
     monkeypatch.setattr("jev_factorio.telemetry.utc_now", lambda: "2026-09-22T00:00:00+00:00")
     monkeypatch.setattr("jev_factorio.telemetry.time.perf_counter", lambda: 1.0)
+    monkeypatch.setattr("jev_factorio.telemetry.time.perf_counter_ns", lambda: 1_000_000_000)
     results = []
     path = tmp_path / "events.jsonl"
     for instrumented in (False, True):
@@ -70,7 +72,7 @@ def test_real_controller_equivalence_and_producer_consumer(tmp_path, capsys, mon
                 saves.append(checkpoint.read_bytes())
         output = capsys.readouterr().out
         results.append((records, saves, log.read_bytes(), output, backend.calls, model.calls,
-                        copy.deepcopy(backend.inv), copy.deepcopy(loop.memory.__dict__)))
+                        copy.deepcopy(backend.inv), asdict(loop.memory)))
     assert results[0] == results[1]
     assert "SECRET ERROR" not in path.read_text()
     monitor = Monitor(path)

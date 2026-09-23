@@ -94,6 +94,7 @@ def run_case(directory, controller, policy, mode, enabled, monkeypatch):
         patch.setattr(controller_module, "utc_now", lambda: "2026-09-22T00:00:00+00:00")
         patch.setattr(telemetry, "utc_now", lambda: "2026-09-22T00:00:00+00:00")
         patch.setattr(telemetry.time, "perf_counter", lambda: 100.0)
+        patch.setattr(telemetry.time, "perf_counter_ns", lambda: 100_000_000_000)
         loop = (AgentLoop(backend, client, **options) if controller == "flat" else
                 HierarchicalLoop(backend, client, policy=policy, target="bootstrap_mining",
                                  checkpoint=str(checkpoint), **options))

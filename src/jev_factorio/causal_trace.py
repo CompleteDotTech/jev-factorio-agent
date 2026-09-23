@@ -57,6 +57,7 @@ def traced_step(method):
 
 class CausalTrace:
     def __init__(self, sink: EventSink | None, controller: str, client=None, *, provenance=None):
+        self.metrics = None
         self.sink, self.controller = sink, controller
         self.enabled = sink is not None
         self.trace_id = uuid4().hex if self.enabled else None
@@ -117,7 +118,7 @@ class CausalTrace:
     def call(self, event_type: str, operation: Callable[[], T], *,
              details: dict | None = None,
              result: Callable[[T], dict] | None = None) -> T:
-        if not self.enabled:
+        if not self.enabled and self.metrics is None:
             return operation()
         if self._failed:
             raise ResearchLogError("Causal trace has failed")
@@ -126,9 +127,15 @@ class CausalTrace:
             value = operation()
         except BaseException as error:
             elapsed = time.perf_counter_ns() - start
+            if self.metrics is not None:
+                self.metrics.call(event_type, elapsed, failed=True)
             self.error(event_type, error, duration_ns=elapsed, **(details or {}))
             raise
         elapsed = time.perf_counter_ns() - start
+        if self.metrics is not None:
+            self.metrics.call(event_type, elapsed)
+        if not self.enabled:
+            return value
         try:
             captured = result(value) if result else {}
         except Exception:
@@ -139,7 +146,7 @@ class CausalTrace:
 
     def observe(self, backend, phase: str):
         if not self.enabled:
-            return backend.observe()
+            return self.call("observation", backend.observe)
         observation_id = self.identity("observation")
 
         def captured(snapshot):
@@ -153,7 +160,7 @@ class CausalTrace:
                          details={"phase": phase, "observation_id": observation_id}, result=captured)
 
     def client(self, client):
-        return TracedClient(client, self) if self.enabled and client is not None else client
+        return TracedClient(client, self) if (self.enabled or self.metrics is not None) and client is not None else client
 
     def pending_ref(self, plan_id: str, index: int, pending: dict, *, attempt_id=None) -> dict:
         key = (plan_id, index, pending["started_tick"], pending["action"])

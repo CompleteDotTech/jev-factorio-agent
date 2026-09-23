@@ -82,8 +82,14 @@ class HierarchicalLoop(AgentLoop):
         self._process_id = uuid4().hex
         self._attempt_clock: tuple[str, float] | None = None
         self._phases: list[dict] = []
+        self._persistence_failed = False
+        from .performance import PerformanceCounters
+        from .planning.capacity_evidence import CapacityHistory
+        self._performance = PerformanceCounters()
+        self._capacity_history = CapacityHistory()
         self.catalog = None
         self._trace = CausalTrace(research_log, "hierarchical", jev, provenance=self.provenance)
+        self._trace.metrics = self._performance if self.factory_scheduling == "ready-work" else None
         if target in {"rocket_launch", "iron_smelting", "steam_power", "automation_science"} \
                 and hasattr(backend, "enable_factory"):
             self.catalog = backend.enable_factory()
@@ -122,6 +128,8 @@ class HierarchicalLoop(AgentLoop):
         self._attempt_clock = None
 
     def _observe(self, stage: str = "observe") -> GameSnapshot:
+        if self._persistence_failed:
+            raise RuntimeError("Checkpoint persistence failed; reconstruct before continuing")
         with phase(stage, self._diagnostic_trace):
             return self._observe_snapshot()
 
@@ -145,12 +153,24 @@ class HierarchicalLoop(AgentLoop):
         self.memory.last_tick = snapshot.tick
         from .capital_controller import observe as observe_capital
         observe_capital(self, snapshot)
-        self._trace.emit("observation_validated", {"accepted": True})
+        evidence = (self._capacity_history.observe(snapshot, self.catalog)
+                    if self.catalog is not None and self.factory_scheduling == "ready-work" else {})
+        self._trace.emit("observation_validated", {"accepted": True, "capacity_evidence": evidence})
         return snapshot
 
     def _save(self) -> None:
-        self._trace.call("checkpoint_written", lambda: self.memory.save(self.checkpoint),
-                         details={"persisted": self.checkpoint is not None})
+        if self._persistence_failed:
+            raise RuntimeError("Checkpoint persistence failed; reconstruct before continuing")
+        self.memory._checkpoint_metrics = {}
+        try:
+            self._trace.call("checkpoint_written", lambda: self.memory.save(self.checkpoint),
+                             details={"persisted": self.checkpoint is not None},
+                             result=lambda _: {"checkpoint_io": deepcopy(self.memory._checkpoint_metrics)})
+        except BaseException:
+            self._persistence_failed = True
+            raise
+        finally:
+            self._performance.checkpoint(self.memory._checkpoint_metrics)
 
     def _clear_plan(self) -> None:
         attempt = self.memory.attempt
@@ -231,6 +251,8 @@ class HierarchicalLoop(AgentLoop):
             "pending": deepcopy(self.memory.pending), "history": deepcopy(self.memory.history[-8:]),
             "process_id": self._process_id, "recorded_at_utc": utc_now(),
             "phases": deepcopy(self._phases), "attempt": deepcopy(self.memory.attempt),
+            "performance": self._performance.snapshot(),
+            "capacity_evidence": deepcopy(getattr(after or before, "_capacity_evidence", {})),
             "attempt_outcomes": deepcopy(self.memory.attempt_outcomes[-8:]),
         }
         if getattr(self, "factory_scheduling", "serial") != "serial":
@@ -256,6 +278,14 @@ class HierarchicalLoop(AgentLoop):
         return {}
 
     def _step_allowed(self, step, snapshot: GameSnapshot) -> bool:
+        parameters = step.parameters or {}
+        role = parameters.get("role", "")
+        if (self.factory_scheduling == "ready-work" and self.catalog is not None
+                and step.action == "factory_place" and role.startswith("capacity:")):
+            from .planning.capacity_evidence import expansion_ready
+            recipe = role.removeprefix("capacity:").removesuffix(":2")
+            if not expansion_ready(snapshot, self.catalog, "recipe:" + recipe):
+                return False
         return step.allowed(snapshot)
 
     def _execution_barrier(self, snapshot: GameSnapshot) -> bool:
@@ -760,6 +790,9 @@ class HierarchicalLoop(AgentLoop):
         self._selection_support = {}
         self._trace.observation_phase = "before_decision"
         self._phases = []
+        from .performance import PerformanceCounters
+        self._performance = PerformanceCounters()
+        self._trace.metrics = self._performance if self.factory_scheduling == "ready-work" else None
         snapshot = self._observe()
         if self.memory.status == "uncertain" and self.memory.pending:
             return self._verify_pending(snapshot)

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 from copy import deepcopy
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -148,13 +147,5 @@ def outpost_loop_type(base):
                     raise ValueError('Invalid retained mining-outpost flow proof')
             return memory
 
-        def save(self, path):
-            super().save(path)
-            if path is not None and os.name == 'posix':
-                descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(descriptor)
-                finally:
-                    os.close(descriptor)
 
     return type('MiningOutpostLoop', (MiningOutpostMixin, base), {'memory_type': OutpostMemory, '__module__': __name__})

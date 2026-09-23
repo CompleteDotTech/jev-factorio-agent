@@ -31,15 +31,18 @@ stack-cap reductions; time passing alone never verifies output.
 
 ## Additional capacity
 
-A supplied, active producer with production history and sustained demand may gain
-one additional dedicated producer at `capacity:<recipe>:2`. Expansion requires
+A supplied, active producer with a measured multi-observation production window
+and current bounded demand may gain one additional dedicated producer at `capacity:<recipe>:2`. Expansion requires
 spare carried inputs, sufficient current input, working fuel/power, and estimated
 remaining processing benefit above construction/service cost. Input-starved,
 unpowered, unfueled, short-demand, or unproven producers are not capacity evidence.
 The additional machine is placed through the existing paid native builder and is
 serviced using ordinary individually verified transfers. Actual output, not a
 building count, makes its collection available. It is reused and replenished;
-no unbounded chain of new capacity roles is created.
+no unbounded chain of new capacity roles is created. New optional expansion also
+requires an already carried kit. See [Stage 4 performance](STAGE4_PERFORMANCE.md)
+for sampled evidence thresholds, research-wait opportunities, and measurement
+limitations. Existing paid extra cells remain serviceable after history resets.
 
 A faster unlocked machine can be selected for a new additional cell when justified
 by native recipe cost and speed. Existing paid machines are never automatically
