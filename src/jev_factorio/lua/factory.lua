@@ -1,3 +1,23 @@
+local function configured_player_index()
+    local index = storage.jev_player_index
+    if index == nil then index = 1 end
+    assert(type(index) == "number" and index > 0 and index % 1 == 0,
+        "Native player index must be a positive integer")
+    return index
+end
+
+-- Keep the same selection guard when this module is loaded independently.
+local player_index = configured_player_index()
+assert(storage.jev_bound_player_index == nil or storage.jev_bound_player_index == player_index,
+    "Native player index cannot change within a runtime")
+storage.jev_bound_player_index = player_index
+local function selected_player()
+    assert(configured_player_index() == player_index
+        and storage.jev_bound_player_index == player_index,
+        "Native player index cannot change within a runtime")
+    return game.get_player(player_index)
+end
+
 storage.campaign = storage.campaign or {entities = {}, connections = {}}
 local campaign = storage.campaign
 campaign.receipts = campaign.receipts or {}
@@ -134,7 +154,7 @@ campaign.observe = function()
             entities[role] = state
         end
     end
-    local player = game.get_player(1)
+    local player = selected_player()
     local statistics = force.get_item_production_statistics(agent.surface)
     local produced = {}
     for name in pairs(prototypes.item) do
@@ -271,7 +291,7 @@ end
 
 campaign.bind_player = function()
     local agent = storage.agent_characters[1]
-    local player = game.get_player(1)
+    local player = selected_player()
     assert(player and player.connected, "Native crafting requires a connected game client")
     assert(player and (not player.character or player.character == agent),
         "The crafting player already controls another character")
@@ -284,7 +304,7 @@ end
 campaign.craft = function(recipe_name, batches)
     storage.fair.actor()
     local agent = storage.agent_characters[1]
-    local player = game.get_player(1)
+    local player = selected_player()
     assert(player and player.connected and player.character == agent,
         "Native crafting requires the connected bound player")
     assert(player.crafting_queue_size == 0, "A native craft is already in flight")

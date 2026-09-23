@@ -100,6 +100,15 @@ but the agent session does not resume across server reloads; starting another ru
 resets the dedicated world again. Keep the viewer connected before initializing
 the agent; reconnecting viewers during a session is not yet validated.
 
+Native actions select player 1 by default. An integration adopting an existing
+connected character can set `jev_fle_runtime.jev_player_index` to a positive
+integer before loading the native action modules. The logical FLE agent slot
+`jev_fle_runtime.agent_characters[1]` must still identify that character. This is
+an internal runtime setting, not a CLI option. The first module load locks the
+selection for that runtime; changing it or selecting a different player on
+reattachment fails closed. Cleanup stops the originally selected character, and
+the adapter does not fall back to another connected player.
+
 To continue a live agent session for 12 hours instead of a fixed number of steps:
 
 ```bash
