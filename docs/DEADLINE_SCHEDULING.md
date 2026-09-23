@@ -38,3 +38,12 @@ coalesced native verification, and cadence exclusions for ambiguous actions. The
 unit matrix now also tests CPython 3.13 and retains its already-declared Lua test
 wheel with a checksum so the same Lua fixtures can be reproduced offline. This
 adds test coverage, not a runtime dependency or live-game validation claim.
+
+## Productive preparation and input coverage
+
+Ready-work also separates immediate raw requirements from optional stockpiles,
+services relevant producers before their inputs run out, and prepares a bounded
+extra current-research batch while the lab is supplied. See
+[Stage 1 productive scheduling](PRODUCTIVE_SCHEDULING.md) for bounds, forecast
+accounting, wait-yield behavior, and native validation requirements. These changes
+do not alter the deadline, cadence, receipt, or pending-action contracts above.
