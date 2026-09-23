@@ -31,6 +31,7 @@ class CampaignMemory:
     attempt: dict | None = None
     attempt_outcomes: list[dict] = field(default_factory=list)
     transfer_recovery: dict | None = None
+    capital_investment: dict | None = None
 
     def event(self, kind: str, **details) -> None:
         self.history.append({"kind": kind, **details})
@@ -57,7 +58,10 @@ class CampaignMemory:
         fd, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(asdict(self), stream, sort_keys=True, allow_nan=False)
+                data = asdict(self)
+                if self.capital_investment is None:
+                    data.pop('capital_investment')
+                json.dump(data, stream, sort_keys=True, allow_nan=False)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, path)
@@ -102,6 +106,15 @@ class CampaignMemory:
                     or type(memory.stalled_decisions) is not int or memory.stalled_decisions < 0
                     or len(memory.history) > 64 or not all(isinstance(e, dict) for e in memory.history)):
                 raise ValueError("Invalid checkpoint receipts or counters")
+            if memory.capital_investment is not None:
+                from .planning.capital import MARKER, matches, validate_state
+                validate_state(memory.capital_investment, memory.last_tick)
+                if memory.target != 'rocket_launch' or memory.active_goal != 'rocket_launch':
+                    raise ValueError('Capital investment requires the rocket production goal')
+                if memory.active_plan and MARKER in (memory.active_plan.get('materials') or {}):
+                    from .skills import Plan
+                    if not matches(Plan.from_dict(memory.active_plan), memory.capital_investment):
+                        raise ValueError('Active plan and capital investment disagree')
             for costs in memory.reservations.values():
                 quantities(costs)
             if memory.active_plan is not None:

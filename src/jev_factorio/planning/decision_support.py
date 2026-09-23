@@ -129,6 +129,16 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                         and len(requirements) == len(ingredients)):
                     urgency = max(urgency, 2)
                     reasons.append('unblocks_supplied_recipe:' + role)
+        capital = (plan.materials or {}).get('capital_investment')
+        if isinstance(capital, dict) and capital.get('observed_tick') == snapshot.tick:
+            from .capital import validate_spec, STAGES
+            try:
+                validate_spec(capital.get('spec'), catalog, snapshot.researched or [])
+                if capital.get('stage') in STAGES and plan.id.startswith(capital['spec']['key'] + ':'):
+                    urgency = max(urgency, 1)  # Below due supply and emergency maintenance.
+                    reasons.append('justified_capital_stage:' + capital['stage'])
+            except (ValueError, KeyError, TypeError):
+                pass  # Invalid or stale annotations cannot buy priority.
         target = (plan.materials or {}).get('local_objective')
         if target is not None:
             target = deepcopy(target)
