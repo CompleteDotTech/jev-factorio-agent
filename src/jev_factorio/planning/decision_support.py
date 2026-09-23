@@ -9,7 +9,8 @@ import json
 import math
 from copy import deepcopy
 
-from .scheduling import RAW_TICKS_PER_ITEM, SERVICE_TICKS, TRAVEL_TICKS_PER_TILE, research_schedule
+from .scheduling import (RAW_TICKS_PER_ITEM, SAFETY_TICKS, SERVICE_TICKS,
+                         TRAVEL_TICKS_PER_TILE, research_schedule)
 
 
 def _finite(value):
@@ -105,6 +106,17 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                 if role == 'utility:lab' and item in due_packs:
                     urgency = max(urgency, 3)
                     reasons.append('due_research_delivery:' + item)
+                # A current, coverage-due refill outranks optional stockpiling.
+                # This affects ranking only; native execution guards still apply.
+                schedule = (plan.materials or {}).get('scheduling', {})
+                coverage, lead = schedule.get('coverage_ticks'), schedule.get('lead_ticks')
+                if (schedule.get('kind') == 'producer_resupply'
+                        and schedule.get('observed_tick') == snapshot.tick
+                        and schedule.get('role') == role and schedule.get('item') == item
+                        and _finite(coverage) and coverage >= 0 and _finite(lead) and lead >= 0
+                        and coverage <= lead + SAFETY_TICKS):
+                    urgency = max(urgency, 2)
+                    reasons.append('due_producer_refill:' + role)
                 recipe = catalog.recipes.get(entity.get('recipe', ''), {})
                 ingredients = recipe.get('ingredients', [])
                 requirements = {i['name']: i['amount'] for i in ingredients if i.get('type') == 'item'}

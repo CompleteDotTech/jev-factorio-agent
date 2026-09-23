@@ -17,6 +17,7 @@ from .service_visits import service_visit
 from .scheduling import scheduled_research_wait, ready_research_work
 from .factory import FactoryPlanner, RAW_ITEMS, compile_factory
 from .economics import EconomicProduction
+from .productive_work import productive_work
 
 
 class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
@@ -47,7 +48,8 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
         }})
 
     def plan(self):
-        return self._capacity_work(ready_research_work(self, super().plan()))
+        primary = ready_research_work(self, super().plan())
+        return self._capacity_work(productive_work(self, primary))
 
     def _wait(self, effect, item="", threshold=0, role="", timeout=36000, identity=None):
         plan = super()._wait(effect, item, threshold, role, timeout, identity)
@@ -126,7 +128,9 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
     def _need(self, item, amount, path=()):
         if self.focus is None and self.snapshot.inventory.get(item, 0) < amount:
             self._set_focus(item, amount)
-        if item in self.raw_targets and self.snapshot.inventory.get(item, 0) < amount:
+        # Horizon quantities are optional candidates, never a prerequisite for
+        # supplying a producer whose immediate input requirement is smaller.
+        if self.speculative and item in self.raw_targets and self.snapshot.inventory.get(item, 0) < amount:
             amount = max(amount, self.raw_targets[item])
         # Do not create a dedicated trip for the one-unit edge of a speculative
         # horizon. The immediate prerequisite path is never suppressed.

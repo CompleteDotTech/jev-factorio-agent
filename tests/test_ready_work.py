@@ -123,7 +123,7 @@ def test_distinct_ready_ingredients_are_choices_not_just_one_plan():
     assert all(Plan.from_dict(plan.to_dict()) == plan for plan in plans)
 
 
-def test_shared_raw_demand_is_aggregated_with_existing_batch_cap():
+def test_shared_forecast_is_optional_and_immediate_raw_requirement_is_preserved():
     data, state = production_state(output=0, buffered=0, crafting=False)
     data.recipes["gear"] = recipe("gear", {"iron-plate": 2})
     data.recipes["automation-science-pack"] = recipe(
@@ -132,8 +132,10 @@ def test_shared_raw_demand_is_aggregated_with_existing_batch_cap():
     plans, _ = compile_ready_factory("automation_science", state, data)
     step = plans[0].steps[0]
     assert step.action == "factory_gather"
-    assert step.parameters == {"resource": "iron-ore", "quantity": 50}
-    assert step.threshold == 50
+    assert step.parameters == {"resource": "iron-ore", "quantity": 20}
+    assert step.threshold == 20
+    # A separate horizon candidate still amortizes optional gathering.
+    assert any(p.steps[0].parameters == {"resource": "iron-ore", "quantity": 50} for p in plans)
     assert "site:" in plans[0].id  # Preserve native target/failure provenance.
 
 
