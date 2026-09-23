@@ -215,7 +215,7 @@ class BackgroundWorkLoop(HierarchicalLoop):
                 and step.action == "factory_wait"
                 and step.effect in {"crafting_idle", "research_progress"}
                 and not step.satisfied(snapshot)):
-            candidates, _ = self._compile_candidates(snapshot)
+            candidates, _ = self._work_candidates(snapshot)
             if any(candidate.steps[0].action != "factory_wait"
                    and self.memory.failures.get(candidate.id, 0) < 2
                    and self._step_allowed(candidate.steps[0], snapshot)

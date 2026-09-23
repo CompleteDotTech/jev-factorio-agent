@@ -128,7 +128,7 @@ def test_machine_construction_does_not_recursively_invest_in_its_own_gear_assemb
     assert not getattr(planner, '_economic_acquiring', False)
 
 
-def test_optional_gear_machine_falls_back_to_paid_handcraft_when_its_kit_needs_gears():
+def test_optional_gear_machine_bootstraps_only_its_kit_without_recursive_investment():
     data, state = economic_catalog(), economic_state()
     state.inventory = {'iron-plate': 40}
     data.recipes['assembling-machine-1'] = recipe(
@@ -140,8 +140,8 @@ def test_optional_gear_machine_falls_back_to_paid_handcraft_when_its_kit_needs_g
     step = planner._need('iron-gear-wheel', 20).steps[0]
 
     assert step.action == 'factory_craft'
-    assert step.parameters == {'recipe': 'iron-gear-wheel', 'batches': 20}
-    assert step.costs == {'iron-plate': 40}
+    assert step.parameters == {'recipe': 'iron-gear-wheel', 'batches': 5}
+    assert step.costs == {'iron-plate': 10}
     assert 'factory_place' not in step.action
 
 

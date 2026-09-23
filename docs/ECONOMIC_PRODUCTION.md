@@ -63,3 +63,13 @@ cell fixture checks that extra output is observed before collection; placement
 and a feed receipt alone are insufficient. These are contract/behavior tests, not
 native Factorio throughput measurements. Matched-save native experiments remain
 necessary to measure starvation, milestone times, service travel, and useful output.
+
+## Staged bootstrap and committed investment
+
+Stage 3 removes the permanent self-ingredient exclusion for supported recurring
+crafting recipes. The planner acquires one kit with economic recursion disabled,
+then retains a durable objective through paid placement, configuration, supply,
+and observed production. Useful investment offers can compete with optional work
+while research runs; urgent supply and existing native safety barriers remain
+higher priority. See [CAPITAL_INVESTMENTS.md](CAPITAL_INVESTMENTS.md) for policy,
+checkpoint compatibility, evidence, failure budgets, and native benchmark requirements.

@@ -20,7 +20,8 @@ def service_visit(planner, plan, *, max_steps: int = 3):
     if type(max_steps) is not int or not 1 <= max_steps <= 4:
         raise ValueError('Invalid service visit budget')
     snapshot = planner.snapshot
-    if (planner.goal != 'rocket_launch' or len(plan.steps) != 1
+    if ((plan.materials or {}).get('capital_investment')
+            or planner.goal != 'rocket_launch' or len(plan.steps) != 1
             or plan.steps[0].action not in TRANSFER_ACTIONS
             or snapshot.factory.get('crafting_queue', 0)
             or not getattr(planner, 'allow_service_visits', True)):

@@ -190,7 +190,7 @@ def prepare_research_batch(planner: ReadyWorkPlanner, primary: Plan) -> Plan:
 
 def productive_work(planner: ReadyWorkPlanner, primary: Plan | None) -> Plan | None:
     """Preserve urgent/in-flight/infrastructure work; improve gather/passive slots."""
-    if (not primary or planner.goal != 'rocket_launch'
+    if (not primary or (primary.materials or {}).get('capital_investment') or planner.goal != 'rocket_launch'
             or planner.factory.get('player_bound') is not True
             or planner.factory.get('player_connected') is not True
             or planner.factory.get('crafting_queue', 0)

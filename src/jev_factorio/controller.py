@@ -50,6 +50,7 @@ class HierarchicalLoop(AgentLoop):
         if factory_scheduling not in {"serial", "ready-work"}:
             raise ValueError("Unknown factory scheduling policy")
         self.factory_scheduling = factory_scheduling
+        self._capital_fault = False
         if policy not in {"jev", "deterministic", "hybrid"}:
             raise ValueError("Unknown campaign policy")
         if policy != "deterministic" and jev is None:
@@ -142,6 +143,8 @@ class HierarchicalLoop(AgentLoop):
         if self.memory.session_id != snapshot.session_id or snapshot.tick < self.memory.last_tick:
             raise ValueError("Session changed or observation tick regressed; refusing to act")
         self.memory.last_tick = snapshot.tick
+        from .capital_controller import observe as observe_capital
+        observe_capital(self, snapshot)
         self._trace.emit("observation_validated", {"accepted": True})
         return snapshot
 
@@ -164,12 +167,15 @@ class HierarchicalLoop(AgentLoop):
         self._trace.clear_pending()
 
     def _fail_plan(self, reason: str) -> None:
-        key = self.memory.active_plan["id"]
+        failed_plan = Plan.from_dict(self.memory.active_plan)
+        key = failed_plan.id
         self.memory.failures[key] = self.memory.failures.get(key, 0) + 1
         self.memory.event("plan_failed", plan=key, reason=reason, tick=self.memory.last_tick)
         self._trace.emit("plan_failed", {"plan_id": key, "reason": reason})
         self.memory.reason = reason
         self._clear_plan()
+        from .capital_controller import fail as fail_capital
+        fail_capital(self, failed_plan)
         self._save()
 
     def _refresh_goals(self, snapshot: GameSnapshot) -> None:
@@ -245,13 +251,15 @@ class HierarchicalLoop(AgentLoop):
         return snapshot.for_jev()
 
     def _record_extras(self) -> dict:
+        if self.memory.capital_investment is not None:
+            return {"capital_investment": deepcopy(self.memory.capital_investment)}
         return {}
 
     def _step_allowed(self, step, snapshot: GameSnapshot) -> bool:
         return step.allowed(snapshot)
 
     def _execution_barrier(self, snapshot: GameSnapshot) -> bool:
-        return False
+        return self._capital_fault
 
     def _absent_ambiguous_placement(self, plan: Plan, step, snapshot: GameSnapshot) -> bool:
         """Prove that retrying an ambiguous placement cannot duplicate a building."""
@@ -527,6 +535,8 @@ class HierarchicalLoop(AgentLoop):
                             after, verified)
 
     def _verify_pending(self, snapshot: GameSnapshot) -> dict:
+        if self._execution_barrier(snapshot):
+            return self._record(snapshot, "observe", self.memory.reason)
         plan = Plan.from_dict(self.memory.active_plan)
         step = plan.steps[self.memory.step_index]
         pending = self.memory.pending
@@ -631,7 +641,7 @@ class HierarchicalLoop(AgentLoop):
         if (self.factory_scheduling == "ready-work" and self.catalog is not None
                 and self.memory.status == "running" and pending.get("dispatch") == "returned"
                 and step.action == "factory_wait" and step.effect == "machine_output"):
-            candidates, _ = self._compile_candidates(snapshot)
+            candidates, _ = self._work_candidates(snapshot)
             ready = [candidate for candidate in candidates
                      if self.memory.failures.get(candidate.id, 0) < 2
                      and candidate.steps[0].action != "factory_wait"
@@ -727,6 +737,15 @@ class HierarchicalLoop(AgentLoop):
             plans, blocker = compile_plans(self.memory.active_goal, snapshot)
         return [self._gather_remainder_plan(plan, snapshot) for plan in plans], blocker
 
+    def _work_candidates(self, snapshot: GameSnapshot) -> tuple[list[Plan], str]:
+        from .capital_controller import frontier
+        return frontier(self, snapshot)
+
+    def _investment_step_allowed(self, plan, step, snapshot) -> bool:
+        from .planning.capital import costs_allowed
+        return costs_allowed(replace(plan, steps=(step,)), snapshot,
+                             self.memory.capital_investment, self.catalog)
+
     def _fallback_plan(self, plans: list[Plan]) -> Plan:
         if self.factory_scheduling == "ready-work" and self.catalog is not None:
             evidence = getattr(self, "_selection_support", {})
@@ -755,7 +774,7 @@ class HierarchicalLoop(AgentLoop):
         if self.memory.active_plan is None:
             with phase("planning", self._diagnostic_trace):
                 plans, blocker = self._trace.call(
-                    "candidate_set_created", lambda: self._compile_candidates(snapshot),
+                    "candidate_set_created", lambda: self._work_candidates(snapshot),
                     result=lambda value: {"plans": [plan.to_dict() for plan in value[0]],
                                           "blocker": value[1]})
             plans = [p for p in plans if self.memory.failures.get(p.id, 0) < 2]
@@ -817,6 +836,8 @@ class HierarchicalLoop(AgentLoop):
                     if self.memory.stalled_decisions >= self.max_stalled_decisions:
                         self.memory.status = "blocked"
                     return self._record(snapshot, "observe", self.memory.reason)
+            from .capital_controller import commit as commit_capital
+            commit_capital(self, chosen, snapshot)
             self.memory.active_plan = chosen.to_dict()
             self.memory.step_index = 0
             self.memory.event("plan_committed", plan=chosen.id, source=self._decision.source,
@@ -845,7 +866,9 @@ class HierarchicalLoop(AgentLoop):
             return self._record(snapshot, "verify", "Plan effects already observed", fresh, True)
         self.memory.step_index = index
         step = plan.steps[index]
-        if not self._trace.call("precondition_checked", lambda: self._step_allowed(step, fresh),
+        if not self._trace.call("precondition_checked",
+                                lambda: self._step_allowed(step, fresh)
+                                and self._investment_step_allowed(plan, step, fresh),
                                 details={"plan_id": plan.id, "step_index": index},
                                 result=lambda value: {"allowed": value}):
             self._fail_plan("Plan precondition changed; replan from current observations")
