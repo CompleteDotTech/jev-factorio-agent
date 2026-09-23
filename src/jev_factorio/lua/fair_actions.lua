@@ -1,3 +1,24 @@
+local function configured_player_index()
+    local index = storage.jev_player_index
+    if index == nil then index = 1 end
+    assert(type(index) == "number" and index > 0 and index % 1 == 0,
+        "Native player index must be a positive integer")
+    return index
+end
+
+-- agent_characters[1] remains FLE's logical agent slot. The native player
+-- owning that character may have a different index, fixed for this runtime.
+local player_index = configured_player_index()
+assert(storage.jev_bound_player_index == nil or storage.jev_bound_player_index == player_index,
+    "Native player index cannot change within a runtime")
+storage.jev_bound_player_index = player_index
+local function selected_player()
+    assert(configured_player_index() == player_index
+        and storage.jev_bound_player_index == player_index,
+        "Native player index cannot change within a runtime")
+    return game.get_player(player_index)
+end
+
 storage.fair = storage.fair or {}
 local fair = storage.fair
 fair.quarantined = true
@@ -18,7 +39,7 @@ if storage.actions and storage.actions.inspect_inventory
 end
 
 fair.actor = function()
-    local player = game.get_player(1)
+    local player = selected_player()
     local character = storage.agent_characters and storage.agent_characters[1]
     assert(player and player.connected and character and character.valid,
         "Fair play requires the original connected character")
@@ -28,7 +49,8 @@ fair.actor = function()
 end
 
 fair.stop = function(reason)
-    local player = game.get_player(1)
+    -- Cleanup must still stop the original player when configuration drifts.
+    local player = game.get_player(player_index)
     if player and player.character == (storage.agent_characters or {})[1] then
         player.walking_state = {walking = false}
         player.mining_state = {mining = false}
@@ -48,7 +70,7 @@ fair.bind = function()
         assert(not storage[name] or next(storage[name]) == nil,
             "Legacy scripted work must be reconciled: " .. name)
     end
-    local player = game.get_player(1)
+    local player = selected_player()
     local character = (storage.agent_characters or {})[1]
     assert(player and player.connected and character and character.valid,
         "Fair play requires the original connected character")
