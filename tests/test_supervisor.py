@@ -420,7 +420,7 @@ def test_code_verification_rechecks_source_after_tests(supervisor, monkeypatch, 
                          "commit": {"oid": "c" * 40}}],
             "statusCheckRollup": [{"conclusion": "SUCCESS"}]}
     calls = iter([
-        (0, commit), (0, ""), (0, commit + "\trefs/heads/main"),
+        (0, commit), (0, ""), (0, "origin\nfork"), (0, commit + "\trefs/heads/main"),
         (0, commit + "\trefs/heads/main"), (0, json.dumps(pull)),
         (0, "passed"), (0, status), (0, head),
     ])
@@ -456,3 +456,34 @@ def test_non_object_checkpoint_is_repairable(supervisor, invalid):
     supervisor.config.checkpoint.write_text(json.dumps(invalid))
     supervisor.initialize()
     assert supervisor.state["repair_required"]
+
+
+@pytest.mark.parametrize('remotes,fork_head,accepted', [
+    ('origin', 'a' * 40, True),
+    ('origin\nfork', 'a' * 40, True),
+    ('origin\nfork', 'b' * 40, False),
+    ('fork', 'a' * 40, False),
+    ('', 'a' * 40, False),
+])
+def test_code_verification_requires_origin_and_checks_configured_fork(
+        supervisor, monkeypatch, remotes, fork_head, accepted):
+    commit = 'a' * 40
+    pull = {'state': 'MERGED', 'mergeCommit': {'oid': commit}, 'headRefOid': 'c' * 40,
+            'reviews': [{'author': {'login': 'reviewer'}, 'state': 'APPROVED',
+                         'commit': {'oid': 'c' * 40}}],
+            'statusCheckRollup': [{'conclusion': 'SUCCESS'}]}
+    seen = []
+    def capture(command):
+        seen.append(command)
+        if command == ['git', 'rev-parse', 'HEAD']: return 0, commit
+        if command == ['git', 'status', '--porcelain']: return 0, ''
+        if command == ['git', 'remote']: return 0, remotes
+        if command[:2] == ['git', 'ls-remote']:
+            assert command[2] in remotes.splitlines()
+            return 0, (fork_head if command[2] == 'fork' else commit) + '\trefs/heads/main'
+        if command[:3] == ['gh', 'pr', 'view']: return 0, json.dumps(pull)
+        if command == [supervisor.config.python, '-m', 'pytest', 'tests/']: return 0, 'passed'
+        pytest.fail(f'Unexpected command: {command}')
+    monkeypatch.setattr(supervisor, 'capture', capture)
+    assert supervisor.verify_code({'commit': commit, 'pr_url': 'https://github.com/o/r/pull/1'}) is accepted
+    assert ([supervisor.config.python, '-m', 'pytest', 'tests/'] in seen) is accepted

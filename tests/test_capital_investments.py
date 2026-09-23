@@ -601,3 +601,51 @@ def test_capital_events_have_valid_durable_research_integrity(tmp_path):
     rows = [json.loads(line) for line in (directory / 'events.jsonl').read_text().splitlines()]
     assert any(row['event_type'] == 'capital_committed' for row in rows)
     assert any(row['event_type'] == 'capital_completed' for row in rows)
+
+
+@pytest.mark.parametrize('shortcut', ['boiler', 'urgency'])
+def test_exhausted_investment_resume_uses_ordinary_work_before_shortcuts(tmp_path, monkeypatch, shortcut):
+    data, state = scenario()
+    backend = Backend(data, state)
+    path = tmp_path / 'exhausted.json'
+    loop = make_loop(backend, path, primary=lambda s: offer(data, s))
+    key = offer(data, state).materials[capital.MARKER]['spec']['key']
+    loop.memory.failures[key] = 2
+    loop._save()
+    if shortcut == 'boiler':
+        state.factory['entities']['utility:boiler']['fuel']['coal'] = 0
+    else:
+        original = capital_controller.candidate_evidence
+        def urgent(snapshot, catalog, plans):
+            evidence = original(snapshot, catalog, plans)
+            for row in evidence.values():
+                row['urgency'] = 2
+            return evidence
+        monkeypatch.setattr(capital_controller, 'candidate_evidence', urgent)
+    loop = make_loop(backend, path, resume=True, primary=lambda s: offer(data, s))
+    loop._observe()  # Resume restores the durable memory on first observation.
+    plans, _ = loop._work_candidates(state)
+    assert plans and all(capital.MARKER not in (p.materials or {}) for p in plans)
+    result = loop.step()
+    assert backend.calls and loop.memory.status == 'running'
+    if shortcut == 'boiler':
+        assert result['verified'] and loop.memory.pending is None
+    else:
+        assert loop.memory.pending['action'] == 'factory_wait'
+    assert loop.memory.capital_investment is None
+    assert loop.memory.failures[key] == 2
+    assert not any(e['kind'] == 'capital_committed' for e in loop.memory.history)
+    assert all(not costs for costs in loop.memory.reservations.values())
+
+
+def test_stale_offer_for_existing_producer_keeps_ordinary_work():
+    data, state = scenario()
+    stale = offer(data, state)
+    state.factory['entities'][ROLE] = machine(MACHINE, unit_number=80, recipe=ITEM,
+        products_finished=0, energy=100, electric_network_id=1)
+    loop = make_loop(Backend(data, state), primary=lambda s: stale)
+    plans, _ = loop._work_candidates(state)
+    assert plans and all(capital.MARKER not in (p.materials or {}) for p in plans)
+    assert loop.memory.capital_investment is None
+    with pytest.raises(ValueError, match='Cannot start capital commitment'):
+        capital_controller.commit(loop, stale, state)

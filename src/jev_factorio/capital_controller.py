@@ -18,6 +18,11 @@ def enabled(loop):
     return loop.factory_scheduling == 'ready-work' and loop.catalog is not None and loop.target == 'rocket_launch'
 
 
+def _available(loop, spec, snapshot):
+    return (spec['role'] not in snapshot.factory.get('entities', {})
+            and loop.memory.failures.get(spec['key'], 0) < 2)
+
+
 def commit(loop, plan, snapshot):
     marker = (plan.materials or {}).get(capital.MARKER)
     if not marker:
@@ -28,9 +33,8 @@ def commit(loop, plan, snapshot):
     capital.validate_spec(spec, loop.catalog, snapshot.researched or [])
     state = loop.memory.capital_investment
     if state is None:
-        if (spec['role'] in snapshot.factory.get('entities', {})
-                or loop.memory.failures.get(spec['key'], 0) >= 2
-                or loop.memory.pending or getattr(loop.memory, 'background_job', None)):
+        if (not _available(loop, spec, snapshot) or loop.memory.pending
+                or getattr(loop.memory, 'background_job', None)):
             raise ValueError('Cannot start capital commitment at this boundary')
         state = {'spec': deepcopy(spec), 'stage': marker['stage'], 'started_tick': snapshot.tick,
                  'deadline_tick': snapshot.tick + min(capital.MAX_INVESTMENT_TICKS,
@@ -144,13 +148,17 @@ def frontier(loop, snapshot):
         abandon(loop, 'bounded_investment_deadline')
         state = None
     planner = getattr(loop, 'planner_type', ReadyWorkPlanner)(loop.catalog, snapshot, 'rocket_launch')
+    def admissible(plan):
+        marker = (plan.materials or {}).get(capital.MARKER)
+        return (not marker or (capital.matches(plan, state) if state is not None
+                               else _available(loop, marker['spec'], snapshot)))
     def feasible(plan):
-        return (len(plan.steps) == 1 and loop._step_allowed(plan.steps[0], snapshot)
+        return (admissible(plan) and len(plan.steps) == 1 and loop._step_allowed(plan.steps[0], snapshot)
                 and not plan.steps[0].satisfied(snapshot)
                 and loop.memory.failures.get(plan.id, 0) < 2
                 and capital.costs_allowed(plan, snapshot, state, loop.catalog))
     safe = [plan for plan in original
-            if (state is None or capital.MARKER not in (plan.materials or {}) or capital.matches(plan, state))
+            if admissible(plan)
             and capital.costs_allowed(plan, snapshot, state, loop.catalog)]
     # An in-flight craft retains output locks, and no capital construction joins it.
     if snapshot.factory.get('crafting_queue', 0) or getattr(loop.memory, 'background_job', None):
@@ -158,6 +166,17 @@ def frontier(loop, snapshot):
         return safe or [Plan('capital:crafting-wait', 'rocket_launch',
                             'Protect the committed kit while native crafting continues',
                             (Step('factory_wait', 'crafting_idle', timeout_ticks=1800),))], blocker
+    if state is None and not safe and original:
+        # Reject optional intent before urgency shortcuts, but retain ordinary
+        # acquisition so an exhausted investment cannot stop the controller.
+        planner._economic_acquiring = True
+        try:
+            safe = [p for p in planner.candidates() if feasible(p)]
+            tracked = getattr(loop, '_tracked_plan', None)
+            if tracked:
+                safe = [tracked(p, snapshot) for p in safe]
+        finally:
+            planner._economic_acquiring = False
     # Preserve native binding and urgent power/burner maintenance.
     boiler = snapshot.factory.get('entities', {}).get('utility:boiler', {})
     if (snapshot.factory.get('player_bound') is not True or snapshot.factory.get('player_connected') is not True
@@ -184,19 +203,6 @@ def frontier(loop, snapshot):
         except (ValueError, KeyError):
             pass  # Never bypass capability guards with a less capable planner.
         return safe, blocker or 'No safe continuation for committed capital investment'
-    # Suppress exhausted investments without hiding the ordinary acquisition path.
-    safe = [p for p in safe if not (p.materials or {}).get(capital.MARKER)
-            or loop.memory.failures.get(p.materials[capital.MARKER]['spec']['key'], 0) < 2]
-    if not safe and original:
-        # A declined optional investment must not erase ordinary progression.
-        planner._economic_acquiring = True
-        try:
-            safe = [p for p in planner.candidates() if feasible(p)]
-            tracked = getattr(loop, '_tracked_plan', None)
-            if tracked:
-                safe = [tracked(p, snapshot) for p in safe]
-        finally:
-            planner._economic_acquiring = False
     if (_protected_work(snapshot) or not snapshot.factory.get('research')
             or any(p.steps[0].action not in {'factory_wait', 'factory_gather'}
                    and capital.MARKER not in (p.materials or {}) for p in safe)):

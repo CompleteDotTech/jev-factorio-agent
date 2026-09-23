@@ -497,7 +497,7 @@ Do not report repaired or permit resume with a fairness regression or an
 unresolved fairness concern; report blocked with the missing evidence instead.
 You are authorized to make focused commits, push a repair branch, open a PR,
 and merge only after required checks pass and independent exact-head source
-review approves. Synchronize origin and fork after merge. Never bypass checks,
+review approves. Synchronize origin and any configured fork after merge. Never bypass checks,
 force-push, expose credentials, or claim success from dispatch acknowledgement.
 Complete fix, tests, independent review, publication/merge, and synchronization
 before reporting a code repair accepted; the supervisor alone resumes gameplay,
@@ -589,7 +589,12 @@ Only report repaired when every acceptance requirement is verified.
         code, worktree = self.capture(["git", "status", "--porcelain"])
         if code != 0 or worktree:
             return False
+        code, configured = self.capture(["git", "remote"])
+        if code != 0 or "origin" not in configured.splitlines():
+            return False
         for remote in ("origin", "fork"):
+            if remote == "fork" and remote not in configured.splitlines():
+                continue
             code, reference = self.capture(["git", "ls-remote", remote, "refs/heads/main"])
             if code != 0 or reference.split() != [commit, "refs/heads/main"]:
                 return False
