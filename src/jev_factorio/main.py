@@ -53,6 +53,8 @@ def cli() -> None:
                    help="Opt-in paid burner-inserter output buffers; requires ready-work FLE")
     p.add_argument("--furnace-input-belts", action="store_true",
                    help="Opt-in owned drill/belt input routes; requires furnace output buffers")
+    p.add_argument("--mining-outposts", action="store_true",
+                   help="Opt-in paid mining outposts for existing manual cells; requires furnace input belts")
     p.add_argument("--background-work", action="store_true",
                    help="Opt-in receipt-tracked crafting and research prefetch; requires ready-work FLE")
     p.add_argument("--target", choices=("bootstrap_mining", "iron_smelting", "steam_power",
@@ -93,6 +95,8 @@ def cli() -> None:
         or args.backend != "fle" or args.target == "bootstrap_mining"
     ):
         p.error("--background-work requires hierarchical FLE ready-work and a native production target")
+    if args.mining_outposts and (not args.furnace_input_belts or args.target != 'rocket_launch'):
+        p.error('--mining-outposts requires --furnace-input-belts and --target rocket_launch')
     if args.furnace_input_belts and not args.furnace_output_buffers:
         p.error("--furnace-input-belts requires --furnace-output-buffers")
     if args.furnace_output_buffers and (
@@ -159,7 +163,7 @@ def cli() -> None:
             legacy_log_enabled=bool(args.log_file), checkpoint_enabled=bool(args.checkpoint),
             factory_scheduling=args.factory_scheduling, background_work=args.background_work,
             furnace_output_buffers=args.furnace_output_buffers,
-            furnace_input_belts=args.furnace_input_belts,
+            furnace_input_belts=args.furnace_input_belts, mining_outposts=args.mining_outposts,
         )
     with ExitStack() as cleanup:
         research = None
@@ -194,6 +198,9 @@ def cli() -> None:
                 from .input_controller import input_loop_type
 
                 loop_type = input_loop_type(loop_type)
+            if args.mining_outposts:
+                from .outpost_controller import outpost_loop_type
+                loop_type = outpost_loop_type(loop_type)
             loop = loop_type(make_backend(args.backend, resume=args.resume,
                                                  adopt_session=args.adopt_session), jev=client,
                                     target=args.target, policy=args.policy, checkpoint=args.checkpoint,

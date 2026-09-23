@@ -171,4 +171,9 @@ def load_checkpoint(path: Path, session_id: str, target: str) -> CampaignMemory:
             raise ValueError("Incomplete input-route checkpoint extension")
         from .input_controller import input_loop_type
         loop_type = input_loop_type(loop_type)
+    if {'outposts_schema', 'outpost_commitments'} & data.keys():
+        if not {'outposts_schema', 'outpost_commitments', 'input_routes_schema', 'input_commitments'} <= data.keys():
+            raise ValueError('Incomplete mining-outpost checkpoint extension')
+        from .outpost_controller import outpost_loop_type
+        loop_type = outpost_loop_type(loop_type)
     return loop_type.memory_type.load(path, session_id, target)

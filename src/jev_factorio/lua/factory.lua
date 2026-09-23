@@ -142,6 +142,7 @@ campaign.observe = function()
         if amount > 0 then produced[name] = amount end
     end
     return {
+        mining_outposts = campaign.observe_mining_outposts and campaign.observe_mining_outposts() or nil,
         tick = game.tick,
         entities = entities,
         force_entity_counts = force_entity_counts,
@@ -217,6 +218,9 @@ campaign.pipe_source = function(source_role, target_role, fluid_name)
 end
 
 campaign.transfer = function(role, item, quantity, receipt, extracting)
+    if campaign.guard_mining_outpost_transfer then
+        campaign.guard_mining_outpost_transfer(role, item, quantity, receipt, extracting)
+    end
     assert(not campaign.receipts[receipt], "Transfer receipt already exists")
     local agent = storage.agent_characters[1]
     local machine = entity_for(role)

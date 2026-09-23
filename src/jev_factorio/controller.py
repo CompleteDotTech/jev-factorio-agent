@@ -126,6 +126,8 @@ class HierarchicalLoop(AgentLoop):
 
     def _observe_snapshot(self) -> GameSnapshot:
         snapshot = self._trace.observe(self.backend, self._trace.observation_phase)
+        if 'mining_outposts' in snapshot.factory and not getattr(self, '_mining_outposts_enabled', False):
+            raise ValueError('Existing mining-outpost runtime requires its explicit controller capability')
         if not snapshot.session_id or snapshot.world_kind not in {"mock", "fle"}:
             raise ValueError("Hierarchical control requires identified backend/session telemetry")
         if self.policy != "deterministic" and getattr(self.jev, "is_mock", False) and snapshot.world_kind != "mock":

@@ -240,6 +240,8 @@ fair.find_build_site = function(name, center, radius)
                     build_check_type = defines.build_check_type.manual
                 } and (not storage.campaign or not storage.campaign.production_reserved
                     or not storage.campaign.production_reserved(name, position, direction))
+                    and (not storage.campaign or not storage.campaign.mining_outpost_reserved
+                    or not storage.campaign.mining_outpost_reserved(name, position, direction))
                     and (not best or distance < best_distance) then
                     best = {position = position, direction = direction}
                     best_distance = distance

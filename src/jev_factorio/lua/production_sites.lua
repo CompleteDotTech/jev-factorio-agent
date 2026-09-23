@@ -30,6 +30,8 @@ local function conflicts(candidate,parts)
     return false
 end
 local function clear(candidate,player)
+    if campaign.mining_outpost_reserved and campaign.mining_outpost_reserved(
+        candidate.name,candidate.position,candidate.direction) then return false end
     return player.surface.can_place_entity{name=candidate.name,position=candidate.position,
         direction=candidate.direction,force=player.force,build_check_type=defines.build_check_type.manual}
 end

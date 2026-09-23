@@ -4,9 +4,10 @@ from __future__ import annotations
 import math
 
 from .state import GameSnapshot
-from . import output_buffers, input_routes, production_sites
+from . import output_buffers, input_routes, production_sites, mining_outposts
 
 COMMAND_FIELDS = {
+    mining_outposts.COMMAND: mining_outposts.FIELDS,
     output_buffers.COMMAND: output_buffers.FIELDS,
     input_routes.COMMAND: input_routes.FIELDS,
     "factory_bind": set(),
@@ -27,11 +28,14 @@ EFFECTS = {
     "player_bound", "machine", "machine_recipe", "machine_input", "machine_fuel",
     "machine_output", "connection", "research_started", "researched", "research_progress",
     "crafting_idle", "rocket_ready", "rocket_parts", "rocket_launched", "produced", "transfer",
-    "explored", "powered", "craft_job_complete", *output_buffers.EFFECTS, *input_routes.EFFECTS,
+    "explored", "powered", "craft_job_complete", *mining_outposts.EFFECTS, *output_buffers.EFFECTS, *input_routes.EFFECTS,
 }
 
 
 def validate_command(action: str, parameters: dict) -> None:
+    if action == mining_outposts.COMMAND:
+        mining_outposts.validate(parameters)
+        return
     if action == input_routes.COMMAND:
         input_routes.validate(parameters)
         return
@@ -73,6 +77,10 @@ def connected(factory: dict, source: str, target: str, kind: str, fluid: str) ->
 
 def satisfied(effect: str, item: str, threshold: float, parameters: dict, snapshot: GameSnapshot,
               action: str = "") -> bool:
+    if effect == "outpost_component":
+        return action == mining_outposts.COMMAND and mining_outposts.component_complete(parameters, snapshot)
+    if effect == "outpost_flow":
+        return action == "factory_wait" and mining_outposts.flow_complete(parameters.get("role", ""), item, snapshot)
     if effect == "input_component":
         return action == input_routes.COMMAND and input_routes.component_complete(parameters, snapshot)
     if effect == "input_flow":
@@ -135,6 +143,12 @@ def satisfied(effect: str, item: str, threshold: float, parameters: dict, snapsh
 
 def allowed(action: str, parameters: dict, snapshot: GameSnapshot) -> bool:
     validate_command(action, parameters)
+    if "mining_outposts" in snapshot.factory:
+        try:
+            if not mining_outposts.permits(action, parameters, snapshot):
+                return False
+        except (ValueError, TypeError, KeyError):
+            return False
     if "input_routes" in snapshot.factory:
         try:
             if not input_routes.permits(action, parameters, snapshot):
@@ -151,6 +165,8 @@ def allowed(action: str, parameters: dict, snapshot: GameSnapshot) -> bool:
                 return False
         except ValueError:
             return False
+    if action == mining_outposts.COMMAND:
+        return mining_outposts.allowed(parameters, snapshot)
     factory = snapshot.factory
     entities = factory.get("entities", {})
     machine = entities.get(parameters.get("role", ""), {})
