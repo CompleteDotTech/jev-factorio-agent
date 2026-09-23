@@ -55,3 +55,11 @@ and end-to-end three-sample input/output commissioning. Python tests cover the
 real planner/contract and adapter's prepare-walk-build sequence, including a lost
 response. These fixtures are not a native Factorio throughput benchmark. Run
 matched saved-state native trials separately before claiming gameplay speedup.
+
+## Existing manual-cell alternative
+
+The opt-in [mining outposts](MINING_OUTPOSTS.md) capability supplies a bounded
+additive alternative when these legacy furnace sites cannot obtain a direct
+input route. It preserves the existing cell and automates ore mining into an
+owned chest; the agent still hauls verified ore in batches. It does not migrate
+this module's furnace/site ownership or claim a commissioned furnace belt route.

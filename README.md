@@ -168,3 +168,13 @@ This project derives from `Adibrill1/jev-factorio`, which publishes no license
 file. The MIT grant here covers CompleteTech's own additions and modifications;
 confirm the upstream terms with that project's author before reusing the
 inherited skeleton elsewhere.
+
+### Mining automation for existing manual cells
+
+The opt-in `--mining-outposts` extension adds paid iron/copper drill-to-chest
+outposts when an established furnace lacks a supported direct input route.
+Existing furnaces and receipts remain unchanged; ore is collected only after
+native flow evidence and then hauled in batches. See
+[Mining outposts](docs/MINING_OUTPOSTS.md) for required controller flags,
+idle-boundary checkpoint enablement, supervisor handoff limits, and native
+benchmark requirements. This is not full belt transport or a live deployment.

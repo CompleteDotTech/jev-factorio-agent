@@ -57,6 +57,7 @@ class SupervisorConfig:
     background_work: bool = False
     furnace_output_buffers: bool = False
     furnace_input_belts: bool = False
+    mining_outposts: bool = False
 
     def validate(self) -> None:
         if self.factory_scheduling not in {"serial", "ready-work"}:
@@ -64,6 +65,8 @@ class SupervisorConfig:
         if (self.background_work or self.furnace_output_buffers or self.furnace_input_belts
                 ) and self.factory_scheduling != "ready-work":
             raise ValueError("Production extensions require ready-work scheduling")
+        if self.mining_outposts and not self.furnace_input_belts:
+            raise ValueError('Mining outposts require furnace input belts')
         if self.furnace_input_belts and not self.furnace_output_buffers:
             raise ValueError("Furnace input belts require furnace output buffers")
         if self.run_id is not None:
@@ -297,6 +300,10 @@ class Supervisor:
                 "furnace_output_buffers", "furnace_input_belts",
             )
         }
+        # Keep old disabled configurations byte-for-byte comparable. Enabling is
+        # a distinct treatment, never a silent change to a running supervisor.
+        if self.config.mining_outposts:
+            configuration['mining_outposts'] = True
         if self.state.get("gameplay_configuration", configuration) != configuration:
             raise ValueError("Existing gameplay configuration cannot be changed")
         self.save(gameplay_configuration=configuration)
@@ -402,7 +409,7 @@ class Supervisor:
             "--log-file", str(self.config.state_dir / "gameplay.jsonl"),
             "--factory-scheduling", self.config.factory_scheduling,
         ]
-        for name in ("background_work", "furnace_output_buffers", "furnace_input_belts"):
+        for name in ("background_work", "furnace_output_buffers", "furnace_input_belts", "mining_outposts"):
             if getattr(self.config, name):
                 command.append("--" + name.replace("_", "-"))
         if self.config.research_dir is not None:
@@ -461,7 +468,7 @@ Research segment: {self.state['segment_id']}
 Incident: {(self.state.get('incident') or {}).get('incident_id')}
 Repair attempt: {self.state['attempt']}
 Controller checkpoint: {self.config.checkpoint}
-Production configuration: scheduling={self.config.factory_scheduling}, background_work={self.config.background_work}, furnace_output_buffers={self.config.furnace_output_buffers}, furnace_input_belts={self.config.furnace_input_belts}
+Production configuration: scheduling={self.config.factory_scheduling}, background_work={self.config.background_work}, furnace_output_buffers={self.config.furnace_output_buffers}, furnace_input_belts={self.config.furnace_input_belts}, mining_outposts={self.config.mining_outposts}
 Supervisor audit/log directory: {self.config.state_dir}
 Read {self.config.state_dir / 'OPERATIONS.md'} first if present for native session
 and repository acceptance details.
@@ -652,11 +659,11 @@ Only report repaired when every acceptance requirement is verified.
                 )):
                     return False
             extension_keys = ("background_schema", "background_job", "background_attempt",
-                              "input_routes_schema", "input_commitments")
+                              "input_routes_schema", "input_commitments", "outposts_schema", "outpost_commitments")
             if any(key in previous and current.get(key) != previous[key]
                    for key in extension_keys):
                 return False
-            if previous.get("background_job") or previous.get("input_commitments"):
+            if previous.get("background_job") or previous.get("input_commitments") or previous.get("outpost_commitments"):
                 if any(current.get(key) != previous.get(key)
                        for key in ("active_plan", "step_index", "reservations")):
                     return False
@@ -869,6 +876,7 @@ def cli() -> None:
     parser.add_argument("--background-work", action="store_true")
     parser.add_argument("--furnace-output-buffers", action="store_true")
     parser.add_argument("--furnace-input-belts", action="store_true")
+    parser.add_argument("--mining-outposts", action="store_true")
     arguments = vars(parser.parse_args())
     try:
         manual_path = arguments.pop("record_manual_intervention")

@@ -114,6 +114,7 @@ local function survey(role)
         local managed, cell = campaign.production_input_offer(role)
         if managed then return cell end
     end
+    if storage.mining_outposts and storage.mining_outposts.cells[ores[role]] then return nil end
     local source,out=source_for(role)
     assert(source.force.mining_drill_productivity_bonus==0, "Productivity accounting is unsupported")
     local dp,ip=prototypes.entity["burner-mining-drill"],prototypes.entity["burner-inserter"]
@@ -198,6 +199,8 @@ local function kit(cell, reserve)
 end
 campaign.prepare_input_route=function(p)
     parameters(p)
+    assert(not storage.mining_outposts or not storage.mining_outposts.cells[ores[p.source]],
+        "An ore outpost is already committed")
     local cell=r.cells[p.source] or r.offers[p.source]
     assert(cell and cell.layout==p.layout and not cell.fault,"Stale input layout")
     clear_layout(cell)
@@ -211,6 +214,8 @@ campaign.prepare_input_route=function(p)
 end
 campaign.build_input_route=function(p)
     parameters(p)
+    assert(not storage.mining_outposts or not storage.mining_outposts.cells[ores[p.source]],
+        "An ore outpost is already committed")
     local cell=r.cells[p.source]
     assert(cell and cell.layout==p.layout and cell.reserve_belts==p.reserve_belts and not cell.fault,"Unprepared input layout")
     clear_layout(cell); kit(cell,p.reserve_belts)
@@ -306,6 +311,9 @@ r.previous_observe=previous_observe
 r.observer=function()
     local result=previous_observe(); local rows={}; local diagnostics={}
     for _,source in ipairs({"recipe:iron-plate","recipe:copper-plate"}) do
+        if storage.mining_outposts and storage.mining_outposts.cells[ores[source]] and not r.cells[source] then
+            r.offers[source]=nil
+        end
         local cell=r.cells[source] or r.offers[source]
         if cell and not r.cells[source] and not pcall(clear_layout,cell) then cell=nil; r.offers[source]=nil end
         if not cell then

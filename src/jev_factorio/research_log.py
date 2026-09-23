@@ -40,7 +40,7 @@ _PACKAGES = ("jev-factorio", "requests", "python-dotenv",
 _CREDENTIALS = ("TYPESAFE_API_KEY", "CLOUDFLARE_API_TOKEN", "FACTORIO_RCON_PASSWORD")
 _CORRELATION_KEYS = {"decision_id", "model_call_id", "plan_id", "action_id"}
 _TREATMENT_FIELDS = {"factory_scheduling", "background_work",
-                     "furnace_output_buffers", "furnace_input_belts"}
+                     "furnace_output_buffers", "furnace_input_belts", "mining_outposts"}
 
 
 class ResearchLogError(RuntimeError):
@@ -95,6 +95,7 @@ class RunConfiguration:
     background_work: bool = False
     furnace_output_buffers: bool = False
     furnace_input_belts: bool = False
+    mining_outposts: bool = False
 
 
 def canonical_bytes(value: object) -> bytes:
