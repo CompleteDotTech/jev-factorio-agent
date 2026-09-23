@@ -89,5 +89,7 @@ The exported review logs do not include a resumable saved world.
 
 Rollback is a source revert at a safe controller boundary. No checkpoint schema
 migration is needed. Never discard or replay an ambiguous pending operation to
-apply or revert this policy. Existing-world automation migration, construction-kit
-investment, expanded production capacity, and persistence tuning are later stages.
+apply or revert this policy. Existing-world automation migration remains future
+work. Construction-kit investment is covered by [Stage 3](CAPITAL_INVESTMENTS.md);
+measured capacity and checkpoint tuning are covered by
+[Stage 4](STAGE4_PERFORMANCE.md).

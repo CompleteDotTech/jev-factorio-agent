@@ -8,6 +8,8 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
+from .capacity_evidence import capacity_evidence
+
 RAW = {'coal', 'iron-ore', 'copper-ore', 'stone', 'wood'}
 RECURRING = {'iron-gear-wheel', 'copper-cable', 'electronic-circuit', 'advanced-circuit',
              'processing-unit', 'transport-belt', 'inserter'}
@@ -222,7 +224,25 @@ class EconomicProduction:
         if (not primary or (primary.materials or {}).get('capital_investment') or self.goal != 'rocket_launch' or self.factory.get('crafting_queue', 0)
                 or getattr(self, '_buffer_service', False) or getattr(self, '_economic_acquiring', False)
                 or primary.steps[0].action != 'factory_wait'
-                or primary.steps[0].effect != 'machine_output'):
+                or primary.steps[0].effect not in {'machine_output', 'research_progress'}):
+            return primary
+        if primary.steps[0].effect == 'research_progress':
+            # Productive/refill work was considered first. Examine at most eight
+            # already measured producers; never recurse through another research wait.
+            measured = getattr(self.snapshot, '_capacity_evidence', {}).get('producers', {})
+            for role in sorted(measured)[:8]:
+                if not role.startswith('recipe:'):
+                    continue
+                recipe = self.catalog.recipes.get(role[7:], {})
+                if not solid_recipe(recipe):
+                    continue
+                item = recipe['products'][0]['name']
+                if self._workload(item) <= 0:
+                    continue
+                watch = self._wait('machine_output', item, min(10, self._workload(item)), role)
+                candidate = self._capacity_work(watch)
+                if candidate.steps[0].action != 'factory_wait' and candidate.steps[0].allowed(self.snapshot):
+                    return candidate
             return primary
         item = primary.steps[0].item
         try:
@@ -257,16 +277,26 @@ class EconomicProduction:
                        or self.snapshot.inventory.get(i['name'], 0) < i['amount'] * 10
                        for i in recipe['ingredients'])):
             return primary
+        evidence = capacity_evidence(self.snapshot, self.catalog, main_role)
+        if evidence is None:
+            return primary
         selected = self._investment_machine(recipe)
         speed = prototype.get('speed', 0)
         if not selected or type(speed) not in {int, float} or speed <= 0:
             return primary
         name, cost = selected
+        # Kit acquisition belongs to Stage 3's committed investment workflow.
+        # Stage 4 does not start an uncommitted multi-step construction campaign.
+        if self.snapshot.inventory.get(name, 0) < 1:
+            return primary
         new_speed = self.catalog.machines[name]['speed']
-        saved = workload / output * recipe['energy'] * 60 * (1 / speed - 1 / (speed + new_speed))
+        observed = evidence['observed_products_per_tick']
+        added_rate = new_speed * output / (recipe['energy'] * 60)
+        saved = workload * (1 / observed - 1 / (observed + added_rate))
         if saved <= cost + 1200:
             return primary
         plan = self._machine(role, name, (), anchor=main_role)
         return self._economic_evidence(plan, objective='supplied_production_bottleneck',
                   item=item, machine=name, investment_ticks=cost, estimated_saved_ticks=round(saved, 2),
-                  workload=workload, service_mode='bounded_manual_transfers') if plan else primary
+                  workload=workload, measured_bottleneck=evidence,
+                  service_mode='bounded_manual_transfers') if plan else primary

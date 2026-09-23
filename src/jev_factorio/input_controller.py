@@ -1,7 +1,6 @@
 """Compose input routes with output buffers and optional acknowledged crafting."""
 from __future__ import annotations
 
-import os
 from copy import deepcopy
 from dataclasses import dataclass, field
 
@@ -154,13 +153,5 @@ def input_loop_type(base):
                     receipts.add(paid["receipt"])
             return memory
 
-        def save(self, path):
-            super().save(path)
-            if path is not None and os.name == "posix":
-                descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(descriptor)
-                finally:
-                    os.close(descriptor)
 
     return type("InputRouteLoop", (InputRouteMixin, base), {"memory_type": InputMemory, "__module__": __name__})

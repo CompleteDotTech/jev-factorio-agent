@@ -5,7 +5,6 @@ uncertain dispatches retain the original write-ahead and no-replay barrier.
 """
 from __future__ import annotations
 
-import os
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -63,14 +62,6 @@ class BackgroundMemory(CampaignMemory):
                 raise ValueError("Craft cannot be both foreground and background")
         return memory
 
-    def save(self, path: Path | None) -> None:
-        super().save(path)
-        if path is not None and os.name == "posix":
-            descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
 
 
 class BackgroundWorkLoop(HierarchicalLoop):

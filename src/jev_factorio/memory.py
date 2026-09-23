@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .planning.materials import quantities
@@ -52,22 +50,8 @@ class CampaignMemory:
         self.reservations.pop(owner, None)
 
     def save(self, path: Path | None) -> None:
-        if path is None:
-            return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                data = asdict(self)
-                if self.capital_investment is None:
-                    data.pop('capital_investment')
-                json.dump(data, stream, sort_keys=True, allow_nan=False)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
+        from .checkpoint_io import save_checkpoint
+        save_checkpoint(self, path)
 
     @classmethod
     def load(cls, path: Path, session_id: str, target: str) -> CampaignMemory:
