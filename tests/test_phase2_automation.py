@@ -183,3 +183,33 @@ def test_invalid_survey_never_exports_raw_engine_exception(tmp_path):
         assert(d.reason=="survey_evidence_invalid" and placements==0)
         for _,v in pairs(d) do assert(type(v)~="string" or not string.find(v,"sensitive")) end
     ''', tmp_path)
+
+
+def test_new_inventory_does_not_expand_a_stale_frontiers_spending_budget():
+    from jev_factorio.planning.service_policy import carried_stock
+    state, _, _, planner, _ = visit_fixture()
+    state.inventory['iron-ore'] = 80
+    assert carried_stock(planner)['iron-ore'] == 20
+
+
+@pytest.mark.parametrize('value', [True, -1, float('nan'), float('inf')])
+def test_invalid_carried_ledger_values_cannot_authorize_service(value):
+    from jev_factorio.planning.service_policy import carried_stock
+    _, _, planner, _ = lab_fixture()
+    planner.ledger.carried['green'] = value
+    assert carried_stock(planner).get('green', 0) == 0
+
+
+def test_fractional_reservations_round_down_instead_of_borrowing():
+    from jev_factorio.planning.service_policy import carried_stock
+    state, data, planner, _ = lab_fixture()
+    planner.ledger = SupplyLedger.capture(state, data, reserved={'green': 0.5})
+    assert carried_stock(planner)['green'] == 19
+
+
+def test_cached_survey_is_marked_stale_after_source_moves(tmp_path):
+    execute('''resources={};storage.campaign.observe();game.tick=game.tick+1
+        source.position={x=20,y=0}
+        local d=storage.campaign.observe().input_routes.diagnostics["recipe:iron-plate"]
+        assert(d.reason=="stale_source_evidence" and placements==0)
+    ''', tmp_path)

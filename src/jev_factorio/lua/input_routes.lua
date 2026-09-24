@@ -72,15 +72,24 @@ local function clear_layout(cell)
     end
 end
 local function path(source,start,finish,drill,arm,budget,cache)
+    local m=budget.metrics
+    if m.path_attempts>=128 or m.path_expansions>=16384 then
+        m.search_budget_exhausted=true;return nil
+    end
+    m.path_attempts=m.path_attempts+1
+    if math.abs(start.x-finish.x)+math.abs(start.y-finish.y)+1>max_belts then
+        m.length_limited_paths=m.length_limited_paths+1;return nil
+    end
     local left,right=math.min(start.x,finish.x)-3,math.max(start.x,finish.x)+3
     local top,bottom=math.min(start.y,finish.y)-3,math.max(start.y,finish.y)+3
     local function free(p)
         if same(p,arm) or (math.abs(p.x-drill.x)<1.5 and math.abs(p.y-drill.y)<1.5) then return false end
         local k=key(p)
         if cache[k]==nil then
-            if budget.left<=0 then return false end
+            if budget.left<=0 then m.belt_budget_exhausted=true;return false end
             budget.left=budget.left-1
-            -- Do not join or side-load somebody else's belt network.
+            m.path_probes=m.path_probes+1;m.placement_checks=m.placement_checks+1
+            -- No foreign joins or side loads; paid placement rechecks this geometry.
             cache[k]=can_build(source,"transport-belt",p,0) and #source.surface.find_entities_filtered{
                 position=p,radius=1.01,type={"transport-belt","underground-belt","splitter",
                     "loader","loader-1x1","linked-belt"},limit=16}==0
@@ -91,40 +100,57 @@ local function path(source,start,finish,drill,arm,budget,cache)
     local queue,head={{position=start,depth=1}},1
     local seen,previous={[key(start)]=true},{}
     while queue[head] do
-        local node=queue[head]; head=head+1
+        if m.path_expansions>=16384 then m.search_budget_exhausted=true;return nil end
+        m.path_expansions=m.path_expansions+1
+        local node=queue[head];head=head+1
         local p=node.position
         if same(p,finish) then
             local result={p}
-            while previous[key(p)] do p=previous[key(p)]; table.insert(result,1,p) end
+            while previous[key(p)] do p=previous[key(p)];table.insert(result,1,p) end
             return result
         end
         if node.depth<max_belts then
             for _,v in ipairs(vectors) do
-                local q=offset(p,v); local k=key(q)
+                local q=offset(p,v);local k=key(q)
                 if not seen[k] and q.x>=left and q.x<=right and q.y>=top and q.y<=bottom then
                     seen[k]=true
-                    if free(q) then previous[k]=p; queue[#queue+1]={position=q,depth=node.depth+1} end
+                    if free(q) then previous[k]=p;queue[#queue+1]={position=q,depth=node.depth+1} end
                 end
             end
         end
     end
 end
 local function survey(role)
-    if campaign.production_input_offer then
-        local managed, cell = campaign.production_input_offer(role)
-        if managed then return cell end
+    r.survey_diagnostics=r.survey_diagnostics or {}
+    r.survey_cursor=r.survey_cursor or {}
+    local m={schema=1,survey_tick=game.tick,reason="survey_evidence_invalid",resource_count=0,
+        sampled_resources=0,mixed_resources=0,depleted_resources=0,resource_sample_limits=0,
+        receiver_count=0,placement_checks=0,path_attempts=0,path_expansions=0,path_probes=0,
+        length_limited_paths=0,search_budget_exhausted=false,belt_budget_exhausted=false,
+        resource_result_limit_reached=false}
+    r.survey_diagnostics[role]=m
+    local function reject(reason) m.reason=reason;return nil end
+    local source=campaign.entities[role];local out=output.cells[role]
+    if not source or not source.valid then return reject("producer_missing") end
+    m.source_unit=source.unit_number;m.source_position=point(source.position)
+    m.output_layout=out and out.layout
+    if storage.mining_outposts and storage.mining_outposts.cells[ores[role]] then
+        return reject("outpost_conflict")
     end
-    if storage.mining_outposts and storage.mining_outposts.cells[ores[role]] then return nil end
-    local source,out=source_for(role)
-    assert(source.force.mining_drill_productivity_bonus==0, "Productivity accounting is unsupported")
+    if not out or not out.flow or out.fault then return reject("output_not_commissioned") end
+    if campaign.production_input_offer then
+        local managed,cell=campaign.production_input_offer(role)
+        if managed then m.reason=cell and "route_available" or "reserved_layout_unavailable";return cell end
+    end
+    source,out=source_for(role)
+    assert(source.force.mining_drill_productivity_bonus==0,"Productivity accounting is unsupported")
     local dp,ip=prototypes.entity["burner-mining-drill"],prototypes.entity["burner-inserter"]
     assert(dp and dp.tile_width==2 and dp.tile_height==2 and dp.vector_to_place_result
-        and ip and ip.inserter_pickup_position and ip.inserter_drop_position, "Unsupported route prototypes")
+        and ip and ip.inserter_pickup_position and ip.inserter_drop_position,"Unsupported route prototypes")
+    if not source.surface.find_entities_filtered then return reject("resource_survey_unavailable") end
     local resources=source.surface.find_entities_filtered{name=ores[role],position=source.position,radius=40,limit=128}
-    -- No local source means no candidate can exist. Do not enumerate receiver
-    -- arms or run placement/path probes for this rejected survey. The observer
-    -- retains its existing rejection, resurvey interval and native build guards.
-    if #resources==0 then return nil end
+    m.resource_count=#resources;m.resource_result_limit_reached=#resources>=128
+    if #resources==0 then return reject("ore_outside_local_survey") end
     table.sort(resources,function(a,b)
         local da=math.abs(a.position.x-source.position.x)+math.abs(a.position.y-source.position.y)
         local db=math.abs(b.position.x-source.position.x)+math.abs(b.position.y-source.position.y)
@@ -132,40 +158,65 @@ local function survey(role)
         if a.position.x~=b.position.x then return a.position.x<b.position.x end
         return a.position.y<b.position.y
     end)
-    local arms={}; local box=source.bounding_box
+    -- Progress through a bounded observed set, not the same nearest eight forever.
+    -- This cursor is advisory and never resets ownership or an action failure budget.
+    local cursor=r.survey_cursor[role]
+    if not cursor or cursor.source_unit~=source.unit_number or cursor.output_layout~=out.layout then
+        cursor={source_unit=source.unit_number,output_layout=out.layout,offset=0}
+        r.survey_cursor[role]=cursor
+    end
+    local start=cursor.offset%#resources;m.resource_start_index=start+1
+    local arms={};local box=source.bounding_box
+    local function probe(name,p,dir)
+        m.placement_checks=m.placement_checks+1
+        return can_build(source,name,p,dir)
+    end
     for dx=-3,3 do for dy=-3,3 do for turn=0,3 do
         local p={x=math.floor(source.position.x)+dx+0.5,y=math.floor(source.position.y)+dy+0.5}
         local drop=offset(p,rotate(ip.inserter_drop_position,turn))
         if drop.x>box.left_top.x and drop.x<box.right_bottom.x
             and drop.y>box.left_top.y and drop.y<box.right_bottom.y
-            and can_build(source,"burner-inserter",p,turn*4) then
+            and probe("burner-inserter",p,turn*4) then
             arms[#arms+1]={position=p,direction=turn*4,pickup=center(offset(p,rotate(ip.inserter_pickup_position,turn)))}
         end
     end end end
-    local budget,cache={left=4096},{}
-    for index=1,math.min(#resources,8) do
+    m.receiver_count=#arms
+    if #arms==0 then return reject("receiver_obstructed") end
+    local budget,cache={left=4096,metrics=m},{}
+    for n=1,math.min(#resources,8) do
+        local index=(start+n-1)%#resources+1
         local resource=resources[index]
+        m.sampled_resources=m.sampled_resources+1;cursor.offset=index%#resources
         if resource.valid and resource.minable and resource.amount>=100 then
             local drill={x=math.floor(resource.position.x),y=math.floor(resource.position.y)}
-            -- Conservative preflight; the actual mining_area is validated after placement.
-            local mixed=false
-            for _,ore in pairs(source.surface.find_entities_filtered{type="resource",position=drill,radius=3,limit=64}) do
-                if ore.name~=ores[role] then mixed=true end
-            end
-            if not mixed then for turn=0,3 do
-                local start=center(offset(drill,rotate(dp.vector_to_place_result,turn)))
-                if can_build(source,"burner-mining-drill",drill,turn*4) then
+            local patch=source.surface.find_entities_filtered{type="resource",position=drill,radius=3,limit=65}
+            local mixed=#patch>=65
+            if mixed then m.resource_sample_limits=m.resource_sample_limits+1 end
+            for _,ore in pairs(patch) do if ore.name~=ores[role] then mixed=true end end
+            if mixed then m.mixed_resources=m.mixed_resources+1
+            else for turn=0,3 do
+                local start_belt=center(offset(drill,rotate(dp.vector_to_place_result,turn)))
+                if probe("burner-mining-drill",drill,turn*4) then
+                    -- Try nearer receivers first within the unchanged footprint.
+                    table.sort(arms,function(a,b)
+                        local da=math.abs(start_belt.x-a.pickup.x)+math.abs(start_belt.y-a.pickup.y)
+                        local db=math.abs(start_belt.x-b.pickup.x)+math.abs(start_belt.y-b.pickup.y)
+                        if da~=db then return da<db end
+                        if a.position.x~=b.position.x then return a.position.x<b.position.x end
+                        if a.position.y~=b.position.y then return a.position.y<b.position.y end
+                        return a.direction<b.direction
+                    end)
                     for _,arm in ipairs(arms) do
                         local overlap=math.abs(arm.position.x-drill.x)<1.5 and math.abs(arm.position.y-drill.y)<1.5
-                        local route=not overlap and path(source,start,arm.pickup,drill,arm.position,budget,cache)
+                        local route=not overlap and path(source,start_belt,arm.pickup,drill,arm.position,budget,cache)
                         if route then
                             local steps={{part="inserter",name="burner-inserter",position=arm.position,direction=arm.direction}}
-                            for n=#route,1,-1 do
-                                steps[#steps+1]={part="belt:"..n,name="transport-belt",position=route[n],
-                                    direction=direction(route[n],route[n+1] or arm.position)}
+                            for k=#route,1,-1 do
+                                steps[#steps+1]={part="belt:"..k,name="transport-belt",position=route[k],
+                                    direction=direction(route[k],route[k+1] or arm.position)}
                             end
                             steps[#steps+1]={part="drill",name="burner-mining-drill",position=drill,direction=turn*4}
-                            r.serial=r.serial+1
+                            r.serial=r.serial+1;m.reason="route_available"
                             return {source=role,source_unit=source.unit_number,source_position=point(source.position),
                                 entity=source,item=string.sub(role,8),ore=ores[role],output_layout=out.layout,
                                 layout="input:"..source.unit_number..":"..r.serial,steps=steps,parts={},
@@ -174,8 +225,16 @@ local function survey(role)
                     end
                 end
             end end
-        end
+        else m.depleted_resources=m.depleted_resources+1 end
     end
+    if m.search_budget_exhausted then return reject("path_search_budget") end
+    if m.belt_budget_exhausted then return reject("placement_query_budget") end
+    if m.resource_sample_limits>0 then return reject("resource_sample_limit") end
+    if m.mixed_resources+m.depleted_resources==m.sampled_resources then
+        return reject(m.mixed_resources>0 and "mixed_resource_sample" or "resource_depleted_sample")
+    end
+    if m.path_attempts>0 and m.length_limited_paths==m.path_attempts then return reject("route_length_limit") end
+    return reject("no_clear_route_within_budget")
 end
 local function parameters(p)
     assert(type(p)=="table" and ores[p.source], "Invalid input command")
@@ -326,7 +385,11 @@ r.observer=function()
             if not r.last_survey[source] or game.tick-r.last_survey[source]>=300 then
                 r.last_survey[source]=game.tick
                 local ok,offer=pcall(survey,source)
-                if ok then cell=offer; r.offers[source]=offer end
+                if ok then cell=offer; r.offers[source]=offer
+                else
+                    local detail=r.survey_diagnostics and r.survey_diagnostics[source]
+                    if detail then detail.reason="survey_evidence_invalid" end
+                end
             end
         end
         if cell then
@@ -348,16 +411,27 @@ r.observer=function()
         end
     end
     for _,role in ipairs({"recipe:iron-plate","recipe:copper-plate"}) do
-        if not rows[role] then
-            local source=campaign.entities[role];local out=output.cells[role]
-            local reason="no_clear_route_within_budget"
-            if not source or not source.valid then reason="producer_missing"
-            elseif not out or not out.flow or out.fault then reason="output_not_commissioned"
-            elseif not source.surface.find_entities_filtered then reason="resource_survey_unavailable"
-            elseif #source.surface.find_entities_filtered{name=ores[role],position=source.position,radius=40,limit=1}==0 then
-                reason="ore_outside_local_survey" end
-            diagnostics[role]={reason=reason,fallback="batched_manual_supply",max_belts=max_belts,survey_radius=40}
+        local source=campaign.entities[role];local out=output.cells[role]
+        local saved=r.survey_diagnostics and r.survey_diagnostics[role]
+        local detail={}
+        for k,v in pairs(saved or {}) do detail[k]=v end
+        local reason=detail.reason or "survey_not_due"
+        if rows[role] then
+            reason=rows[role].state=="fault" and "route_fault" or
+                (r.cells[role] and "owned_route" or "route_available")
+        elseif not source or not source.valid then reason="producer_missing"
+        elseif storage.mining_outposts and storage.mining_outposts.cells[ores[role]] then
+            reason="outpost_conflict"
+        elseif not out or not out.flow or out.fault then reason="output_not_commissioned"
+        elseif saved and (saved.source_unit~=source.unit_number or saved.output_layout~=out.layout
+                or not saved.source_position or not same(saved.source_position,source.position)) then
+            reason="stale_source_evidence"
         end
+        detail.reason=reason;detail.fallback="batched_manual_supply"
+        detail.max_belts=max_belts;detail.survey_radius=40;detail.observed_tick=game.tick
+        detail.cached=saved~=nil and saved.survey_tick~=game.tick
+        detail.next_survey_tick=r.last_survey and r.last_survey[role] and r.last_survey[role]+300 or game.tick
+        diagnostics[role]=detail
     end
     result.input_routes={protocol=1,session_id=storage.jev_session_id,tick=result.tick,sources=rows,diagnostics=diagnostics}
     if campaign.observe_production_sites then result.production_sites=campaign.observe_production_sites() end

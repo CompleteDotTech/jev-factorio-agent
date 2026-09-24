@@ -109,7 +109,7 @@ class OutputBufferPlanner(ReadyWorkPlanner):
                 or primary.steps[0].action not in {
                     "factory_gather", "factory_insert", "factory_extract", "factory_wait"
                 }):
-            return [primary]
+            return [primary] if self._buffer_service else [service_visit(self, primary)]
         candidates = [primary]
         for item, amount in list(sorted(self.targets.items()))[:32]:
             if self.snapshot.inventory.get(item, 0) >= amount:
