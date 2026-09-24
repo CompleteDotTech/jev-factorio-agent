@@ -216,3 +216,38 @@ def test_checksummed_capture_requires_final_successor_memory_to_match_logs(tmp_p
         assert result['measurement_checks_passed'], result['issues']
         assert result['newly_qualified_sources'] == [GROWTH]
     assert not result['deployment_authorized']
+
+
+@pytest.mark.parametrize('change', ['clear_qualification', 'replace_use', 'missing_source'])
+def test_agreeing_final_boundary_cannot_hide_prior_successor_proof_loss(change):
+    from jev_factorio.acceptance_boundaries import successor_history_issues
+    checkpoint, record = successor_boundary()
+    record['state'] = deepcopy(record['after_state'])
+    previous = deepcopy(record)
+    current = deepcopy(record)
+    row = current['after_state']['factory']['successors']['sources'][GROWTH]
+    if change == 'clear_qualification':
+        row['qualification'] = {}; row['phase'] = 'producing'
+        checkpoint['successor_projects'][GROWTH]['status'] = 'active'
+        checkpoint['successor_receipts'][GROWTH]['qualification'] = {}
+    elif change == 'replace_use':
+        row['use']['job_id'] = 'replacement-job'
+        row['qualification']['use_job_id'] = 'replacement-job'
+        checkpoint['successor_receipts'][GROWTH]['use'] = deepcopy(row['use'])
+        checkpoint['successor_receipts'][GROWTH]['qualification'] = deepcopy(row['qualification'])
+    else:
+        current['after_state']['factory']['successors']['sources'] = {}
+    current['successor_projects'] = deepcopy(checkpoint['successor_projects'])
+    current['successor_evidence'] = deepcopy(current['after_state']['factory']['successors'])
+    original = deepcopy((previous, current, checkpoint))
+    if change != 'missing_source':
+        assert not final_successor_issues({}, checkpoint, current, {GROWTH})
+    assert successor_history_issues([previous, current])
+    assert (previous, current, checkpoint) == original
+
+
+def test_unchanged_successor_history_is_valid():
+    from jev_factorio.acceptance_boundaries import successor_history_issues
+    _, record = successor_boundary()
+    record['state'] = deepcopy(record['after_state'])
+    assert not successor_history_issues([record, deepcopy(record)])

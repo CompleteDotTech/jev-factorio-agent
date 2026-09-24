@@ -289,3 +289,7 @@ An observed research/victory goal must remain present in subsequent observations
 Milestone timing must also match the final checkpoint. Withdrawn or changed goal
 evidence fails the trial and cannot earn an early completion time or bypass the
 minimum horizon. These corrections do not change gameplay or authorize deployment.
+
+Once observed, paid successor identities and completed use/qualification proofs
+must also persist through the trial. Agreement of the final checkpoint and final
+observation cannot excuse an intervening disappearance or reassigned proof.

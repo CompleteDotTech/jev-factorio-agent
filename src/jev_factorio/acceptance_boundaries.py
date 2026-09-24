@@ -123,3 +123,34 @@ def final_successor_issues(initial: dict, final: dict, record: dict,
             if source in successors.ROLES and source not in rows:
                 issues.add('final_successor_route_without_source')
     return sorted(issues)
+
+
+def successor_history_issues(records: list[dict]) -> list[str]:
+    """A matching final pair cannot excuse lost or reassigned prior proof."""
+    seen: dict[str, dict] = {}
+    issues: set[str] = set()
+    for record in records:
+        for label in ('state', 'after_state'):
+            native = record[label].get('factory', {}).get('successors', {})
+            rows = native.get('sources', {}) if isinstance(native, dict) else {}
+            if not isinstance(rows, dict):
+                issues.add('successor_history_invalid')
+                continue
+            if any(old.get('source_unit') and role not in rows for role, old in seen.items()):
+                issues.add('successor_paid_evidence_disappeared')
+            for role, row in rows.items():
+                if not isinstance(row, dict):
+                    issues.add('successor_history_invalid')
+                    continue
+                old = seen.get(role)
+                if old:
+                    if any(not _same(old.get(key), row.get(key)) for key in
+                           ('anchor', 'predecessor_unit', 'started_tick')):
+                        issues.add('successor_identity_history_changed')
+                    if old.get('source_unit') and not _same(old['source_unit'], row.get('source_unit')):
+                        issues.add('successor_identity_history_changed')
+                    for proof in ('use', 'qualification'):
+                        if old.get(proof) and not _same(old[proof], row.get(proof)):
+                            issues.add('successor_' + proof + '_history_regressed')
+                seen[role] = row  # Read-only references to immutable input records.
+    return sorted(issues)

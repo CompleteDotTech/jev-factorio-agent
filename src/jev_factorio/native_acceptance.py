@@ -9,7 +9,7 @@ import re
 import math
 
 from .acceptance_capture import verify
-from .acceptance_boundaries import final_successor_issues, probe_source_sha256
+from .acceptance_boundaries import final_successor_issues, probe_source_sha256, successor_history_issues
 from .acceptance_io import canonical, load_json, sha256, stable_read, write_new
 from .dev_preflight import checkpoint_read, inspect_native
 from .evidence_audit import measurements
@@ -186,6 +186,7 @@ def analyze(directory: Path) -> dict:
                     issues.append('invalid_successor_evidence')
     reject(any(final.get('failures', {}).get(k, -1) < value for k, value in failures.items()), 'final_failure_history_regressed')
     issues.extend(final_successor_issues(initial, final, rows[-1], observed_successor_sources))
+    issues.extend(successor_history_issues(rows))
     reject(len(resolved_models) > 1, 'resolved_model_drift')
     reject(len(process_ids) != 1 or len(execution_ids) != 1, 'interrupted_or_mixed_invocation')
     reject(not runtimes or any(canonical(r) != canonical(runtimes[0]) for r in runtimes), 'native_actor_mod_or_surface_drift')
