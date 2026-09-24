@@ -83,6 +83,29 @@ Older readers may reject checkpoints containing it; preserve an incident archive
 and use the compatible reader for recovery instead of deleting outcome history
 to downgrade.
 
+### Avoid walking when a build is already in reach
+
+The live PR #70 follow-up placed five paid pipes, then failed a native walking
+request. The actor was at approximately `(26.02, 39.86)` and the adapter chose
+an obstructed fixed-side approach at `(24, 41)` for a nearby empty build tile.
+Unlike an existing entity, the empty tile could not take the old
+`can_reach_entity` shortcut. Every placement therefore requested another walk.
+
+Placement now has a build-specific approach: a read-only query compares the
+actual actor-to-target squared distance with native `player.build_distance`,
+using the same center-distance rule as the existing placement guard. A target
+already in range needs no walk. Distant targets choose a collision-free approach
+on the actor's side, within the same build range. Transfers keep their existing
+entity-reach behavior. Native `can_build_from_cursor`, item payment, placement
+and postcondition checks remain unchanged.
+
+This is not a license to reinterpret partial construction as a preflight
+rejection. The failed live attempt retained its ambiguity: inventory changed
+from 51 to 46 pipes and the native connector set from 24 to 29, with all five
+new identities accounted for. Recovery must retain that paid construction and
+reject the old plan through a separate audited operator reconciliation. A new
+plan surveys the current world; it does not replay the old dispatch.
+
 ## Applying the supplied speedrun strategy
 
 The useful transferable principles are minimizing travel, keeping acknowledged
