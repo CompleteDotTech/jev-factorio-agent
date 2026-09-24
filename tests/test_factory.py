@@ -851,6 +851,11 @@ def test_rocket_ready_dispatch_still_requires_native_launch_evidence():
     state.factory["entities"]["recipe:rocket-part"] = machine(
         "rocket-silo", rocket_ready=True, rocket_parts=100, parts_required=100
     )
+    # Readiness now includes the native pad and cargo contract, not rocket_ready alone.
+    from test_launch_readiness import scenario
+    _, ready = scenario(cargo={"raw-fish": 1})
+    state.factory["entities"]["recipe:rocket-part"]["unit_number"] = 30
+    state.factory["launch_readiness"] = ready.factory["launch_readiness"]
     step = FactoryPlanner(data, state, "rocket_launch").plan().steps[0]
     assert step.action == "factory_launch"
     assert step.allowed(state)

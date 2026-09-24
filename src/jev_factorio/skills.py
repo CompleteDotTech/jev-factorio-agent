@@ -69,6 +69,7 @@ class Step:
     def allowed(self, snapshot: GameSnapshot) -> bool:
         if self.action in factory_contract.COMMAND_FIELDS:
             return (factory_contract.allowed(self.action, self.parameters or {}, snapshot)
+                    and factory_contract.launch_readiness.affordable(self.action, self.costs or {}, snapshot)
                     and all(snapshot.inventory.get(item, 0) >= count
                             for item, count in (self.costs or {}).items()))
         if self.action not in _candidate_actions(snapshot):

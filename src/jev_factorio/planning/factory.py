@@ -451,6 +451,10 @@ class FactoryPlanner:
         prerequisite = self._research("rocket-silo")
         if prerequisite:
             return prerequisite
+        from .launch import prerequisite as launch_prerequisite
+        preparation = launch_prerequisite(self)
+        if preparation:
+            return preparation
         recipe = self.catalog.recipes["rocket-part"]
         role = "recipe:rocket-part"
         silo = self.entities.get(role, {})

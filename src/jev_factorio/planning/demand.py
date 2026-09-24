@@ -25,7 +25,11 @@ class SupplyLedger:
 
     @classmethod
     def capture(cls, snapshot, catalog, *, reserved=None, job=None) -> SupplyLedger:
-        ledger = cls(carried=quantities(snapshot.inventory), reserved=quantities(reserved or {}))
+        from ..launch_readiness import reserved as payload_reserve
+        commitments = quantities(reserved or {})
+        for item, amount in payload_reserve(snapshot).items():
+            commitments[item] = commitments.get(item, 0) + amount
+        ledger = cls(carried=quantities(snapshot.inventory), reserved=commitments)
         for item, count in ledger.reserved.items():
             if count > ledger.carried.get(item, 0):
                 raise ValueError('Reservation exceeds carried supply')

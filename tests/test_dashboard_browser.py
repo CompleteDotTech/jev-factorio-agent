@@ -566,3 +566,79 @@ def test_responsive_controls_stay_within_viewport(live, width, height):
     assert bounds["y"] >= 0 and bounds["y"] + bounds["height"] <= height
     page.locator("#close-inspector").click()
     assert not errors
+
+
+def mission_fixture():
+    from test_dashboard_mission import mission_state
+    from jev_factorio.dashboard import project_state
+    return project_state(mission_state())
+
+
+def test_mission_launch_gates_receipt_victory_and_frozen_display(live):
+    from test_dashboard_mission import mission_state, receipt
+    from jev_factorio.dashboard import project_state
+    page, writer, url, errors = live
+    page.goto(url)
+    state = mission_state()
+    writer.emit('observation',2,state=project_state(state))
+    playwright.expect(page.locator('#launch-headline')).to_have_text('Launch prerequisites observed')
+    playwright.expect(page.locator('[data-gate="request"] .mission-status')).to_have_text('PENDING')
+    page.locator('#freeze').click()
+    state['factory']['launch_readiness']['receipts']['launch']=receipt()
+    writer.emit('observation',2,state=project_state(state))
+    page.wait_for_timeout(600)
+    playwright.expect(page.locator('#launch-headline')).to_have_text('Launch prerequisites observed')
+    page.locator('#freeze').click()
+    playwright.expect(page.locator('#launch-headline')).to_have_text('Launch submitted; victory unverified')
+    playwright.expect(page.locator('[data-gate="victory"] .mission-status')).to_have_text('PENDING')
+    state.update(victory=True,victory_source='native:base-game-rocket-launch')
+    writer.emit('observation',2,state=project_state(state))
+    playwright.expect(page.locator('#launch-headline')).to_have_text('Native victory observed')
+    page.locator('#inspect-mission').click()
+    playwright.expect(page.locator('#inspector-content')).to_contain_text('"deployment_authorized": false')
+    page.locator('#close-inspector').click()
+    writer.emit('observation',2,state=project_state({'tick':1001,'session_id':'new-session'}))
+    playwright.expect(page.locator('#launch-headline')).to_have_text('Launch evidence unavailable')
+    assert not errors
+
+
+def test_mission_stale_snapshot_does_not_rejuvenate_on_model_event(live):
+    page,writer,url,errors=live
+    page.goto(url)
+    writer.emit('observation',2,state=mission_fixture())
+    playwright.expect(page.locator('#launch-headline')).to_have_text('Launch prerequisites observed')
+    page.evaluate('''() => {
+        latest.view.state_observed_time = latest.server_time - 100;
+        latest.view.last_event_time = latest.server_time;
+        refreshStatus();
+    }''')
+    playwright.expect(page.locator('#mission-freshness')).to_have_text('STALE / DISCONNECTED')
+    assert page.locator('#mission-panel').evaluate('e=>e.classList.contains("mission-historical")')
+    assert not errors
+
+
+def test_mission_layout_studio_mobile_xss_and_release_unknown(live):
+    page,writer,url,errors=live
+    page.set_viewport_size({'width':1920,'height':1080})
+    page.goto(url+'/?studio=1')
+    state=mission_fixture()
+    state['mission']['research']['name']='<img src=x onerror="window.BAD=1">'
+    writer.emit('observation',2,state=state)
+    writer.emit('decision_recorded',7,record={'state':state,'mission_record':{
+        'commit':'a'*40,'tick':1000,'features':{'ore_side_successors':False}}})
+    playwright.expect(page.locator('#launch-headline')).to_have_text('Launch prerequisites observed')
+    stage=page.locator('#game-stage').bounding_box()
+    assert stage['x']==pytest.approx(277) and stage['y']==pytest.approx(111)
+    assert stage['width']==pytest.approx(1342)
+    page.locator('#mission-panel summary').first.click()
+    playwright.expect(page.locator('#mission-features')).to_contain_text('Disabled (recorded)')
+    assert page.locator('#mission-production img').count()==0
+    assert page.evaluate('window.BAD') is None
+    page.locator('#mission-panel summary').nth(1).click()
+    playwright.expect(page.locator('#mission-release')).to_contain_text('Not supplied by gameplay')
+    playwright.expect(page.locator('#mission-release')).to_contain_text('No acceptance report connected')
+    page.screenshot(path='/tmp/mission-control-studio-test.png',full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    assert page.locator('#mission-panel').bounding_box()['width']>200
+    assert not errors

@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
+from . import dashboard_mission
+
 SCHEMA = "jev.dashboard.v1"
 MAX_LINE = 262144
 ASSETS = Path(__file__).with_name("dashboard_assets")
@@ -82,14 +84,17 @@ def sanitize(value: Any, secrets: tuple[str, ...] = ()) -> Any:
 
 
 def project_state(value: dict) -> dict:
-    return {key: value[key] for key in STATE_KEYS if key in value}
+    return {"mission": dashboard_mission.project_state(value),
+            **{key: value[key] for key in STATE_KEYS if key in value}}
 
 
 def project_record(value: dict) -> dict:
-    record = {key: value[key] for key in RECORD_KEYS if key in value}
+    record = {"mission_record": dashboard_mission.project_record(value)}
     state = value.get("after_state") or value.get("state")
     if isinstance(state, dict):
         record["state"] = project_state(state)
+    # Keep the bounded observation before potentially large model decision data.
+    record.update({key: value[key] for key in RECORD_KEYS if key in value})
     return record
 
 
@@ -420,6 +425,7 @@ class Monitor:
             view["verified"], view["outcome"] = None, None
         elif kind == "observation":
             view["state"] = data.get("state") if isinstance(data.get("state"), dict) else {}
+            view["state_observed_time"] = event["time"]
         elif kind in ("goals", "controller_state"):
             keys = ("goal", "target", "status", "completed_goals", "plan", "pending", "step_index", "decision")
             view.update({key: data[key] for key in keys if key in data})
@@ -439,8 +445,14 @@ class Monitor:
             view["action"] = data.get("action")
             view["parameters"] = data.get("parameters")
         elif kind == "decision_recorded" and isinstance(data.get("record"), dict):
+            view.pop("mission_record", None)
+            # A truncated/older record cannot rejuvenate a previous observation.
+            recorded_state = data["record"].get("state")
+            view["state"] = recorded_state if isinstance(recorded_state, dict) else {}
+            view["state_observed_time"] = event["time"] if view["state"] else None
+            view["legacy_record_timestamp"] = data.get("record_timestamp") is True
             view.update({key: value for key, value in data["record"].items()
-                         if key in RECORD_KEYS or key == "state"})
+                         if key in RECORD_KEYS or key == "mission_record"})
         elif kind.endswith("_failed"):
             view["last_error"] = kind
         seen = view.setdefault("seen", [])
@@ -475,9 +487,17 @@ class Monitor:
                         self.rejected += 1
                         continue
                     identity = str(row.get("session_id") or state.get("session_id") or "legacy")
+                    # A copied legacy file must not rejuvenate an old recorded snapshot.
+                    timestamp, recorded_at = self.tail.mtime, ""
+                    try:
+                        instant = datetime.fromisoformat(row["recorded_at_utc"].replace("Z", "+00:00"))
+                        if instant.tzinfo is not None and -8640000000000 <= instant.timestamp() <= 8640000000000:
+                            timestamp, recorded_at = instant.timestamp(), instant.isoformat()
+                    except (KeyError, AttributeError, ValueError, OverflowError, OSError):
+                        pass
                     row = {"schema": SCHEMA, "run_id": identity, "seq": self.last_seq + 1 if identity == self.last_run else 1,
-                           "time": self.tail.mtime, "at": "", "kind": "decision_recorded", "stage": 7,
-                           "data": {"record": project_record(row)}}
+                           "time": timestamp, "at": recorded_at, "kind": "decision_recorded", "stage": 7,
+                           "data": {"record": project_record(row), "record_timestamp": bool(recorded_at)}}
                 self.accept(sanitize(row, self.secrets))
             self._read_supervisor()
             self.version += 1
@@ -576,6 +596,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         else:
             names = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"),
                      "/styles.css": ("styles.css", "text/css"),
+                     "/mission.js": ("mission.js", "text/javascript"),
+                     "/mission.css": ("mission.css", "text/css"),
                      "/factory-steel.png": ("factory-steel.png", "image/png")}
             if path not in names:
                 self._headers(404, "text/plain", 0)

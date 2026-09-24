@@ -195,6 +195,7 @@ function render(data) {
   set("overlay-goal", text(v.goal, "Awaiting observation"));
   set("overlay-status", text(v.status, "NO TELEMETRY").toUpperCase() + (state.world_kind === "mock" ? " / MOCK" : ""));
   set("source-mode", frozen ? "DISPLAY FROZEN" : data.source?.mode === "legacy" ? "LEGACY / COMPLETED DECISIONS" : "READ-ONLY / EVENT FEED");
+  MissionControl.render(data, inspect);
   renderGoals(v);
   const observed = [["Character position", Array.isArray(state.player_position) ? state.player_position.join(", ") : "—"], ["Drill status", text(state.drill_status, "Unknown") || "Unknown"], ["Drill fuel", text(state.drill_fuel)], ["Ore collected", text(state.iron_ore_collected)], ["Output connected", state.drill_output_connected === true ? "Observed" : state.drill_output_connected === false ? "No" : "Unknown"]];
   $("observations").replaceChildren(...observed.map(([key, value]) => { const row = el("div"); row.append(el("dt", "", key), el("dd", "", value)); return row; }));
@@ -243,11 +244,14 @@ function refreshStatus() {
   const heartbeatAge = (performance.now() - receivedAt) / 1000;
   const transportFresh = connected && heartbeatAge <= 3;
   const active = transportFresh && !stale && !ended;
+  const observationAge = typeof v.state_observed_time === "number" ? now - v.state_observed_time : null;
+  MissionControl.freshness({active: active && observationAge !== null && observationAge >= 0 && observationAge <= 15,
+    frozen, legacy: data.source?.mode === "legacy", gap: v.gap || data.source?.partial});
   for (let stage = 2; stage <= 7; stage++) $(`stage-${stage}`).classList.toggle("active", active && !frozen && data.source?.mode !== "legacy" && v.stage === stage);
   $("connection-led").className = `led ${active ? "live" : "stale"}`;
   set("connection", !connected ? "Reconnecting" : !transportFresh ? "Feed delayed" : ended ? "Invocation ended" : stale ? "No recent telemetry" : "Feed connected");
   $("connection").title = receivedAt ? `Last transport snapshot ${Math.floor(heartbeatAge)}s ago. Game records update independently of this heartbeat.` : "No transport snapshot received.";
-  set("freshness", age === null ? "No recorded events" : `${data.source?.mode === "legacy" ? "File modified" : "Last event"} ${age < 1 ? "just now" : Math.floor(age) + "s ago"}`);
+  set("freshness", age === null ? "No recorded events" : `${data.source?.mode === "legacy" ? (v.legacy_record_timestamp ? "Recorded at" : "File modified") : "Last event"} ${age < 1 ? "just now" : Math.floor(age) + "s ago"}`);
   const thinking = active && !frozen && data.source?.mode !== "legacy" && v.model_busy === true;
   $("signal").classList.toggle("active", thinking);
   set("thinking-status", frozen ? "Display frozen" : thinking ? "JEV is evaluating" : ended ? "Controller invocation ended" : stale ? "Awaiting fresh evidence" : text(v.kind, "Waiting for an agent").replaceAll("_", " "));

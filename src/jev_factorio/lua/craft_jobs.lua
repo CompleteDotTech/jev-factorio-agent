@@ -74,6 +74,7 @@ campaign.begin_craft_job = function(id, recipe_name, batches)
         before[name] = player.get_item_count(name)
         assert(before[name] >= amount, "All immediate ingredients must be carried")
     end
+    if campaign.launch_assert_spend then campaign.launch_assert_spend(inputs) end
     local job = {
         id = id, recipe = recipe_name, requested = batches, accepted = 0,
         finished = 0, started_tick = game.tick, last_progress_tick = game.tick,

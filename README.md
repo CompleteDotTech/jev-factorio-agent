@@ -209,3 +209,11 @@ validation and production cutover remain separate gates.
 [Native acceptance tooling](docs/NATIVE_ACCEPTANCE.md) provides a fixed read-only development
 preflight, private checksummed operational captures and paired measurement
 checks. It never starts gameplay or authorizes production cutover.
+
+## First-rocket launch prerequisites
+
+[Launch readiness](docs/LAUNCH_READINESS.md) adds paid landing-pad construction or
+reuse, bounded timed fish acquisition/satellite fallback, reserved cargo loading,
+and native guarded launch for unmodified base 2.0.77. Existing production and
+pending-action history are retained. Synthetic tests do not replace the native
+development-VM and production cutover gates.

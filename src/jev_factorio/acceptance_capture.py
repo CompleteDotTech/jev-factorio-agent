@@ -30,7 +30,7 @@ FACTORY_FIELDS = set('tick entities produced consumed researched research resear
     'connections force_entity_counts crafting_queue player_bound player_connected rockets_launched '
     'rocket_baseline exploration_radius fair_resource_targets fair_action_metrics output_buffers '
     'input_routes production_sites mining_outposts successors craft_jobs_protocol craft_job_actor '
-    'craft_job_inventory craft_job acceptance_runtime'.split())
+    'craft_job_inventory craft_job acceptance_runtime launch_readiness'.split())
 DENIED = {'password', 'api_key', 'authorization', 'headers', 'environment', 'endpoint', 'endpoints',
           'prompt', 'prompts', 'questions', 'answers', 'request', 'response', 'raw_request', 'raw_response',
           'provider_body', 'provider_response', 'provider_request', 'access_token', 'refresh_token', 'secret'}
