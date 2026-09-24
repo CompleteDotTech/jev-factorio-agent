@@ -101,12 +101,8 @@ class FactoryPlanner:
         identity = json.dumps(site, sort_keys=True, separators=(",", ":"), allow_nan=False)
         return f"{item}:target:{target}:site:{identity}"
 
-    def _need(self, item, amount, path=()):
-        have = self.snapshot.inventory.get(item, 0)
-        if have >= amount:
-            return None
-        path = self._visit("item:" + item, path)
-        missing = math.ceil(amount - have)
+    def _output_pickup(self, item, missing):
+        candidates = []
         for role, machine in sorted(self.entities.items()):
             if 'successors' in self.factory:
                 from ..successors import private_output
@@ -114,7 +110,44 @@ class FactoryPlanner:
                     continue  # Trial or preferred output needs the successor-aware planner.
             available = machine.get("output", {}).get(item, 0)
             if available:
-                return self._transfer(role, item, min(missing, available), extracting=True)
+                candidates.append((role, machine, min(200, missing, available)))
+        if not candidates:
+            return None
+        if len(candidates) > 1:
+            eligible = [candidate for candidate in candidates
+                        if self._transfer(candidate[0], item, candidate[2], extracting=True)
+                        .steps[0].allowed(self.snapshot)]
+            # If none pass, retain the old first choice for the unchanged
+            # fail-closed execution boundary rather than inventing new supply.
+            candidates = eligible or candidates[:1]
+            from .service_policy import position
+            from .scheduling import SERVICE_TICKS, TRAVEL_TICKS_PER_TILE
+
+            origin = position(self.snapshot.player_position)
+            locations = [position(machine.get("position")) for _, machine, _ in candidates]
+            # Unknown geometry retains the existing deterministic role order.
+            # These policy estimates rank observed stock, never forecast output
+            # or authorize a transfer without its normal fresh native checks.
+            if origin is not None and all(location is not None for location in locations):
+                def rank(entry):
+                    (role, _, useful), location = entry
+                    distance = sum(abs(a - b) for a, b in zip(origin, location))
+                    ticks = SERVICE_TICKS + distance * TRAVEL_TICKS_PER_TILE
+                    return ticks / useful, -useful, distance, role
+
+                candidates = [min(zip(candidates, locations), key=rank)[0]]
+        role, _, quantity = candidates[0]
+        return self._transfer(role, item, quantity, extracting=True)
+
+    def _need(self, item, amount, path=()):
+        have = self.snapshot.inventory.get(item, 0)
+        if have >= amount:
+            return None
+        path = self._visit("item:" + item, path)
+        missing = math.ceil(amount - have)
+        pickup = self._output_pickup(item, missing)
+        if pickup:
+            return pickup
         if item in RAW_ITEMS:
             if item not in self.snapshot.nearby_resources:
                 return self._explore(item)

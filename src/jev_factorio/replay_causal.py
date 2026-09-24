@@ -22,6 +22,7 @@ def audit_producer(events: list[dict], report) -> None:
             "candidate_set_created", "candidate_set_filtered", "decision",
             "plan_committed", "plan_failed", "plan_progress", "precondition_checked",
             "action_prepared", "action_returned", "verification", "pending_expired",
+            "connection_preflight_rejected",
             "checkpoint_written", "goal_checked", "goal_completed", "goal_activated",
         }:
             issue("unsupported_causal_event", "Event is preserved but its causal semantics are unknown", "gap")
@@ -145,13 +146,42 @@ def audit_producer(events: list[dict], report) -> None:
                 elif (steps[index].get("action") != payload.get("action")
                       or (steps[index].get("parameters") or {}) != payload.get("parameters")):
                     issue("plan_step_mismatch", "Prepared action differs from the captured plan step")
-        elif kind in {"action_returned", "verification", "pending_expired"}:
+        elif kind in {"action_returned", "verification", "pending_expired", "connection_preflight_rejected"}:
             captured = actions.get((trace, action))
             if action is None:
                 issue("unknown_action_origin", "No action identity is captured for this evidence", "gap")
                 continue
             if captured is None:
                 issue("invalid_action_reference", "Captured action reference has no preceding preparation")
+                continue
+            if captured.get("preflight_rejection") is not None:
+                issue("conflicting_preflight_evidence", "Rejected connection has contradictory later action evidence")
+                continue
+            if kind == "connection_preflight_rejected":
+                prepared = captured["prepared"]["payload"]
+                result = captured["result"]
+                valid = (
+                    captured.get("preflight_rejection") is None
+                    and not captured["verifications"]
+                    and result is not None and result["payload"].get("status") == "error"
+                    and payload.get("action") == prepared.get("action") == result["payload"].get("action") == "factory_connect"
+                    and result["payload"].get("parameters") == prepared.get("parameters")
+                    and payload.get("mutation_started") is False
+                    and isinstance(payload.get("code"), str)
+                    and payload.get("code") in {
+                        "missing_fluid_port", "no_connection_route", "insufficient_connection_materials"}
+                    and event.get("session_id") is not None
+                    and event["session_id"] == captured["prepared"].get("session_id") == result.get("session_id")
+                    and all(prepared.get(key) is not None
+                            and payload.get(key) == prepared[key] == result["payload"].get(key)
+                            for key in ("decision_id", "plan_id", "step_index", "attempt_id"))
+                )
+                if not valid:
+                    issue("invalid_preflight_rejection", "Connection rejection lacks matching pre-mutation evidence")
+                    continue
+                captured["preflight_rejection"] = event
+                captured["acknowledgment"] = "rejected_before_mutation"
+                captured["verified"] = False
                 continue
             unknown_plan = False
             if kind in {"verification", "pending_expired"}:
@@ -210,7 +240,7 @@ def audit_producer(events: list[dict], report) -> None:
     for captured in actions.values():
         if captured["result"] is None:
             report.add("gap", "unknown_acknowledgment", "Prepared action has no recorded result")
-        if not captured["verifications"]:
+        if not captured["verifications"] and not captured.get("preflight_rejection"):
             report.add("gap", "unverified_action", "Action has no captured verification")
     for call in models.values():
         if call["result"] is None:

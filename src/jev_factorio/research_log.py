@@ -150,17 +150,21 @@ class Redactor:
 
     def clean(self, value: object) -> object:
         _json_value(value)
+        return self._clean_validated(value)
+
+    def _clean_validated(self, value: object) -> object:
+        """Detach and redact an already validated tree without rescanning subtrees."""
         if type(value) is str:
             return self.text(value)
         if type(value) is list:
-            return [self.clean(item) for item in value]
+            return [self._clean_validated(item) for item in value]
         if type(value) is dict:
             result = {}
             for key, item in value.items():
                 safe_key = self.text(key)
                 if safe_key in result:
                     raise ValueError("Redaction produced duplicate evidence keys")
-                result[safe_key] = REDACTED if _SENSITIVE.search(key) else self.clean(item)
+                result[safe_key] = REDACTED if _SENSITIVE.search(key) else self._clean_validated(item)
             return result
         return value
 
