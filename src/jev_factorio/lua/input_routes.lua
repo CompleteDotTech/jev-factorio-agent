@@ -184,6 +184,12 @@ local function survey(role)
     if #arms==0 then return reject("receiver_obstructed") end
     local budget,cache={left=4096,metrics=m},{}
     for n=1,math.min(#resources,8) do
+        -- Do not advance coverage past resources that cannot get a search.
+        -- Resume with the next resource, not the next group of eight.
+        if m.path_attempts>=128 or m.path_expansions>=16384 then
+            m.search_budget_exhausted=true;break
+        end
+        if budget.left<=0 then m.belt_budget_exhausted=true;break end
         local index=(start+n-1)%#resources+1
         local resource=resources[index]
         m.sampled_resources=m.sampled_resources+1;cursor.offset=index%#resources

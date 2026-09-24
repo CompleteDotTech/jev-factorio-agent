@@ -213,3 +213,24 @@ def test_cached_survey_is_marked_stale_after_source_moves(tmp_path):
         local d=storage.campaign.observe().input_routes.diagnostics["recipe:iron-plate"]
         assert(d.reason=="stale_source_evidence" and placements==0)
     ''', tmp_path)
+
+
+def test_search_exhaustion_does_not_skip_resources_that_were_never_examined():
+    from test_input_routes_lua import ADAPTER, FIXTURE
+    runtime = pytest.importorskip('lupa').LuaRuntime()
+    adapter = ADAPTER.read_text()
+    # Scale only this fixture's attempt limit to one so the boundary is
+    # deterministic without a large wall-maze benchmark. Production is 128.
+    assert adapter.count('m.path_attempts>=128') == 2
+    adapter = adapter.replace('m.path_attempts>=128', 'm.path_attempts>=1')
+    runtime.execute(FIXTURE.read_text() + '\n' + adapter)
+    runtime.execute('''
+        obstacle=function(q) return q.name=="transport-belt" end
+        local a=storage.campaign.observe().input_routes.diagnostics["recipe:iron-plate"]
+        assert(a.path_attempts==1 and a.sampled_resources==1)
+        assert(a.reason=="path_search_budget")
+        assert(storage.input_routes.survey_cursor["recipe:iron-plate"].offset==1)
+        game.tick=game.tick+300
+        local b=storage.campaign.observe().input_routes.diagnostics["recipe:iron-plate"]
+        assert(b.resource_start_index==2 and b.sampled_resources==1 and placements==0)
+    ''')
