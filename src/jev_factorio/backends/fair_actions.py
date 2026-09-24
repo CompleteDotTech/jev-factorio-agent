@@ -7,6 +7,11 @@ import time
 from importlib.resources import files
 from types import SimpleNamespace
 from typing import Any
+from .errors import ConnectionPreflightRejected
+
+
+class NativePathNotFound(RuntimeError):
+    """The native path request terminated before walking could begin."""
 
 
 class FairActions:
@@ -45,6 +50,8 @@ class FairActions:
                 if state["status"] == "completed":
                     return state
                 if state["status"] == "failed":
+                    if state.get("error") == "Native pathfinder could not find a route":
+                        raise NativePathNotFound(state["error"])
                     raise RuntimeError(state.get("error", "Native controls failed"))
                 time.sleep(0.1)
             raise TimeoutError("Native action exceeded its bounded observation window")
@@ -127,6 +134,52 @@ class FairActions:
                 return gained
         raise RuntimeError("Mining target budget exhausted")
 
+    def approach_build(self, position: Any, name: str, direction: int) -> None:
+        """Walk only when the native placement center is outside build reach."""
+        from fle.env import Position
+
+        center = self.position(position)
+        self._note("approach_requests")
+        result = json.loads(self.command(
+            "local player=storage.fair.actor(); local target=helpers.json_to_table("
+            + json.dumps(json.dumps(center)) + "); "
+            "local dx=player.position.x-target.x; local dy=player.position.y-target.y; "
+            "local distance_squared=dx*dx+dy*dy; local reach=player.build_distance; "
+            "local placeable=player.surface.can_place_entity{name=" + json.dumps(name)
+            + ",position=target,direction=" + json.dumps(direction)
+            + ",force=player.force,build_check_type=defines.build_check_type.manual}; "
+            "if distance_squared<=reach^2 and placeable then "
+            "rcon.print(helpers.table_to_json({reachable=true})); return end; "
+            "assert(reach>1, 'Insufficient native build approach margin'); "
+            "if distance_squared==0 then dx=1; dy=0; distance_squared=1 end; "
+            # Native walking may finish within 0.25 of its final waypoint,
+            # and request_path permits a 0.2 endpoint radius. Leave one full
+            # tile after collision search rather than merely checking reach.
+            "local distance=math.sqrt(distance_squared); local positions={}; local seen={}; "
+            "for inset=2,4,2 do local radius=math.max(0,reach-inset); "
+            "for _,turn in ipairs({0,1,-1,2,-2,3,-3,4}) do local angle=turn*math.pi/4; "
+            "local ux=(dx*math.cos(angle)-dy*math.sin(angle))/distance; "
+            "local uy=(dx*math.sin(angle)+dy*math.cos(angle))/distance; "
+            "local near={x=target.x+ux*radius,y=target.y+uy*radius}; "
+            "local candidate=player.surface.find_non_colliding_position('character',near,1,0.25); "
+            "if candidate and (candidate.x-target.x)^2+(candidate.y-target.y)^2 "
+            "<=(reach-1)^2 then local key=candidate.x..':'..candidate.y; "
+            "if not seen[key] then seen[key]=true; table.insert(positions,candidate) end end end end; "
+            "assert(#positions>0, 'No collision-free build approach with arrival margin'); "
+            "rcon.print(helpers.table_to_json({positions=positions}))"
+        ))
+        if result.get("reachable") is True:
+            self._note("approaches_skipped_in_reach")
+            return
+        for candidate in result["positions"]:
+            try:
+                self.move_to(Position(**candidate))
+                return
+            except NativePathNotFound as error:
+                if type(error) is not NativePathNotFound:
+                    raise
+        raise NativePathNotFound("No native route to any bounded build approach")
+
     def place_entity(self, prototype: Any, position: Any, direction: Any,
                      exact: bool = False) -> Any:
         from fle.env import Position
@@ -137,7 +190,7 @@ class FairActions:
         if not exact:
             site = self.call("find_build_site", name, target, 8)
             target, direction_value = site["position"], site["direction"]
-        self.approach(Position(**target), name)
+        self.approach_build(Position(**target), name, direction_value)
         result = self.call("place", name, target, direction_value)
         return SimpleNamespace(
             name=result["name"], position=Position(**result["position"]),
@@ -184,11 +237,39 @@ class FairActions:
             "include(horizontal, vertical) end end; "
             for left, right, top, bottom in rectangles
         )
+        fluid_scan = ""
+        if name == "pipe":
+            areas = "".join(
+                f"scan({{{{{left-1},{top-1}}},{{{right+2},{bottom+2}}}}}); "
+                for left, right, top, bottom in rectangles
+            )
+            fluid_scan = (
+                "local inspected={}; local function scan(area) "
+                "for _,entity in pairs(player.surface.find_entities_filtered{area=area}) do "
+                "if not inspected[entity] then inspected[entity]=true; "
+                "for index=1,#entity.fluidbox do "
+                "local filter=entity.fluidbox.get_filter(index); "
+                "local filter_name=type(filter)=='string' and filter or (filter and filter.name); "
+                "local contents=entity.fluidbox[index]; "
+                "if (filter_name and filter_name~='' and filter_name~=" + json.dumps(fluid)
+                + ") or (contents and contents.name~=" + json.dumps(fluid) + ") then "
+                "for _,port in pairs(entity.fluidbox.get_pipe_connections(index)) do "
+                "if port.connection_type=='normal' and port.target_position then "
+                "local p=port.target_position; blocked[p.x..':'..p.y]=true; "
+                "if entity.name~='pipe' then "
+                "for _,offset in ipairs({{1,0},{-1,0},{0,1},{0,-1}}) do "
+                "blocked[(p.x+offset[1])..':'..(p.y+offset[2])]=true end end end end; "
+                "if entity.name=='pipe' then blocked[entity.position.x..':'..entity.position.y]=true end "
+                "end end end end end; " + areas
+            )
         cells = json.loads(self.command(
             "local player = storage.fair.actor(); local result = {buildable={}, existing={}}; "
+            "local blocked={}; " + fluid_scan
+            + "local function blocked_cell(position) return blocked[position.x..':'..position.y] end; "
             "local seen = {}; local function include(horizontal, vertical) "
             "local key = horizontal .. ':' .. vertical; if seen[key] then return end; seen[key] = true; "
             "local position = {x=horizontal+0.5,y=vertical+0.5}; "
+            "if blocked_cell(position) then return end; "
             "local entity = player.surface.find_entity(" + json.dumps(name) + ", position); "
             "if entity and entity.force == player.force then "
             "local contents = #entity.fluidbox > 0 and entity.fluidbox[1]; "
@@ -249,7 +330,7 @@ class FairActions:
             except ValueError as error:
                 route_error = error
         if route is None:
-            raise route_error or ValueError("No passable connection path")
+            raise ConnectionPreflightRejected("no_connection_route")
         if name == "small-electric-pole":
             route = select_pole_positions(route, max_wire_distance=6)
         required = sum(point not in existing for point in route)
@@ -258,7 +339,7 @@ class FairActions:
             + json.dumps(name) + ")}))"
         ))["count"]
         if available < required:
-            raise ValueError(f"Fair connection needs {required} {name}, only {available} available")
+            raise ConnectionPreflightRejected("insufficient_connection_materials")
         for horizontal, vertical in route:
             if (horizontal, vertical) not in existing:
                 self.place_entity(prototype, Position(x=horizontal, y=vertical),

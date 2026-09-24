@@ -10,6 +10,7 @@ from ..factory_contract import validate_command
 from ..planning.catalog import Catalog
 from ..state import GameSnapshot
 from ..telemetry import Trace, phase
+from .errors import ConnectionPreflightRejected
 
 
 class NativeFactory:
@@ -183,6 +184,40 @@ class NativeFactory:
         direction = "output" if output else "input"
         raise ValueError(f"Requested {direction} fluid has no native connection point")
 
+    def native_fluid_connection_points(self, role: str, fluid: str, *, output: bool) -> list[Any]:
+        """Read rotated native pipe cells, avoiding FLE's inferred port geometry."""
+        from fle.env import Position
+
+        direction = "output" if output else "input"
+        raw = self.command(
+            "local entity=storage.campaign.entities[" + json.dumps(role) + "]; "
+            "assert(entity and entity.valid, 'Campaign entity disappeared'); "
+            "local result={}; for index=1,#entity.fluidbox do "
+            "local filter=entity.fluidbox.get_filter(index); "
+            "local contents=entity.fluidbox[index]; "
+            "local name=type(filter)=='string' and filter or "
+            "(filter and filter.name) or (contents and contents.name) or ''; "
+            "if name==" + json.dumps(fluid) + (" then " if output else " or name=='' then ")
+            + "for _,connection in pairs(entity.fluidbox.get_pipe_connections(index)) do "
+            "if connection.connection_type=='normal' and "
+            "(connection.flow_direction==" + json.dumps(direction)
+            + " or connection.flow_direction=='input-output') then "
+            "table.insert(result,connection.target_position) end end end end; "
+            "rcon.print(helpers.table_to_json({points=result}))"
+        )
+        points = json.loads(raw)["points"]
+        if points == [] or points == {}:
+            raise ConnectionPreflightRejected("missing_fluid_port")
+        if not isinstance(points, list):
+            raise ValueError("Invalid native fluid port response")
+        for point in points:
+            for axis in ("x", "y"):
+                value = point[axis]
+                if (type(value) not in (int, float) or not math.isfinite(value)
+                        or not math.isclose(value - math.floor(value), 0.5)):
+                    raise ValueError("Invalid native pipe cell coordinate")
+        return [Position(**point) for point in points]
+
     def position(self, name: str, anchor: str) -> Any:
         from fle.env import Position
 
@@ -251,7 +286,6 @@ class NativeFactory:
         if action == "factory_connect":
             from fle.env import Position
 
-            source, target = self.entity(parameters["source"]), self.entity(parameters["target"])
             if parameters["kind"] == "pipe":
                 branch = json.loads(self.call("pipe_source", parameters["source"],
                                               parameters["target"], parameters["fluid"]))
@@ -259,11 +293,11 @@ class NativeFactory:
                     source = Position(**branch)
                     source_points = [source]
                 else:
-                    source_points = self.fluid_connection_points(
-                        source, parameters["fluid"], output=True
+                    source_points = self.native_fluid_connection_points(
+                        parameters["source"], parameters["fluid"], output=True
                     )
-                target_points = self.fluid_connection_points(
-                    target, parameters["fluid"], output=False
+                target_points = self.native_fluid_connection_points(
+                    parameters["target"], parameters["fluid"], output=False
                 )
                 source, target = min(
                     ((left, right) for left in source_points for right in target_points),
@@ -274,6 +308,7 @@ class NativeFactory:
                 source = Position(x=source.x, y=source.y)
                 target = Position(x=target.x, y=target.y)
             else:
+                source, target = self.entity(parameters["source"]), self.entity(parameters["target"])
                 source, target = source.position, target.position
             self.backend._fair.connect(source, target, self.prototype(parameters["kind"]),
                                        parameters["fluid"])

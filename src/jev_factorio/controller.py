@@ -15,6 +15,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 from .causal_trace import CausalTrace, traced_step
+from .backends.errors import ConnectionPreflightRejected
 from .research_log import EventSink, ResearchLogError, validate_output_paths
 from .judgments import Decision, select_plan
 from .loop import AgentLoop
@@ -979,6 +980,21 @@ class HierarchicalLoop(AgentLoop):
             # be swallowed by the normal dispatch-error handling.
             raise
         except Exception as error:
+            if step.action == "factory_connect" and type(error) is ConnectionPreflightRejected:
+                # Only this explicit backend contract proves the connection
+                # mutator was never entered. Generic errors, lost replies and
+                # failures after placement remain ambiguous below.
+                reason = "Connection preflight rejected: " + error.code
+                self.memory.event("connection_preflight_rejected", code=error.code,
+                                  attempt_id=self.memory.attempt["id"], tick=fresh.tick)
+                self._trace.emit("connection_preflight_rejected", {
+                    **self._trace.attempt_ref(self.memory.attempt["id"]),
+                    "action": step.action, "plan_id": plan.id, "step_index": index,
+                    "code": error.code, "mutation_started": False,
+                })
+                self._finish_attempt(fresh, "connection_preflight_rejected")
+                self._fail_plan(reason)
+                return self._record(snapshot, step.action, reason, fresh)
             self.memory.pending["dispatch"] = "ambiguous"
             self.memory.event("dispatch_error", error_type=error_code(error), tick=fresh.tick)
             return self._record(snapshot, step.action, "Ambiguous dispatch; verification required", fresh)

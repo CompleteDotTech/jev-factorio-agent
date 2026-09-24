@@ -298,7 +298,7 @@ def test_connections_require_live_topology_not_a_command_receipt():
     assert connected(state.factory, "source", "target", "small-electric-pole", "electricity")
 
 
-def test_native_pipe_connection_uses_generic_fluid_handler_points(monkeypatch):
+def test_native_pipe_connection_uses_native_fluid_handler_points(monkeypatch):
     fle = pytest.importorskip("fle.env")
     pump = SimpleNamespace(
         name="offshore-pump",
@@ -320,9 +320,12 @@ def test_native_pipe_connection_uses_generic_fluid_handler_points(monkeypatch):
         _tools=SimpleNamespace(),
         _fair=SimpleNamespace(connect=lambda *arguments: connections.append(arguments)),
     )
-    monkeypatch.setattr(factory, "entity", lambda role: {
-        "utility:water": pump, "utility:boiler": boiler,
-    }[role])
+    monkeypatch.setattr(factory, "entity", lambda role: pytest.fail("FLE port geometry used"))
+    def native_points(role, fluid, *, output):
+        assert fluid == "water"
+        assert output == (role == "utility:water")
+        return {"utility:water": pump, "utility:boiler": boiler}[role].connection_points
+    monkeypatch.setattr(factory, "native_fluid_connection_points", native_points)
     monkeypatch.setattr(factory, "call", lambda *arguments: "{}")
     prototype = SimpleNamespace(value=("pipe", object()))
     monkeypatch.setattr(factory, "prototype", lambda name: prototype)
