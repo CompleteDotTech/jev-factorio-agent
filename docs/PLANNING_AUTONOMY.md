@@ -232,3 +232,10 @@ validation and production cutover remain separate gates.
 [Native acceptance tooling](NATIVE_ACCEPTANCE.md) provides a fixed read-only development
 preflight, private checksummed operational captures and paired measurement
 checks. It never starts gameplay or authorizes production cutover.
+
+## Endgame correctness after the speedrun review
+
+[First-rocket launch readiness](LAUNCH_READINESS.md) addresses the missing pad and
+payload prerequisites before further throughput optimization. Scalable laboratory
+groups and a launch-wide dependency/critical-path schedule remain the next planned
+gameplay work, not features included in this change.

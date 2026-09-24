@@ -4,9 +4,11 @@ from __future__ import annotations
 import math
 
 from .state import GameSnapshot
+from . import launch_readiness
 from . import output_buffers, input_routes, production_sites, mining_outposts, successors
 
 COMMAND_FIELDS = {
+    **launch_readiness.COMMANDS,
     mining_outposts.COMMAND: mining_outposts.FIELDS,
     output_buffers.COMMAND: output_buffers.FIELDS,
     input_routes.COMMAND: input_routes.FIELDS,
@@ -25,6 +27,7 @@ COMMAND_FIELDS = {
     "factory_wait": set(),
 }
 EFFECTS = {
+    *launch_readiness.EFFECTS,
     "successor_route_available", "player_bound", "machine", "machine_recipe", "machine_input", "machine_fuel",
     "machine_output", "connection", "research_started", "researched", "research_progress",
     "crafting_idle", "rocket_ready", "rocket_parts", "rocket_launched", "produced", "transfer",
@@ -33,6 +36,9 @@ EFFECTS = {
 
 
 def validate_command(action: str, parameters: dict) -> None:
+    if action in launch_readiness.COMMANDS:
+        launch_readiness.validate(action, parameters)
+        return
     if action == mining_outposts.COMMAND:
         mining_outposts.validate(parameters)
         return
@@ -77,6 +83,8 @@ def connected(factory: dict, source: str, target: str, kind: str, fluid: str) ->
 
 def satisfied(effect: str, item: str, threshold: float, parameters: dict, snapshot: GameSnapshot,
               action: str = "") -> bool:
+    if effect in launch_readiness.EFFECTS:
+        return launch_readiness.satisfied(effect, action, parameters, snapshot)
     if effect == "successor_route_available":
         return action == "factory_wait" and parameters.get("role") in input_routes.sources(snapshot)
     if effect == "outpost_component":
@@ -177,6 +185,12 @@ def allowed(action: str, parameters: dict, snapshot: GameSnapshot) -> bool:
             return False
     if action == mining_outposts.COMMAND:
         return mining_outposts.allowed(parameters, snapshot)
+    if action in launch_readiness.COMMANDS:
+        return launch_readiness.allowed(action, parameters, snapshot)
+    if action == "factory_launch":
+        return parameters.get("role") == launch_readiness.SILO and launch_readiness.ready(snapshot)
+    if action == "factory_insert" and not launch_readiness.affordable(action, {parameters["item"]: parameters["quantity"]}, snapshot):
+        return False
     factory = snapshot.factory
     entities = factory.get("entities", {})
     machine = entities.get(parameters.get("role", ""), {})
@@ -204,8 +218,6 @@ def allowed(action: str, parameters: dict, snapshot: GameSnapshot) -> bool:
             return snapshot.inventory.get(parameters["item"], 0) >= parameters["quantity"]
         if action == "factory_extract":
             return machine.get("output", {}).get(parameters["item"], 0) >= parameters["quantity"]
-        if action == "factory_launch":
-            return machine.get("rocket_ready") is True
     if action == "factory_connect":
         return parameters["source"] in entities and parameters["target"] in entities
     if action == "factory_research":

@@ -18,6 +18,7 @@ class NativeFactory:
         raw = self.command(files("jev_factorio").joinpath("lua/catalog.lua").read_text())
         self.catalog = Catalog.from_dict(json.loads(raw))
         self.command(files("jev_factorio").joinpath("lua/factory.lua").read_text())
+        self.command("do\n" + files("jev_factorio").joinpath("lua/launch_readiness.lua").read_text() + "\nend")
         self.command("storage.campaign.discover()")
 
     def command(self, script: str) -> str:
@@ -206,6 +207,10 @@ class NativeFactory:
 
     def execute(self, action: str, parameters: dict, *, trace: Trace | None = None) -> str:
         validate_command(action, parameters)
+        from ..launch_readiness import COMMANDS
+        if action in COMMANDS:
+            from .launch_readiness import execute
+            return execute(self, action, parameters, trace)
         tools = self.backend._tools
         if action == "factory_wait":
             return "Waiting for native production or research"

@@ -52,7 +52,8 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
 
     def plan(self):
         primary = ready_research_work(self, super().plan())
-        return self._capacity_work(productive_work(self, primary))
+        from .launch import opportunistic
+        return opportunistic(self, self._capacity_work(productive_work(self, primary)))
 
     def _wait(self, effect, item="", threshold=0, role="", timeout=36000, identity=None):
         plan = super()._wait(effect, item, threshold, role, timeout, identity)
