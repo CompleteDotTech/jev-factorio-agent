@@ -159,3 +159,19 @@ def test_large_decision_cannot_consume_display_budget_before_launch_observation(
     row = {'state': mission_state(), 'decision': {'large': {str(i): list(range(128)) for i in range(128)}}}
     projected = sanitize(project_record(row))
     assert projected['state']['mission']['launch']['headline'] == 'Launch prerequisites observed'
+
+
+@pytest.mark.parametrize('missing_state', [None, [], 'truncated'])
+def test_incomplete_decision_record_cannot_reuse_or_rejuvenate_prior_launch_state(tmp_path, missing_state):
+    path = tmp_path / 'events'
+    with EventWriter(path) as writer:
+        writer.emit('observation', 2, state=project_state(mission_state()))
+        monitor = Monitor(path); monitor.poll()
+        assert monitor.view['state']['mission']['launch']['evidence_valid']
+        record = {'action': 'observe', 'mission_record': {'tick': 1001}}
+        if missing_state is not None:
+            record['state'] = missing_state
+        writer.emit('decision_recorded', 7, record=record)
+        monitor.poll()
+        assert monitor.view['state'] == {}
+        assert monitor.view['state_observed_time'] is None

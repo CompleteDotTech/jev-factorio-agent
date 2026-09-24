@@ -446,10 +446,13 @@ class Monitor:
             view["parameters"] = data.get("parameters")
         elif kind == "decision_recorded" and isinstance(data.get("record"), dict):
             view.pop("mission_record", None)
-            view["state_observed_time"] = event["time"]
+            # A truncated/older record cannot rejuvenate a previous observation.
+            recorded_state = data["record"].get("state")
+            view["state"] = recorded_state if isinstance(recorded_state, dict) else {}
+            view["state_observed_time"] = event["time"] if view["state"] else None
             view["legacy_record_timestamp"] = data.get("record_timestamp") is True
             view.update({key: value for key, value in data["record"].items()
-                         if key in RECORD_KEYS or key in {"state", "mission_record"}})
+                         if key in RECORD_KEYS or key == "mission_record"})
         elif kind.endswith("_failed"):
             view["last_error"] = kind
         seen = view.setdefault("seen", [])
