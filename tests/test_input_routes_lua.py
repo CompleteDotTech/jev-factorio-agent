@@ -167,3 +167,19 @@ def test_belt_directions_match_real_step_coordinates(tmp_path):
             assert(current.position.y+v.y==following.position.y)
         end
     """, tmp_path)
+
+
+def test_empty_ore_survey_skips_layout_probes_and_can_recover_after_resurvey(tmp_path):
+    execute('''
+        resources={}
+        local probes=0
+        local original=source.surface.can_place_entity
+        source.surface.can_place_entity=function(q) probes=probes+1; return original(q) end
+        local result=storage.campaign.observe().input_routes
+        assert(next(result.sources)==nil and placements==0 and probes==0)
+        assert(result.diagnostics["recipe:iron-plate"].reason=="ore_outside_local_survey")
+        resources[1]={name="iron-ore",position={x=0.5,y=0.5},amount=1000,valid=true,minable=true}
+        game.tick=game.tick+300
+        local row=storage.campaign.observe().input_routes.sources["recipe:iron-plate"]
+        assert(row and #row.steps<=66 and probes>0 and placements==0)
+    ''', tmp_path)

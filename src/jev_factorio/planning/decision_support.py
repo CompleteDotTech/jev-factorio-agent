@@ -142,8 +142,14 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
         target = (plan.materials or {}).get('local_objective')
         if target is not None:
             target = deepcopy(target)
+        intent = (plan.materials or {}).get('work_intent', {})
+        scope = (intent.get('scope') if isinstance(intent, dict)
+                 and intent.get('observed_tick') == snapshot.tick else None)
+        scope = scope if scope in {'immediate', 'lookahead'} else 'unclassified'
         passive = all(s.action in {'factory_wait', 'idle'} for s in plan.steps)
         result[plan.id] = {
+            'work_scope': scope,
+            'processed_units_basis': 'handling_volume_not_useful_production',
             'compiler_order': index, 'passive': passive, 'urgency': urgency,
             'reasons': sorted(set(reasons)), 'local_target': target,
             'travel_tiles_lower_bound': None if any(x.startswith('travel:') for x in unknown) else round(travel, 3),
@@ -156,19 +162,42 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                                       'factory_buffer_build', 'factory_input_build'} for s in plan.steps),
             'estimate_basis': 'native_observation_and_catalog_with_declared_policy_heuristics',
         }
+    # A nearer bulk pickup of the same currently needed material is not
+    # discretionary stockpiling. Compare its cost using only the current need,
+    # not all extra handled units. This is evidence/ranking, never permission.
+    def acquired_item(plan):
+        if len(plan.steps) != 1 or plan.steps[0].action not in {'factory_extract', 'factory_gather'}:
+            return None
+        step = plan.steps[0]
+        parameters = step.parameters or {}
+        item = parameters.get('item', parameters.get('resource', step.item))
+        return item if isinstance(item, str) and item else None
+
+    required = {}
+    for plan in plans:
+        item, row = acquired_item(plan), result[plan.id]
+        if item and row['work_scope'] == 'immediate' and row['processed_units'] > 0:
+            required[item] = max(required.get(item, 0), row['processed_units'])
+    for plan in plans:
+        item, row = acquired_item(plan), result[plan.id]
+        if item in required and row['work_scope'] == 'lookahead' and row['processed_units'] > 0:
+            row['work_scope'] = 'shared_prerequisite'
+            row['current_prerequisite_units'] = min(required[item], row['processed_units'])
+            row['reasons'].append('same_item_current_prerequisite')
     return result
 
 
 def ranking_key(row: dict) -> tuple:
     """Urgency and productive work precede known actor cost; ties stay stable.
 
-    Unknown cost is never zero-cost work. Among equally urgent, fully estimated
-    options prefer useful units per occupied actor tick; ties use compiler order.
+    Unknown cost is never zero-cost work. Among equally urgent options, a
+    current prerequisite precedes discretionary lookahead. Handling volume is
+    only a tie-breaker within a demand class, not proof of useful production.
     This is a scheduling heuristic, not a success probability or calibrated value.
     """
     duration = row['actor_ticks_estimate']
-    amount = max(1, row['processed_units'])
-    return (row['passive'], -row['urgency'], duration is None,
+    amount = max(1, row.get('current_prerequisite_units', row['processed_units']))
+    return (row['passive'], -row['urgency'], row.get('work_scope') == 'lookahead', duration is None,
             (duration / amount) if duration is not None else 0,
             row['compiler_order'])
 
@@ -182,7 +211,9 @@ def scheduling_context(snapshot, catalog, plans, goal: str) -> dict:
             'primary_target': deepcopy(primary),
             'instruction': 'Prevent observed starvation, remove the next production blocker, '
                            'or do useful independent work while production runs. '
-                           'A single useful action need not complete the ultimate goal.',
+                           'A single useful action need not complete the ultimate goal. '
+                           'Immediate prerequisites precede discretionary lookahead at equal urgency; '
+                           'moving more items is not evidence of more useful production.',
             'success_authority': 'unchanged native step and goal predicates, never model scores',
         },
         'candidate_evidence': evidence,

@@ -121,6 +121,10 @@ local function survey(role)
     assert(dp and dp.tile_width==2 and dp.tile_height==2 and dp.vector_to_place_result
         and ip and ip.inserter_pickup_position and ip.inserter_drop_position, "Unsupported route prototypes")
     local resources=source.surface.find_entities_filtered{name=ores[role],position=source.position,radius=40,limit=128}
+    -- No local source means no candidate can exist. Do not enumerate receiver
+    -- arms or run placement/path probes for this rejected survey. The observer
+    -- retains its existing rejection, resurvey interval and native build guards.
+    if #resources==0 then return nil end
     table.sort(resources,function(a,b)
         local da=math.abs(a.position.x-source.position.x)+math.abs(a.position.y-source.position.y)
         local db=math.abs(b.position.x-source.position.x)+math.abs(b.position.y-source.position.y)
