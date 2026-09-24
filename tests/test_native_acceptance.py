@@ -41,7 +41,7 @@ def source_files(root, trial_id='trial1', arm='baseline', pair_id='pair1', span=
         'furnace_output_buffers': True, 'furnace_input_belts': True,
         'mining_outposts': False, 'ore_side_successors': arm != 'baseline'}
     trial = {'schema': 1, 'experiment_id': 'synthetic-experiment', 'trial_id': trial_id,
-        'pair_id': pair_id, 'arm': arm, 'expected_commit': COMMIT, 'expected_policy': 'hybrid',
+        'pair_id': pair_id, 'arm': arm, 'expected_commit': COMMIT, 'expected_source_sha256': 'b' * 64, 'expected_policy': 'hybrid',
         'expected_model': 'synthetic-model', 'initial_save_sha256': sha256(save.read_bytes()),
         'initial_checkpoint_sha256': sha256(initial.read_bytes()), 'vm_uuid': DEV,
         'production_vm_uuid': PROD, 'goal': 'research:automation', 'configuration': config}
@@ -64,7 +64,7 @@ def source_files(root, trial_id='trial1', arm='baseline', pair_id='pair1', span=
     for tick in range(0, span, 1800):
         rows.append({'schema_version': 2, 'controller': 'hierarchical', 'session_id': first_cp['session_id'],
             'world_kind': world, 'target': 'rocket_launch', 'policy': 'hybrid', 'requested_model': 'synthetic-model',
-            'resolved_model': None, 'run_id': trial_id, 'segment_id': 'one', 'execution_id': trial_id,
+            'resolved_model': None, 'run_id': trial_id, 'segment_id': 'one', 'execution_id': trial_id, 'process_id': trial_id,
             'code_revision': {'commit': COMMIT, 'source_sha256': 'b' * 64},
             'recorded_at_utc': (start + timedelta(seconds=tick/60)).isoformat(),
             'tick': tick, 'state': state(tick), 'after_state': state(tick + 1800), 'action': 'observe',

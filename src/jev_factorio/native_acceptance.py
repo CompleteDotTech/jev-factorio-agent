@@ -87,7 +87,7 @@ def analyze(directory: Path) -> dict:
     qualified_sources, newly_qualified = set(), set()
     first_preferred = {role for role, value in first.get('factory', {}).get('successors', {}).get('sources', {}).items()
                        if value.get('phase') == 'preferred'}
-    resolved_models = set()
+    resolved_models, process_ids, execution_ids = set(), set(), set()
     initial_uses = {value.get('use', {}).get('job_id') for value in first.get('factory', {}).get('successors', {}).get('sources', {}).values()}
     goal_tick = None
     first_goal = goal_observed(trial['goal'], first, {'completed_goals': initial.get('completed_goals', {})})
@@ -95,6 +95,12 @@ def analyze(directory: Path) -> dict:
     for row in rows:
         reject(row.get('world_kind') != 'fle', 'synthetic_or_unknown_world')
         reject(row.get('run_id') != trial['trial_id'], 'trial_run_identity_mismatch')
+        for key, observed in (('process_id', process_ids), ('execution_id', execution_ids)):
+            value = row.get(key)
+            if not isinstance(value, str) or not 0 < len(value) <= 128:
+                issues.append('invocation_identity_missing')
+            else:
+                observed.add(value)
         if row.get('model_call') is True:
             model = row.get('resolved_model')
             if not isinstance(model, str) or not model:
@@ -103,7 +109,9 @@ def analyze(directory: Path) -> dict:
                 resolved_models.add(model)
         reject(row.get('controller') != 'hierarchical' or row.get('target') != 'rocket_launch', 'unexpected_controller_or_target')
         revision = row.get('code_revision') or {}
-        reject(revision.get('commit') != trial['expected_commit'] or revision.get('dirty') is True, 'source_revision_mismatch')
+        reject(revision.get('commit') != trial['expected_commit']
+               or revision.get('source_sha256') != trial['expected_source_sha256']
+               or revision.get('dirty') is True, 'source_revision_mismatch')
         reject(row.get('policy') != trial['expected_policy'], 'policy_mismatch')
         requested = row.get('requested_model')
         reject((requested if requested is not None else 'none') != trial['expected_model'], 'requested_model_mismatch')
@@ -166,6 +174,7 @@ def analyze(directory: Path) -> dict:
                     issues.append('invalid_successor_evidence')
     reject(any(final.get('failures', {}).get(k, -1) < value for k, value in failures.items()), 'final_failure_history_regressed')
     reject(len(resolved_models) > 1, 'resolved_model_drift')
+    reject(len(process_ids) != 1 or len(execution_ids) != 1, 'interrupted_or_mixed_invocation')
     reject(not runtimes or any(canonical(r) != canonical(runtimes[0]) for r in runtimes), 'native_actor_mod_or_surface_drift')
     if runtimes:
         reject(any(type(runtimes[0].get(k)) is not int or runtimes[0][k] <= 0
@@ -274,11 +283,11 @@ def experiment(directories: list[Path], useful_item: str) -> dict:
                             'baseline': a and a['trial']['trial_id'], 'treatment': b and b['trial']['trial_id']})
     if len(comparisons) < 3 or any(not p['passed'] for p in comparisons): issues.append('three_valid_matched_pairs_required')
     baseline = [r for r in reports if r['trial']['arm'] == 'baseline']
-    for field in ('expected_commit', 'expected_policy', 'expected_model', 'configuration', 'goal'):
+    for field in ('expected_commit', 'expected_source_sha256', 'expected_policy', 'expected_model', 'configuration', 'goal'):
         if len({sha256(canonical(r['trial'][field])) for r in baseline}) != 1:
             issues.append('baseline_drift:' + field)
     treatment = [r for r in reports if r['trial']['arm'] in {'treatment', 'soak'}]
-    for field in ('expected_commit', 'expected_policy', 'expected_model', 'configuration', 'goal'):
+    for field in ('expected_commit', 'expected_source_sha256', 'expected_policy', 'expected_model', 'configuration', 'goal'):
         if len({sha256(canonical(r['trial'][field])) for r in treatment}) != 1: issues.append('treatment_drift:' + field)
     if not soaks or any(not r['measurement_checks_passed']
             or not r['trial']['configuration']['ore_side_successors']

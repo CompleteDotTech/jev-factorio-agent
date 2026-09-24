@@ -108,6 +108,7 @@ provenance instead of rewriting an archived log to fit the descriptor.
   "pair_id": "pair-01",
   "arm": "treatment",
   "expected_commit": "REPLACE_WITH_EXACT_40_HEX_COMMIT",
+  "expected_source_sha256": "REPLACE_WITH_64_HEX_SUPERVISOR_SOURCE_FINGERPRINT",
   "expected_policy": "hybrid",
   "expected_model": "PIN_THE_SAME_PROVIDER_MODEL",
   "initial_save_sha256": "REPLACE_WITH_64_HEX_SAVE_HASH",
@@ -203,11 +204,11 @@ python -m jev_factorio.native_acceptance \
 ```
 
 The evaluator validates hashes/gzip/counts, native rather than mock labels,
-checkpoint/session/tick boundaries, exact code/policy/model/configuration, observed
+checkpoint/session/tick boundaries, exact commit and source fingerprint, policy/model/configuration, observed
 actor/mod continuity, unpaused normal speed, native counter monotonicity, retained
 failure budgets, original producer identities and applicable successor flow proofs.
 It rejects duplicate records/captures, repeated trial IDs, ambiguous pairs,
-incomplete arms, treatment/baseline drift, stale preflight, insufficient horizons
+incomplete arms, treatment/baseline drift, missing or changed process/execution identity, stale preflight, insufficient horizons
 and missing required coverage. Source strings and native-shaped JSON still cannot
 prove authenticity; synthetic tests deliberately exercise that limit.
 
@@ -251,3 +252,18 @@ checks, fault/soak review, independent exact-head review and explicit cutover
 acceptance may the deployment workflow proceed. Keep one production writer and
 preserve the existing world and deadline. Rollback is not a save rewind. None of
 these commands starts that workflow or clears a blocked gate.
+
+## Source identity and uninterrupted-trial limits
+
+Copy the complete `commit` and `source_sha256` pair from the existing supervisor's
+source-revision evidence into the predeclared trial. A commit alone cannot detect
+a dirty or otherwise different working tree. `source_sha256` is this repository's
+versioned source fingerprint, not a SHA256 of the commit string, archive, or save.
+A missing or changed fingerprint makes the trial ineligible. This still relies on
+trusted collection; it does not make unsigned gameplay JSON externally authentic.
+
+Performance pairs and the uninterrupted soak each require one nonempty controller
+`process_id` and one `execution_id`. A restart within a capture fails that gate
+even if cumulative counter values happen to exceed their previous values after
+reattachment. Restart/fault trials are separate recovery evidence, not silently
+pooled into uninterrupted performance measurements.

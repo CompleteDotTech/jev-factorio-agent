@@ -47,7 +47,7 @@ def reports():
                 'trial':{'experiment_id':'x','trial_id':name,'pair_id':str(i),'arm':arm,
                          'initial_save_sha256':'save','initial_checkpoint_sha256':'checkpoint',
                          'expected_policy':'hybrid','expected_model':'test','goal':'research:x',
-                         'production_vm_uuid':'production','expected_commit':'baseline' if arm=='baseline' else 'treatment',
+                         'production_vm_uuid':'production','expected_source_sha256':'source','expected_commit':'baseline' if arm=='baseline' else 'treatment',
                          'configuration':{**base_config,'ore_side_successors':arm!='baseline'}},
                 'runtime_identity':{'session':'same'},'resolved_models':['test'],
                 'native_ticks':108000,'production_delta':{'pack':60},'consumption_delta':{'pack':60},

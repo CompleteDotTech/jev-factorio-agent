@@ -36,7 +36,7 @@ DENIED = {'password', 'api_key', 'authorization', 'headers', 'environment', 'end
           'provider_body', 'provider_response', 'provider_request', 'access_token', 'refresh_token', 'secret'}
 TRIAL_KEYS = {'schema', 'experiment_id', 'trial_id', 'pair_id', 'arm', 'expected_commit', 'expected_policy',
               'expected_model', 'initial_save_sha256', 'initial_checkpoint_sha256', 'vm_uuid',
-              'production_vm_uuid', 'goal', 'configuration'}
+              'production_vm_uuid', 'goal', 'configuration', 'expected_source_sha256'}
 
 
 def validate_trial(trial: dict) -> None:
@@ -45,7 +45,7 @@ def validate_trial(trial: dict) -> None:
     for key in TRIAL_KEYS - {'schema', 'configuration'}:
         if not isinstance(trial[key], str) or not 0 < len(trial[key]) <= 128:
             raise ValueError('Trial identifiers must be bounded strings')
-    for key, size in (('expected_commit', 40), ('initial_save_sha256', 64), ('initial_checkpoint_sha256', 64)):
+    for key, size in (('expected_commit', 40), ('expected_source_sha256', 64), ('initial_save_sha256', 64), ('initial_checkpoint_sha256', 64)):
         if not re.fullmatch('[0-9a-f]{' + str(size) + '}', trial[key]):
             raise ValueError('Invalid pinned trial digest')
     if trial['arm'] not in {'baseline', 'treatment', 'soak'} or trial['expected_policy'] not in {'jev', 'hybrid', 'deterministic'}:
