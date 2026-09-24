@@ -38,6 +38,13 @@ class SuccessorMixin:
     def __init__(self, backend, jev=None, **options):
         if options.get('target') != 'rocket_launch' or options.get('factory_scheduling') != 'ready-work':
             raise ValueError('Successors require ready-work rocket planning')
+        # Validate opt-in migration before backend.enable_factory installs any
+        # native extension. This read never rewrites the caller's checkpoint.
+        if options.get('resume_controller'):
+            from pathlib import Path
+            path = Path(options.get('checkpoint') or '')
+            data = json.loads(path.read_text(encoding='utf-8'))
+            self.memory_type.load(path, data.get('session_id'), options['target'])
         self._successors_enabled = True
         self._successor_fault = False
         self._successor_evidence = {}
@@ -135,6 +142,40 @@ class SuccessorMixin:
         if project['status'] != 'active' or project['anchor'] != marker['anchor']:
             raise ValueError('Successor project is paused or differs')
 
+    def _investment_step_allowed(self, plan, step, snapshot):
+        if not super()._investment_step_allowed(plan, step, snapshot):
+            return False
+        marker = (plan.materials or {}).get(contract.MARKER, {})
+        for source, project in self.memory.successor_projects.items():
+            if project['status'] != 'active' or marker.get('source') == source and marker.get('anchor') == project['anchor']:
+                continue
+            try:
+                site = site_sources(snapshot).get(source, {})
+                if site.get('anchor') != project['anchor']:
+                    return False
+                required = dict(site['bill'])
+                if project['source_unit']:
+                    required['stone-furnace'] -= 1
+                output = snapshot.factory.get('output_buffers', {}).get('sources', {}).get(source, {})
+                for part in output.get('parts', {}):
+                    name = 'wooden-chest' if part == 'chest' else 'burner-inserter'
+                    required[name] -= 1
+                route = snapshot.factory.get('input_routes', {}).get('sources', {}).get(source, {})
+                for spec in route.get('steps', []):
+                    if spec['part'] in route.get('parts', {}):
+                        required[spec['name']] -= 1
+                if any(v < 0 for v in required.values()):
+                    return False
+                # Only pieces already carried are protected. Coal and seed ore
+                # are not locked away from predecessor/emergency maintenance.
+                for item, cost in (step.costs or {}).items():
+                    have = snapshot.inventory.get(item, 0)
+                    if have - cost < min(have, required.get(item, 0)):
+                        return False
+            except (KeyError, TypeError, ValueError):
+                return False
+        return True
+
     def _pause_successor(self, source, reason):
         project = self.memory.successor_projects[source]
         if project['status'] == 'active':
@@ -149,8 +190,12 @@ class SuccessorMixin:
         marker = (plan.get('materials') or {}).get(contract.MARKER)
         plan_id = plan.get('id')
         super()._fail_plan(reason)
-        if marker and self.memory.failures.get(plan_id, 0) >= 2:
-            self._pause_successor(marker['source'], 'reconciled_step_budget')
+        if marker and self._project_failures(marker['source']) >= 2:
+            self._pause_successor(marker['source'], 'reconciled_project_budget')
+
+    def _project_failures(self, source):
+        prefix = 'successor:' + source + ':'
+        return sum(count for key, count in self.memory.failures.items() if key.startswith(prefix))
 
     def _work_candidates(self, snapshot):
         # Do not open a competing capital project while a successor owns a kit.
@@ -172,6 +217,9 @@ class SuccessorMixin:
         for source, project in self.memory.successor_projects.items():
             if project['status'] != 'active':
                 continue
+            if self._project_failures(source) >= 2:
+                self._pause_successor(source, 'retained_project_failure_budget')
+                return original, blocker
             if snapshot.tick >= project['deadline_tick']:
                 self._pause_successor(source, 'bounded_project_deadline')
                 return original, blocker
@@ -245,6 +293,7 @@ def successor_loop_type(base):
                     or not isinstance(memory.successor_receipts, dict)
                     or set(memory.successor_projects) - contract.ROLES.keys()
                     or set(memory.successor_receipts) - memory.successor_projects.keys()
+                    or any(not isinstance(p, dict) for p in memory.successor_projects.values())
                     or sum(p.get('status') != 'qualified' for p in memory.successor_projects.values()) > 1):
                 raise ValueError('Invalid successor checkpoint')
             for source, project in memory.successor_projects.items():

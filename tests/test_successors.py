@@ -74,6 +74,7 @@ def qualify(state, row):
                   'outputs': {'iron-gear-wheel': 3}}
     row.update(phase='preferred', qualification={'first_tick': 300, 'last_tick': 36300,
         'positive_samples': 30, 'produced': 30, 'source_unit': 17,
+        'last_progress_tick': 36300, 'max_observation_gap': 1200,
         'input_layout': 'input:17:1', 'use_job_id': 'real-receipt'})
 
 

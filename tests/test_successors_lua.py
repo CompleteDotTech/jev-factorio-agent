@@ -8,10 +8,14 @@ LUA = ROOT / 'src/jev_factorio/lua'
 
 
 @pytest.fixture
-def runtime():
+def runtime(request):
     lua = pytest.importorskip('lupa.lua54').LuaRuntime()
-    lua.execute((ROOT / 'tests/fixtures/input_routes_runtime.lua').read_text())
-    lua.execute('''
+    def scenario(code):
+        if getattr(request, 'param', 'iron') == 'copper':
+            code = code.replace('iron-plate', 'copper-plate').replace('iron-ore', 'copper-ore').replace('iron-gear-wheel', 'copper-cable')
+        lua.execute(code)
+    scenario((ROOT / 'tests/fixtures/input_routes_runtime.lua').read_text())
+    scenario('''
         surface=source.surface;surface.index=1;force.index=1;player.index=1
         for _,e in ipairs(entities) do e.valid=false end
         storage.campaign.entities={};storage.output_buffers=nil
@@ -66,7 +70,7 @@ def runtime():
     ''')
     for asset in ('craft_jobs.lua', 'output_buffers.lua', 'input_routes.lua', 'production_sites.lua', 'successors.lua'):
         lua.execute((LUA / asset).read_text())
-    lua.execute('''
+    scenario('''
         c=storage.campaign;growth="growth:iron-plate"
         function start_successor()
             local row=c.observe().production_sites.sources[growth]

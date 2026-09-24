@@ -165,17 +165,19 @@ c.observe_successors=function(result)
             local window=m.window
             if not integer(count) or window and count<window.last_produced then m.fault="successor_counter_regressed"
             elseif not m.qualification then
-                if not window or game.tick-window.last_tick>1800 then
-                    m.window={first_tick=game.tick,last_tick=game.tick,baseline=count,last_produced=count,positive_samples=0}
+                if not window or game.tick-window.last_tick>1800 or game.tick-window.last_progress_tick>1800 then
+                    m.window={first_tick=game.tick,last_tick=game.tick,baseline=count,last_produced=count,positive_samples=0,last_progress_tick=game.tick,max_gap=0}
                     window=m.window
                 elseif game.tick-window.last_tick>=60 then
-                    if count>window.last_produced then window.positive_samples=window.positive_samples+1 end
+                    window.max_gap=math.max(window.max_gap,game.tick-window.last_tick)
+                    if count>window.last_produced then window.positive_samples=window.positive_samples+1;window.last_progress_tick=game.tick end
                     window.last_tick=game.tick;window.last_produced=count
                 end
                 if window.positive_samples>=3 and window.last_tick-window.first_tick>=36000
                     and count-window.baseline>=3 and m.use then
                     m.qualification={first_tick=window.first_tick,last_tick=window.last_tick,
                         positive_samples=window.positive_samples,produced=count-window.baseline,
+                        last_progress_tick=window.last_progress_tick,max_observation_gap=window.max_gap,
                         source_unit=m.source_unit,input_layout=input.layout,use_job_id=m.use.job_id}
                 end
             end

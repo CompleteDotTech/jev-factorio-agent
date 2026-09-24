@@ -39,6 +39,9 @@ class SuccessorPlanner(InputRoutePlanner):
                 # Native route maintenance is provided by the composed controller.
         return super()._need(item, amount, path)
 
+    def _science_reserve(self):
+        return max(successors.SCIENCE_RESERVE, super()._science_reserve())
+
     def acquire(self, item, amount):
         self._successor_acquiring = True
         previous = getattr(self, '_economic_acquiring', False)

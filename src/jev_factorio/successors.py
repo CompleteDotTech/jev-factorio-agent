@@ -67,10 +67,12 @@ def sources(snapshot) -> dict:
             raise ValueError('Invalid downstream craft witness')
         proof = row['qualification']
         if proof and (not use or any(not integer(proof.get(key)) for key in
-                ('first_tick', 'last_tick', 'positive_samples', 'produced', 'source_unit'))
+                ('first_tick', 'last_tick', 'positive_samples', 'produced', 'source_unit', 'last_progress_tick', 'max_observation_gap'))
                 or proof['source_unit'] != row['source_unit'] or proof.get('input_layout') != use['input_layout']
                 or proof.get('use_job_id') != use['job_id'] or proof['positive_samples'] < 3
                 or proof['produced'] < 3 or proof['last_tick'] - proof['first_tick'] < 36000
+                or not proof['first_tick'] <= proof['last_progress_tick'] <= proof['last_tick']
+                or proof['last_tick'] - proof['last_progress_tick'] > 1800 or proof['max_observation_gap'] > 1800
                 or not row['started_tick'] <= proof['first_tick'] <= proof['last_tick'] <= snapshot.tick):
             raise ValueError('Invalid successor qualification')
         if row['phase'] == 'preferred' and not proof:

@@ -132,6 +132,19 @@ def cli() -> None:
                 p.error("--resume-controller requires an existing --checkpoint")
             if args.backend == "fle" and not args.resume:
                 p.error("Resuming live controller memory requires --resume to preserve the world")
+        if args.ore_side_successors:
+            try:
+                import json
+                from .background import BackgroundWorkLoop
+                from .buffer_controller import buffered_loop_type
+                from .input_controller import input_loop_type
+                from .successor_controller import successor_loop_type
+                path = Path(args.checkpoint)
+                identity = json.loads(path.read_text(encoding='utf-8'))
+                kind = successor_loop_type(input_loop_type(buffered_loop_type(BackgroundWorkLoop)))
+                kind.memory_type.load(path, identity.get('session_id'), args.target)
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                p.error('Successor checkpoint preflight failed; backend not started')
         # Resolve credentials before starting a backend that initializes a world.
         try:
             client = (None if args.policy == "deterministic" else
