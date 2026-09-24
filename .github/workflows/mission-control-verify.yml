@@ -1,0 +1,85 @@
+name: Verify Mission Control launch integration
+on:
+  push:
+    branches: [staging/mission-control-verified-20260924]
+    paths: ['.github/workflows/mission-control-verify.yml']
+permissions:
+  contents: write
+jobs:
+  verify:
+    if: github.repository == 'CompleteDotTech/jev-factorio-agent' && github.ref == 'refs/heads/staging/mission-control-verified-20260924'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Verify transported source before any application
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, zlib
+          out=Path('/tmp/mission-transfer');out.mkdir()
+          pieces=[]
+          for n in (0,1):
+              value=Path(f'.github/mission-control.patch.{n}').read_text()
+              (out/f'part{n}.txt').write_text(value)
+              pieces.append(value)
+          text=''.join(pieces)
+          # Correct two known transcription insertions, then require the exact
+          # digest of locally tested source. No weakened checksum or code fallback.
+          text=text.replace('BSrzBz5PA21IX','BSrzB5PA21IX')
+          text=text.replace('XxxdnPT/fvfLruQr','XxxdnPT/fvLruQr')
+          assert len(text)==20064, ('transport-length',len(text))
+          decoder=zlib.decompressobj()
+          patch=decoder.decompress(base64.b64decode(text,validate=True),49364)
+          assert decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+          assert len(patch)==49363
+          assert hashlib.sha256(patch).hexdigest()=='4521497d3a709038ed23f7789d8bf6f53281f23e605382843e335d39be64993a'
+          Path('/tmp/mission-control-ui.patch').write_bytes(patch)
+          print('Verified exact locally tested patch SHA256 and byte count')
+          PY
+      - name: Integrate current main and verify complete resulting source tree
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = d726c97cfb417b56302ad0a126888b6e2ff4c8cd
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-edit d726c97cfb417b56302ad0a126888b6e2ff4c8cd
+          git rm .github/mission-control.patch.0 .github/mission-control.patch.1 .github/workflows/mission-control-verify.yml
+          test "$(git write-tree)" = 4acf5990906e449aca6620a58adbf8266f1f836e
+          git apply --check /tmp/mission-control-ui.patch
+          git apply /tmp/mission-control-ui.patch
+          git add src/jev_factorio/dashboard.py src/jev_factorio/dashboard_mission.py src/jev_factorio/dashboard_assets docs/DASHBOARD.md docs/MISSION_CONTROL_LAUNCH.md tests/test_dashboard_mission.py tests/test_dashboard_browser.py
+          git diff --cached --check
+          test "$(git write-tree)" = d30695d0c2e6da4e8a43b5ad04abc719d9c951c0
+          git commit -m 'Expose evidence-backed launch gates and autonomy status in Mission Control'
+      - run: python -m pip install -e '.[test,dashboard-test]'
+      - run: python -m playwright install --with-deps chromium
+      - name: Mission Control projection, observer and actual HTTP/SSE Chromium tests
+        run: python -m pytest tests/test_dashboard.py tests/test_dashboard_integration.py tests/test_dashboard_mission.py tests/test_dashboard_browser.py -q
+      - name: Full regression suite including browser tests
+        run: python -m pytest tests/ -q
+      - run: python -m compileall -q src
+      - name: Publish only the exact passing source commit
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          BRANCH=staging/mission-control-verified-20260924
+          test "$(git ls-remote origin refs/heads/$BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          git push origin HEAD:refs/heads/$BRANCH
+      - name: Retain bounded public-code transport diagnostics if validation fails
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mission-control-transfer-diagnostics
+          path: /tmp/mission-transfer/
+          if-no-files-found: ignore
+          retention-days: 1
