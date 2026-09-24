@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import re
+import math
 
 from .acceptance_capture import verify
 from .acceptance_io import canonical, load_json, sha256, stable_read, write_new
@@ -24,7 +25,7 @@ def counter_delta(first, last):
     result = {}
     for key in first.keys() | last.keys():
         a, b = first.get(key, 0), last.get(key, 0)
-        if type(a) not in {int, float} or type(b) not in {int, float} or a < 0 or b < a:
+        if type(a) not in {int, float} or type(b) not in {int, float} or not math.isfinite(a) or not math.isfinite(b) or a < 0 or b < a:
             return None
         result[key] = b - a
     return result
@@ -35,7 +36,8 @@ def goal_observed(goal, snapshot, row):
     if kind == 'research' and name:
         return name in (snapshot.get('researched') or snapshot.get('factory', {}).get('researched', []))
     if kind == 'milestone' and name:
-        return name in row.get('completed_goals', {})
+        achieved = row.get('completed_goals', {}).get(name)
+        return type(achieved) is int and 0 <= achieved <= snapshot['tick']
     if goal == 'rocket:launch':
         return snapshot.get('victory') is True and snapshot.get('victory_source') == 'native:base-game-rocket-launch'
     raise ValueError('Unsupported predeclared goal')
@@ -68,18 +70,37 @@ def analyze(directory: Path) -> dict:
     reject(preflight.get('native', {}).get('tick', -1) > start, 'preflight_after_trial_start')
     reject(any(final.get(k) for k in ('pending', 'attempt', 'active_plan', 'reservations', 'background_job', 'background_attempt')), 'unresolved_final_work')
     reject(final.get('status') not in {'running', 'completed'}, 'terminal_failure')
+    try:
+        observed = datetime.fromisoformat(preflight['observed_at_utc'].replace('Z', '+00:00'))
+        started = datetime.fromisoformat(rows[0]['recorded_at_utc'].replace('Z', '+00:00'))
+        reject(observed.utcoffset() != timezone.utc.utcoffset(observed)
+               or started.utcoffset() != timezone.utc.utcoffset(started)
+               or not 0 <= (started - observed).total_seconds() <= 300, 'preflight_time_not_fresh')
+    except (ValueError, TypeError, KeyError, AttributeError):
+        issues.append('preflight_time_not_fresh')
     failures = dict(initial.get('failures', {}))
     times, runtimes, seen_observations = [], [], set()
     phase_returns = {}
     produced_series, consumed_series, fair_series = [], [], []
     use_ids = set()
     use_witnesses = []
+    qualified_sources, newly_qualified = set(), set()
+    first_preferred = {role for role, value in first.get('factory', {}).get('successors', {}).get('sources', {}).items()
+                       if value.get('phase') == 'preferred'}
+    resolved_models = set()
     initial_uses = {value.get('use', {}).get('job_id') for value in first.get('factory', {}).get('successors', {}).get('sources', {}).values()}
     goal_tick = None
     first_goal = goal_observed(trial['goal'], first, {'completed_goals': initial.get('completed_goals', {})})
     reject(first_goal, 'goal_already_complete_at_baseline')
     for row in rows:
         reject(row.get('world_kind') != 'fle', 'synthetic_or_unknown_world')
+        reject(row.get('run_id') != trial['trial_id'], 'trial_run_identity_mismatch')
+        if row.get('model_call') is True:
+            model = row.get('resolved_model')
+            if not isinstance(model, str) or not model:
+                issues.append('resolved_model_coverage_missing')
+            else:
+                resolved_models.add(model)
         reject(row.get('controller') != 'hierarchical' or row.get('target') != 'rocket_launch', 'unexpected_controller_or_target')
         revision = row.get('code_revision') or {}
         reject(revision.get('commit') != trial['expected_commit'] or revision.get('dirty') is True, 'source_revision_mismatch')
@@ -122,14 +143,21 @@ def analyze(directory: Path) -> dict:
                 times.append(tick)
                 produced_series.append(factory.get('produced'))
                 consumed_series.append(factory.get('consumed'))
-            if goal_tick is None and goal_observed(trial['goal'], state, row): goal_tick = tick
+            if goal_tick is None and goal_observed(trial['goal'], state, row):
+                goal_tick = (row['completed_goals'][trial['goal'].split(':', 1)[1]]
+                             if trial['goal'].startswith('milestone:') else tick)
             if 'successors' in factory:
                 from types import SimpleNamespace
                 from .successors import sources, qualified
                 view = SimpleNamespace(session_id=initial['session_id'], tick=tick, factory=factory)
                 try:
                     for role, successor in sources(view).items():
-                        if successor['phase'] == 'preferred' and not qualified(role, view): issues.append('unqualified_preference')
+                        if successor['phase'] == 'preferred':
+                            if not qualified(role, view):
+                                issues.append('unqualified_preference')
+                            else:
+                                qualified_sources.add(role)
+                                if role not in first_preferred: newly_qualified.add(role)
                         use = successor['use']
                         if use and use['job_id'] not in initial_uses and use['job_id'] not in use_ids:
                             use_ids.add(use['job_id'])
@@ -137,7 +165,8 @@ def analyze(directory: Path) -> dict:
                 except (ValueError, KeyError, TypeError):
                     issues.append('invalid_successor_evidence')
     reject(any(final.get('failures', {}).get(k, -1) < value for k, value in failures.items()), 'final_failure_history_regressed')
-    reject(not runtimes or any(r != runtimes[0] for r in runtimes), 'native_actor_mod_or_surface_drift')
+    reject(len(resolved_models) > 1, 'resolved_model_drift')
+    reject(not runtimes or any(canonical(r) != canonical(runtimes[0]) for r in runtimes), 'native_actor_mod_or_surface_drift')
     if runtimes:
         reject(any(type(runtimes[0].get(k)) is not int or runtimes[0][k] <= 0
                    for k in ('actor_unit', 'player_index', 'surface_index', 'force_index'))
@@ -162,6 +191,7 @@ def analyze(directory: Path) -> dict:
     stages = Counter()
     for event in phase_returns.values(): stages[event['stage']] += event['seconds']
     native_ticks = end - start
+    reject(native_ticks <= 0, 'no_simulation_progress')
     wall = metrics['wall_span_seconds']
     minimum = 432000 if trial['arm'] == 'soak' else 108000
     reject(native_ticks < minimum and (trial['arm'] == 'soak' or goal_tick is None), 'trial_horizon_incomplete')
@@ -187,6 +217,8 @@ def analyze(directory: Path) -> dict:
         'fair_counter_delta_lower_bound': counter_delta(fair_series[0], fair_series[-1]),
         'phase_seconds_inclusive': dict(stages), 'timings_are_not_additive': True,
         'new_successor_use_witnesses': use_witnesses, 'metrics': metrics,
+        'qualified_sources_observed': sorted(qualified_sources),
+        'newly_qualified_sources': sorted(newly_qualified), 'resolved_models': sorted(resolved_models),
         'native_acceptance': 'not_accepted', 'outstanding_review_gates': REVIEW_GATES,
         'deployment_authorized': False, 'external_authenticity_proven': False}
 
@@ -222,10 +254,15 @@ def experiment(directories: list[Path], useful_item: str) -> dict:
             if left.pop('ore_side_successors') is not False or right.pop('ore_side_successors') is not True or left != right:
                 reasons.append('uncontrolled_configuration_change')
             if a['runtime_identity'] != b['runtime_identity']: reasons.append('runtime_or_mod_mismatch')
+            if a['resolved_models'] != b['resolved_models']: reasons.append('resolved_model_pair_mismatch')
+            if not b['newly_qualified_sources'] or not b['new_successor_use_witnesses']:
+                reasons.append('successor_lifecycle_not_exercised')
             for label in ('production_delta', 'consumption_delta'):
                 av, bv = (a[label] or {}).get(useful_item), (b[label] or {}).get(useful_item)
                 if av is None or bv is None or av <= 0 or bv <= 0:
                     reasons.append('missing_or_zero_' + label)
+                elif a['native_ticks'] <= 0 or b['native_ticks'] <= 0:
+                    reasons.append('zero_simulation_horizon')
                 elif bv / b['native_ticks'] < av / a['native_ticks']:
                     reasons.append(label + '_rate_regressed')
             ag, bg = a['goal_first_observed_elapsed_ticks'], b['goal_first_observed_elapsed_ticks']
@@ -236,10 +273,16 @@ def experiment(directories: list[Path], useful_item: str) -> dict:
         comparisons.append({'pair_id': pair, 'passed': not reasons, 'issues': reasons,
                             'baseline': a and a['trial']['trial_id'], 'treatment': b and b['trial']['trial_id']})
     if len(comparisons) < 3 or any(not p['passed'] for p in comparisons): issues.append('three_valid_matched_pairs_required')
+    baseline = [r for r in reports if r['trial']['arm'] == 'baseline']
+    for field in ('expected_commit', 'expected_policy', 'expected_model', 'configuration', 'goal'):
+        if len({sha256(canonical(r['trial'][field])) for r in baseline}) != 1:
+            issues.append('baseline_drift:' + field)
     treatment = [r for r in reports if r['trial']['arm'] in {'treatment', 'soak'}]
     for field in ('expected_commit', 'expected_policy', 'expected_model', 'configuration', 'goal'):
         if len({sha256(canonical(r['trial'][field])) for r in treatment}) != 1: issues.append('treatment_drift:' + field)
-    if not soaks or any(not r['measurement_checks_passed'] or not r['trial']['configuration']['ore_side_successors'] for r in soaks):
+    if not soaks or any(not r['measurement_checks_passed']
+            or not r['trial']['configuration']['ore_side_successors']
+            or not r['qualified_sources_observed'] for r in soaks):
         issues.append('complete_treatment_soak_required')
     return {'schema': 'jev-factorio.native-acceptance-report.v1', 'useful_item': useful_item,
             'useful_item_is_a_production_and_consumption_proxy': True,

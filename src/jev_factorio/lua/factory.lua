@@ -157,9 +157,14 @@ campaign.observe = function()
     local player = selected_player()
     local statistics = force.get_item_production_statistics(agent.surface)
     local produced = {}
+    local consumed = statistics.get_output_count and {} or nil
     for name in pairs(prototypes.item) do
         local amount = statistics.get_input_count(name)
         if amount > 0 then produced[name] = amount end
+        if consumed then
+            local used = statistics.get_output_count(name)
+            if used > 0 then consumed[name] = used end
+        end
     end
     return {
         mining_outposts = campaign.observe_mining_outposts and campaign.observe_mining_outposts() or nil,
@@ -173,6 +178,12 @@ campaign.observe = function()
         research = force.current_research and force.current_research.name or "",
         research_progress = force.research_progress,
         produced = produced,
+        consumed = consumed,
+        -- Read existing properties in this observation; no extra RPC or mutation.
+        acceptance_runtime = {schema=1, speed=game.speed, tick_paused=game.tick_paused,
+            session_id=storage.jev_session_id, actor_unit=agent.unit_number,
+            player_index=player and player.index, surface_index=agent.surface.index,
+            force_index=force.index, mods=script and script.active_mods or nil},
         rockets_launched = force.rockets_launched,
         rocket_baseline = campaign.rocket_baseline,
         exploration_radius = campaign.exploration_radius or 8,

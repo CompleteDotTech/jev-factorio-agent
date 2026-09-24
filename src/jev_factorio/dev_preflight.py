@@ -72,7 +72,7 @@ def inspect_native(native: dict, checkpoint: dict, expected_session: str) -> lis
         row = native.get(family, {}).get(source, {})
         if (row.get('source_unit') != expected.get('source_unit')
                 or row.get('layout') != expected.get('layout') or row.get('fault') is not False
-                or row.get('parts') != expected.get('parts')):
+                or canonical(row.get('parts')) != canonical(expected.get('parts'))):
             issues.append('owned_' + family + '_mismatch')
         for part in expected.get('parts', {}).values():
             if entities.get(part['role'], {}).get('unit_number') != part['unit_number']:
@@ -129,10 +129,8 @@ def probe(config_path: Path, checkpoint_path: Path, *, client_factory=None,
         native = load_json(raw)
     finally:
         client.close()
-    if stable_read(checkpoint_path) != canonical(checkpoint):
-        # Hash bytes, not formatting: most existing checkpoints are pretty JSON.
-        if sha256(stable_read(checkpoint_path)) != checkpoint_hash:
-            raise ValueError('Checkpoint changed during native probe')
+    if sha256(stable_read(checkpoint_path)) != checkpoint_hash:
+        raise ValueError('Checkpoint changed during native probe')
     issues = inspect_native(native, checkpoint, config['session_id'])
     return {'schema': 'jev-factorio.dev-preflight.v1',
         'observed_at_utc': datetime.now(timezone.utc).isoformat(),

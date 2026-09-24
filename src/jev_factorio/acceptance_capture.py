@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import re
 
-from .acceptance_io import MAX_LOG, canonical, hash_file, load_json, records, sha256, stable_read, write_new
+from .acceptance_io import MAX_JSON, MAX_LOG, canonical, hash_file, load_json, records, sha256, stable_read, write_new
 from .dev_preflight import checkpoint_read
 from .research_log import Redactor
 
@@ -22,7 +22,7 @@ RECORD_FIELDS = set('schema_version controller session_id world_kind target poli
     'model_call usage completed_goals pending attempt attempt_outcomes performance phases fair_action_metrics '
     'capacity_evidence planning_diagnostics failure_budgets background_work background_schema background_job '
     'background_attempt capital_investment furnace_output_buffers furnace_input_belts mining_outposts '
-    'ore_side_successors buffer_evidence input_route_evidence mining_outpost_evidence successor_evidence '
+    'process_id factory_scheduling goal history ore_side_successors buffer_evidence input_route_evidence mining_outpost_evidence successor_evidence '
     'successor_projects acceptance_configuration'.split())
 STATE_FIELDS = set('tick session_id world_kind game_version inventory player_position nearby_resources '
                    'researched victory victory_source world_seed health'.split())
@@ -151,7 +151,7 @@ def verify(directory: Path) -> dict:
     if set(entries) != FILES: raise ValueError('Checksum coverage is incomplete')
     content = {}
     for name, digest in entries.items():
-        value = stable_read(directory / name, MAX_LOG)
+        value = stable_read(directory / name, MAX_LOG if name.endswith('.gz') else MAX_JSON)
         if sha256(value) != digest: raise ValueError('Capture checksum mismatch')
         content[name] = value
     manifest = load_json(content['capture-manifest.json'])
