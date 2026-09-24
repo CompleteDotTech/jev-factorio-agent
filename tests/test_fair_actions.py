@@ -397,7 +397,7 @@ def test_place_entity_uses_selected_direction_and_preserves_exact_direction(monk
         return {"name": "offshore-pump", "position": arguments[1]}
 
     monkeypatch.setattr(fair, "call", call)
-    monkeypatch.setattr(fair, "approach", lambda position, name: approaches.append((position, name)))
+    monkeypatch.setattr(fair, "approach_build", lambda position: approaches.append((position, "build")))
 
     entity = fair.place_entity(
         Prototype.OffshorePump, Position(x=0, y=0), Direction.UP, exact=False
