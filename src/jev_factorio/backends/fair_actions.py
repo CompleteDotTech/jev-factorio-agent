@@ -7,6 +7,7 @@ import time
 from importlib.resources import files
 from types import SimpleNamespace
 from typing import Any
+from .errors import ConnectionPreflightRejected
 
 
 class FairActions:
@@ -249,7 +250,7 @@ class FairActions:
             except ValueError as error:
                 route_error = error
         if route is None:
-            raise route_error or ValueError("No passable connection path")
+            raise ConnectionPreflightRejected("no_connection_route")
         if name == "small-electric-pole":
             route = select_pole_positions(route, max_wire_distance=6)
         required = sum(point not in existing for point in route)
@@ -258,7 +259,7 @@ class FairActions:
             + json.dumps(name) + ")}))"
         ))["count"]
         if available < required:
-            raise ValueError(f"Fair connection needs {required} {name}, only {available} available")
+            raise ConnectionPreflightRejected("insufficient_connection_materials")
         for horizontal, vertical in route:
             if (horizontal, vertical) not in existing:
                 self.place_entity(prototype, Position(x=horizontal, y=vertical),
