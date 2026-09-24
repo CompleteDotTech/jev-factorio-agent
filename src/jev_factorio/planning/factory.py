@@ -42,6 +42,9 @@ class FactoryPlanner:
         key = identity or parameters.get(
             "role", parameters.get("recipe", parameters.get("technology", item))
         )
+        if action == 'factory_connect':
+            from .connection_identity import connection_key
+            key = connection_key(parameters)
         step = Step(action, effect, item, threshold, costs, timeout,
                     parameters=parameters, verification=verification)
         return Plan(f"factory:{action}:{key}", self.goal,

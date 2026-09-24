@@ -668,7 +668,7 @@ Only report repaired when every acceptance requirement is verified.
                     "pending", "active_plan", "step_index", "reservations", "attempt"
                 )):
                     return False
-            extension_keys = ("background_schema", "background_job", "background_attempt",
+            extension_keys = ("connection_failure_attribution", "background_schema", "background_job", "background_attempt",
                               "input_routes_schema", "input_commitments", "outposts_schema", "outpost_commitments",
                               "successor_schema", "successor_projects", "successor_receipts")
             if any(key in previous and current.get(key) != previous[key]
