@@ -144,14 +144,18 @@ class FairActions:
             + ",force=player.force,build_check_type=defines.build_check_type.manual}; "
             "if distance_squared<=reach^2 and placeable then "
             "rcon.print(helpers.table_to_json({reachable=true})); return end; "
-            "assert(reach>0, 'No native build reach'); "
+            "assert(reach>1, 'Insufficient native build approach margin'); "
             "if distance_squared==0 then dx=1; dy=0; distance_squared=1 end; "
-            "local distance=math.sqrt(distance_squared); local radius=math.max(0,reach-0.5); "
+            # Native walking may finish within 0.25 of its final waypoint,
+            # and request_path permits a 0.2 endpoint radius. Leave one full
+            # tile after collision search rather than merely checking reach.
+            "local distance=math.sqrt(distance_squared); local position; "
+            "for inset=2,6,2 do local radius=math.max(0,reach-inset); "
             "local near={x=target.x+dx/distance*radius,y=target.y+dy/distance*radius}; "
-            "local position=player.surface.find_non_colliding_position('character',near,1,0.25); "
-            "assert(position, 'No collision-free build approach'); "
-            "assert((position.x-target.x)^2+(position.y-target.y)^2<=reach^2, "
-            "'Build approach is outside normal reach'); "
+            "local candidate=player.surface.find_non_colliding_position('character',near,1,0.25); "
+            "if candidate and (candidate.x-target.x)^2+(candidate.y-target.y)^2 "
+            "<=(reach-1)^2 then position=candidate; break end end; "
+            "assert(position, 'No collision-free build approach with arrival margin'); "
             "rcon.print(helpers.table_to_json(position))"
         ))
         if result.get("reachable") is True:

@@ -108,6 +108,24 @@ plan surveys the current world; it does not replay the old dispatch.
 
 ## Applying the supplied speedrun strategy
 
+### Native collision-search arrival margin
+
+Live verification of the build-reach change completed coal gathering, boiler
+fueling and pipe crafting, then built 14 additional paid pipes before another
+conservative construction stop. The next buildable pipe tile was `(16.5,48.5)`.
+From actor position `(25.94921875,43.4296875)`, the collision search returned
+`(25.3671875,43.2578125)`: 10.30085 tiles from the target, beyond native reach 10.
+The prior successful walking job remained completed; this was a subsequent
+approach-candidate rejection, not another native pathfinder failure.
+
+Approach search now tries three bounded inward candidates and accepts only a
+point at least one tile inside native build reach, allowing for ordinary walking
+arrival tolerance. A read-only native probe found the first inward candidate at
+`(23.046875,43.71484375)`, 8.10921 tiles from the target. Native placement and item
+payment remain authoritative. This geometric probe does not itself prove the
+complete connection can be built; paid partial work and operator recovery must
+remain explicit in live acceptance evidence.
+
 The useful transferable principles are minimizing travel, keeping acknowledged
 crafting and research supplied during independent work, and preparing the next
 production bottleneck. The existing ready-work/background controller already
