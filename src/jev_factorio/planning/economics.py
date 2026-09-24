@@ -134,10 +134,14 @@ class EconomicProduction:
                 return selected[0]
         return super()._machine_type(recipe)
 
-    def _workload(self, item, immediate=0):
+    def _remaining_products(self):
+        """One bounded workload calculation per snapshot-local planner frontier."""
         if not hasattr(self, '_economic_products'):
             self._economic_products = remaining_products(self.snapshot, self.catalog)
-        return min(MAX_PRODUCT_HORIZON, max(immediate, self._economic_products.get(item, 0),
+        return self._economic_products
+
+    def _workload(self, item, immediate=0):
+        return min(MAX_PRODUCT_HORIZON, max(immediate, self._remaining_products().get(item, 0),
                                            getattr(self, 'demands', {}).get(item, 0)))
 
     def _investment_machine(self, recipe):

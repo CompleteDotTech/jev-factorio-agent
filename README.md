@@ -187,3 +187,12 @@ native flow evidence and then hauled in batches. See
 [Mining outposts](docs/MINING_OUTPOSTS.md) for required controller flags,
 idle-boundary checkpoint enablement, supervisor handoff limits, and native
 benchmark requirements. This is not full belt transport or a live deployment.
+
+## Planning efficiency and staged autonomy
+
+The [bounded planning and autonomy plan](docs/PLANNING_AUTONOMY.md) documents
+snapshot-local planning improvements, safe additive expansion requirements, and
+development VM acceptance gates. The [offline evidence audit](docs/EVIDENCE_AUDIT.md)
+verifies capture hashes and reports measurement coverage without contacting a
+backend or treating missing gameplay metrics as zero. Source integration is not
+production cutover or proof of native throughput improvement.

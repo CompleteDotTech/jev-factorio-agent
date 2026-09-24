@@ -156,7 +156,8 @@ class BackgroundWorkLoop(HierarchicalLoop):
             super()._refresh_goals(snapshot)
 
     def _record_extras(self) -> dict:
-        return {"background_work": True, "background_schema": self.memory.background_schema,
+        return {**super()._record_extras(),
+                "background_work": True, "background_schema": self.memory.background_schema,
                 "background_job": deepcopy(self.memory.background_job),
                 "background_attempt": deepcopy(self.memory.background_attempt)}
 

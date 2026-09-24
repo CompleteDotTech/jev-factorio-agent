@@ -114,13 +114,7 @@ class OutputBufferPlanner(ReadyWorkPlanner):
         for item, amount in list(sorted(self.targets.items()))[:32]:
             if self.snapshot.inventory.get(item, 0) >= amount:
                 continue
-            worker = type(self)(self.catalog, self.snapshot, self.goal,
-                                         self.collection_batch, self.max_candidates)
-            worker.focus, worker.raw_targets = self.focus, dict(self.raw_targets)
-            worker.materials = self.materials or {}
-            worker.ledger, worker.demands = self.ledger, dict(self.demands)
-            worker.speculative = True
-            worker.allow_service_visits = self.allow_service_visits
+            worker = self._candidate_worker()
             try:
                 candidate = worker._need(item, amount)
             except (KeyError, ValueError):

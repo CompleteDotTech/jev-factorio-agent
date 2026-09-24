@@ -254,6 +254,9 @@ class HierarchicalLoop(AgentLoop):
             "performance": self._performance.snapshot(),
             "capacity_evidence": deepcopy(getattr(after or before, "_capacity_evidence", {})),
             "attempt_outcomes": deepcopy(self.memory.attempt_outcomes[-8:]),
+            "planning_diagnostics": deepcopy(getattr(self, "_planning_diagnostics", {})),
+            "failure_budgets": dict(self.memory.failures),
+            "mining_outposts": bool(getattr(self, "_mining_outposts_enabled", False)),
         }
         if getattr(self, "factory_scheduling", "serial") != "serial":
             record["factory_scheduling"] = self.factory_scheduling
@@ -788,6 +791,7 @@ class HierarchicalLoop(AgentLoop):
     def step(self) -> dict:
         self._decision = None
         self._selection_support = {}
+        self._planning_diagnostics = {}
         self._trace.observation_phase = "before_decision"
         self._phases = []
         from .performance import PerformanceCounters
@@ -810,21 +814,41 @@ class HierarchicalLoop(AgentLoop):
                     "candidate_set_created", lambda: self._work_candidates(snapshot),
                     result=lambda value: {"plans": [plan.to_dict() for plan in value[0]],
                                           "blocker": value[1]})
-            plans = [p for p in plans if self.memory.failures.get(p.id, 0) < 2]
+            generated = list(plans)
+            rejected = [{"plan_id": p.id, "reason": "plan_failure_budget",
+                         "failures": self.memory.failures[p.id]}
+                        for p in generated if self.memory.failures.get(p.id, 0) >= 2]
+            plans = [p for p in generated if self.memory.failures.get(p.id, 0) < 2]
+            # This boundary is after capability/capital compilation, not a claim
+            # that every Lua survey or earlier eligibility rejection was retained.
+            self._planning_diagnostics = {
+                "schema": 1, "observed_tick": snapshot.tick,
+                "boundary": "post_capability_frontier",
+                "generated_plan_ids": [p.id for p in generated],
+                "eligible_plan_ids": [p.id for p in plans],
+                "failure_budget_rejections": rejected,
+                "duplicate_plan_ids": [], "ranked_plan_ids": [],
+            }
             if self._trace.enabled:
-                self._trace.emit("candidate_set_filtered", {"eligible_plan_ids": [p.id for p in plans],
-                                                           "filter": "existing_plan_failure_budget"})
+                self._trace.emit("candidate_set_filtered", {
+                    **deepcopy(self._planning_diagnostics), "filter": "existing_plan_failure_budget"})
             if not plans:
                 self.memory.status, self.memory.reason = "blocked", blocker or "Plan failure budget exhausted"
                 return self._record(snapshot, "observe", self.memory.reason)
             if self.factory_scheduling == "ready-work" and self.catalog is not None:
                 from .planning.decision_support import distinct_candidates, scheduling_context
 
-                plans = distinct_candidates(plans)
+                retained = distinct_candidates(plans)
+                self._planning_diagnostics["duplicate_plan_ids"] = [
+                    p.id for p in plans if all(p is not kept for kept in retained)]
+                plans = retained
                 self._selection_support = scheduling_context(
                     snapshot, self.catalog, plans, self.memory.active_goal)
                 by_id = {plan.id: plan for plan in plans}
                 plans = [by_id[key] for key in self._selection_support["deterministic_ranking"]]
+                self._planning_diagnostics["ranked_plan_ids"] = [p.id for p in plans]
+                self._planning_diagnostics["candidate_evidence"] = deepcopy(
+                    self._selection_support["candidate_evidence"])
             singleton = bool(self._selection_support and len(plans) == 1 and self.policy == "hybrid")
             if self.policy == "deterministic" or singleton:
                 with phase("selection", self._diagnostic_trace):

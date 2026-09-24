@@ -15,7 +15,7 @@ from ..skills import Plan
 from ..state import GameSnapshot
 from .demand import SupplyLedger
 
-from .economics import remaining_products, solid_recipe
+from .economics import solid_recipe
 from .scheduling import SAFETY_TICKS, SERVICE_TICKS, TRAVEL_TICKS_PER_TILE, research_schedule
 
 if TYPE_CHECKING:
@@ -60,7 +60,7 @@ def producer_resupply(planner: ReadyWorkPlanner, primary: Plan) -> Plan | None:
     visits, but a small delivery that starts a complete batch or finishes the
     remaining demand is permitted. Route/output ownership is checked by allowed.
     """
-    demand = remaining_products(planner.snapshot, planner.catalog)
+    demand = dict(planner._remaining_products())
     for item, amount in planner.demands.items():
         demand[item] = max(demand.get(item, 0), amount)
     first = primary.steps[0]

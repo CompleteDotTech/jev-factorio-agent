@@ -45,6 +45,9 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
         return replace(plan, materials={**(plan.materials or {}), "local_objective": {
             "item": self.focus[0], "inventory_target": self.focus[1],
             "ultimate_goal": self.goal,
+        }, "work_intent": {
+            "scope": "lookahead" if self.speculative else "immediate",
+            "observed_tick": self.snapshot.tick,
         }})
 
     def plan(self):
@@ -156,6 +159,23 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
             return batched
         return plan
 
+    def _candidate_worker(self):
+        """Fork lookahead within this observation; never cache across decisions.
+
+        The ledger and native facts are read-only. Copy the bounded economic
+        workload so speculative probes cannot mutate their parent's demand.
+        Execution still checks the original live snapshot and its reservations.
+        """
+        worker = type(self)(self.catalog, self.snapshot, self.goal,
+                            self.collection_batch, self.max_candidates)
+        worker.focus, worker.raw_targets = self.focus, dict(self.raw_targets)
+        worker.materials = self.materials or {}
+        worker.ledger, worker.demands = self.ledger, dict(self.demands)
+        worker.speculative = True
+        worker.allow_service_visits = self.allow_service_visits
+        worker._economic_products = dict(self._remaining_products())
+        return worker
+
     def candidates(self) -> list[Plan]:
         primary = self.plan()
         if primary is None:
@@ -171,13 +191,7 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
         for item, amount in list(sorted(self.targets.items()))[:32]:
             if self.snapshot.inventory.get(item, 0) >= amount:
                 continue
-            worker = type(self)(self.catalog, self.snapshot, self.goal,
-                                      self.collection_batch, self.max_candidates)
-            worker.focus, worker.raw_targets = self.focus, dict(self.raw_targets)
-            worker.materials = self.materials or {}
-            worker.ledger, worker.demands = self.ledger, dict(self.demands)
-            worker.speculative = True
-            worker.allow_service_visits = self.allow_service_visits
+            worker = self._candidate_worker()
             try:
                 plan = worker._need(item, amount)
             except (KeyError, ValueError):

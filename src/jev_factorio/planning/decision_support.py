@@ -142,8 +142,14 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
         target = (plan.materials or {}).get('local_objective')
         if target is not None:
             target = deepcopy(target)
+        intent = (plan.materials or {}).get('work_intent', {})
+        scope = (intent.get('scope') if isinstance(intent, dict)
+                 and intent.get('observed_tick') == snapshot.tick else None)
+        scope = scope if scope in {'immediate', 'lookahead'} else 'unclassified'
         passive = all(s.action in {'factory_wait', 'idle'} for s in plan.steps)
         result[plan.id] = {
+            'work_scope': scope,
+            'processed_units_basis': 'handling_volume_not_useful_production',
             'compiler_order': index, 'passive': passive, 'urgency': urgency,
             'reasons': sorted(set(reasons)), 'local_target': target,
             'travel_tiles_lower_bound': None if any(x.startswith('travel:') for x in unknown) else round(travel, 3),
@@ -162,13 +168,14 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
 def ranking_key(row: dict) -> tuple:
     """Urgency and productive work precede known actor cost; ties stay stable.
 
-    Unknown cost is never zero-cost work. Among equally urgent, fully estimated
-    options prefer useful units per occupied actor tick; ties use compiler order.
+    Unknown cost is never zero-cost work. Among equally urgent options, a
+    current prerequisite precedes discretionary lookahead. Handling volume is
+    only a tie-breaker within a demand class, not proof of useful production.
     This is a scheduling heuristic, not a success probability or calibrated value.
     """
     duration = row['actor_ticks_estimate']
     amount = max(1, row['processed_units'])
-    return (row['passive'], -row['urgency'], duration is None,
+    return (row['passive'], -row['urgency'], row.get('work_scope') == 'lookahead', duration is None,
             (duration / amount) if duration is not None else 0,
             row['compiler_order'])
 
@@ -182,7 +189,9 @@ def scheduling_context(snapshot, catalog, plans, goal: str) -> dict:
             'primary_target': deepcopy(primary),
             'instruction': 'Prevent observed starvation, remove the next production blocker, '
                            'or do useful independent work while production runs. '
-                           'A single useful action need not complete the ultimate goal.',
+                           'A single useful action need not complete the ultimate goal. '
+                           'Immediate prerequisites precede discretionary lookahead at equal urgency; '
+                           'moving more items is not evidence of more useful production.',
             'success_authority': 'unchanged native step and goal predicates, never model scores',
         },
         'candidate_evidence': evidence,
