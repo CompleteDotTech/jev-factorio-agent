@@ -4,7 +4,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from jev_factorio.backends.fair_actions import FairActions
+from jev_factorio.backends.fair_actions import FairActions, NativePathNotFound
 
 
 @pytest.mark.parametrize("actor,target,reach,placeable,walk", [
@@ -57,7 +57,10 @@ def test_native_build_reach_and_actor_side_approach(monkeypatch, actor, target, 
     fair = object.__new__(FairActions)
     def command(script):
         lua.execute(script)
-        return json.dumps(dict(lua.globals().captured))
+        result = dict(lua.globals().captured)
+        if "positions" in result:
+            result["positions"] = [dict(point) for point in result["positions"].values()]
+        return json.dumps(result)
     fair.command = command
     movements = []
     fair.move_to = movements.append
@@ -71,7 +74,7 @@ def test_native_build_reach_and_actor_side_approach(monkeypatch, actor, target, 
         assert (point.x-target[0])**2+(point.y-target[1])**2 <= (reach-1)**2
         assert (point.x, point.y) != actor
         if live_geometry:
-            assert lua.globals().searches == 2
+            assert lua.globals().searches == 16
     else:
         assert lua.globals().searches is None
         assert fair.metrics["approaches_skipped_in_reach"] == 1
@@ -83,7 +86,7 @@ def test_build_approach_failure_is_not_preflight_rejection(monkeypatch):
     monkeypatch.setitem(sys.modules, "fle", ModuleType("fle"))
     monkeypatch.setitem(sys.modules, "fle.env", env)
     fair = object.__new__(FairActions)
-    fair.command = lambda script: '{"x":1,"y":2}'
+    fair.command = lambda script: '{"positions":[{"x":1,"y":2}]}'
     def failed(position):
         raise RuntimeError("native pathfinder failed")
     fair.move_to = failed
@@ -115,4 +118,42 @@ def test_no_safe_arrival_margin_does_not_start_walking(monkeypatch, reach):
     fair.move_to = lambda position: pytest.fail("unsafe approach started walking")
     with pytest.raises(Exception, match="margin"):
         fair.approach_build(SimpleNamespace(x=0, y=0), "pipe", 0)
-    assert lua.globals().searches == (0 if reach <= 1 else 3)
+    assert lua.globals().searches == (0 if reach <= 1 else 16)
+
+
+@pytest.mark.parametrize("failure,retries", [
+    (NativePathNotFound("Native pathfinder could not find a route"), True),
+    (RuntimeError("Native pathfinder could not find a route"), False),
+    (RuntimeError("Native walking is obstructed"), False),
+    (TimeoutError("Native action exceeded its bounded observation window"), False),
+])
+def test_build_candidates_retry_only_typed_native_no_route(monkeypatch, failure, retries):
+    env = ModuleType("fle.env")
+    env.Position = SimpleNamespace
+    monkeypatch.setitem(sys.modules, "fle", ModuleType("fle"))
+    monkeypatch.setitem(sys.modules, "fle.env", env)
+    fair = object.__new__(FairActions)
+    fair.command = lambda script: '{"positions":[{"x":1,"y":2},{"x":3,"y":4}]}'
+    moved = []
+    def move(position):
+        moved.append((position.x, position.y))
+        if len(moved) == 1:
+            raise failure
+    fair.move_to = move
+    if retries:
+        fair.approach_build(SimpleNamespace(x=0, y=0), "pipe", 0)
+        assert moved == [(1, 2), (3, 4)]
+    else:
+        with pytest.raises(type(failure)):
+            fair.approach_build(SimpleNamespace(x=0, y=0), "pipe", 0)
+        assert moved == [(1, 2)]
+
+
+def test_wait_classifies_only_observed_native_no_route():
+    fair = object.__new__(FairActions)
+    fair.call = lambda function: {"status": "failed", "error": "Native pathfinder could not find a route"}
+    cleanup = []
+    fair.command = cleanup.append
+    with pytest.raises(NativePathNotFound):
+        fair.wait()
+    assert cleanup == ["storage.fair.stop()"]
