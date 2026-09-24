@@ -1,0 +1,76 @@
+name: Verify phase two cursor recovery
+on:
+  push:
+    branches: [feat/phase2-safe-production-service]
+    paths: ['.github/workflows/phase2-cursor-review.yml']
+permissions:
+  contents: write
+jobs:
+  integrate:
+    if: github.repository == 'CompleteDotTech/jev-factorio-agent' && github.ref == 'refs/heads/feat/phase2-safe-production-service'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Preserve unexamined resource candidates when work budget expires
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          p=Path('src/jev_factorio/lua/input_routes.lua')
+          assert subprocess.check_output(['git','hash-object',str(p)],text=True).strip()=='1c05e13a791256d6f5fb6c083dd5794f70b8d3fb'
+          old='    for n=1,math.min(#resources,8) do\n        local index='
+          new='''    for n=1,math.min(#resources,8) do
+                  -- Do not advance coverage past resources that cannot get a search.
+                  -- Resume with the next resource, not the next group of eight.
+                  if m.path_attempts>=128 or m.path_expansions>=16384 then
+                      m.search_budget_exhausted=true;break
+                  end
+                  if budget.left<=0 then m.belt_budget_exhausted=true;break end
+                  local index='''
+          text=p.read_text();assert text.count(old)==1;p.write_text(text.replace(old,new,1))
+          p=Path('tests/test_phase2_automation.py')
+          p.write_text(p.read_text()+'''
+
+          def test_search_exhaustion_does_not_skip_resources_that_were_never_examined():
+              from test_input_routes_lua import ADAPTER, FIXTURE
+              runtime = pytest.importorskip('lupa').LuaRuntime()
+              adapter = ADAPTER.read_text()
+              # Scale only this fixture's attempt limit to one so the boundary is
+              # deterministic without a large wall-maze benchmark. Production is 128.
+              assert adapter.count('m.path_attempts>=128') == 2
+              adapter = adapter.replace('m.path_attempts>=128', 'm.path_attempts>=1')
+              runtime.execute(FIXTURE.read_text() + '\\n' + adapter)
+              runtime.execute(\'''
+                  obstacle=function(q) return q.name=="transport-belt" end
+                  local a=storage.campaign.observe().input_routes.diagnostics["recipe:iron-plate"]
+                  assert(a.path_attempts==1 and a.sampled_resources==1)
+                  assert(a.reason=="path_search_budget")
+                  assert(storage.input_routes.survey_cursor["recipe:iron-plate"].offset==1)
+                  game.tick=game.tick+300
+                  local b=storage.campaign.observe().input_routes.diagnostics["recipe:iron-plate"]
+                  assert(b.resource_start_index==2 and b.sampled_resources==1 and placements==0)
+              \''')
+          ''')
+          PY
+      - run: python -m pip install -e '.[test]'
+      - run: python -m pytest tests/test_phase2_automation.py tests/test_demand_service.py tests/test_input_routes_lua.py -q
+      - run: python -m pytest tests/ --ignore=tests/test_dashboard_browser.py -q
+      - run: python -m compileall -q src
+      - name: Commit tested correction without a persistent write workflow
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          BRANCH=feat/phase2-safe-production-service
+          test "$(git ls-remote origin refs/heads/$BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          git rm .github/workflows/phase2-cursor-review.yml
+          git add src/jev_factorio/lua/input_routes.lua tests/test_phase2_automation.py
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Resume bounded surveys at the next unexamined resource'
+          git push origin HEAD:refs/heads/$BRANCH
