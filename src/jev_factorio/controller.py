@@ -135,6 +135,8 @@ class HierarchicalLoop(AgentLoop):
 
     def _observe_snapshot(self) -> GameSnapshot:
         snapshot = self._trace.observe(self.backend, self._trace.observation_phase)
+        if 'successors' in snapshot.factory and not getattr(self, '_successors_enabled', False):
+            raise ValueError('Existing successor runtime requires its explicit controller capability')
         if 'mining_outposts' in snapshot.factory and not getattr(self, '_mining_outposts_enabled', False):
             raise ValueError('Existing mining-outpost runtime requires its explicit controller capability')
         if not snapshot.session_id or snapshot.world_kind not in {"mock", "fle"}:
@@ -895,6 +897,8 @@ class HierarchicalLoop(AgentLoop):
                     return self._record(snapshot, "observe", self.memory.reason)
             from .capital_controller import commit as commit_capital
             commit_capital(self, chosen, snapshot)
+            if getattr(self, "_commit_successor", None):
+                self._commit_successor(chosen, snapshot)
             self.memory.active_plan = chosen.to_dict()
             self.memory.step_index = 0
             self.memory.event("plan_committed", plan=chosen.id, source=self._decision.source,

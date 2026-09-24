@@ -26,7 +26,7 @@ def sources(snapshot) -> dict:
     if (not isinstance(data, dict) or type(data.get("protocol")) is not int
             or data["protocol"] != 1 or data.get("session_id") != snapshot.session_id
             or type(data.get("tick")) is not int or data["tick"] != snapshot.tick
-            or not isinstance(data.get("sources"), dict) or len(data["sources"]) > 3):
+            or not isinstance(data.get("sources"), dict) or len(data["sources"]) > (5 if "successors" in snapshot.factory else 3)):
         raise ValueError("Missing or stale furnace-buffer telemetry")
     return data["sources"]
 

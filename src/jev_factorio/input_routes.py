@@ -6,7 +6,8 @@ import math
 COMMAND = "factory_input_build"
 FIELDS = {"source", "layout", "part", "receipt", "reserve_belts"}
 EFFECTS = {"input_component", "input_flow"}
-ORES = {"recipe:iron-plate": "iron-ore", "recipe:copper-plate": "copper-ore"}
+ORES = {"recipe:iron-plate": "iron-ore", "recipe:copper-plate": "copper-ore",
+        "growth:iron-plate": "iron-ore", "growth:copper-plate": "copper-ore"}
 MAX_BELTS = 64
 
 
@@ -36,10 +37,11 @@ def sources(snapshot) -> dict:
     if (not isinstance(data, dict) or not _integer(data.get("protocol"), 1, 1)
             or data.get("session_id") != snapshot.session_id
             or not _integer(data.get("tick")) or data["tick"] != snapshot.tick
-            or not isinstance(data.get("sources"), dict) or len(data["sources"]) > 2):
+            or not isinstance(data.get("sources"), dict) or len(data["sources"]) > (4 if "successors" in snapshot.factory else 2)):
         raise ValueError("Missing or stale input-route telemetry")
     for source, row in data["sources"].items():
-        if (source not in ORES or not isinstance(row, dict) or row.get("source") != source
+        if (source not in ORES or source.startswith("growth:") and "successors" not in snapshot.factory
+                or not isinstance(row, dict) or row.get("source") != source
                 or row.get("ore") != ORES[source] or row.get("item") != source[7:]
                 or not _integer(row.get("source_unit"), 1) or not _text(row.get("layout"))
                 or row.get("state") not in {"proposed", "building", "ready", "fault"}
@@ -189,7 +191,7 @@ def permits(action: str, parameters: dict, snapshot) -> bool:
             if role == source and action in {"factory_insert", "factory_configure"}:
                 if action != "factory_insert" or parameters.get("item") != "coal":
                     return False
-            if action == "factory_gather" and parameters.get("resource") == row["ore"]:
+            if source.startswith("recipe:") and action == "factory_gather" and parameters.get("resource") == row["ore"]:
                 return False
             output = snapshot.factory.get("output_buffers", {}).get("sources", {}).get(source, {})
             if (action == "factory_extract" and role == output.get("chest_role")

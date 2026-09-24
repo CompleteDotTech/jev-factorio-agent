@@ -91,8 +91,8 @@ class SuccessorPlanner(InputRoutePlanner):
                               identity='successor-output:' + anchor)
         route = input_sources(self.snapshot).get(role)
         if not route:
-            return self._wait('machine_output', site.get('item', role[7:]), 10, output['chest_role'],
-                              timeout=1800, identity='successor-route-survey:' + anchor)
+            return self._wait('successor_route_available', role=role, timeout=1800,
+                              identity='successor-route-survey:' + anchor)
         return self._route(route, ())
 
 

@@ -4,7 +4,13 @@ assert(campaign and fair and storage.input_routes, "Production sites require inp
 local sites = storage.production_sites or {protocol=1, offers={}, owned={}, checked={}, reasons={}}
 assert(sites.protocol==1, "Unsupported production-site runtime")
 storage.production_sites=sites
-local ores={["recipe:iron-plate"]="iron-ore",["recipe:copper-plate"]="copper-ore"}
+local ores={["recipe:iron-plate"]="iron-ore",["recipe:copper-plate"]="copper-ore",
+    ["growth:iron-plate"]="iron-ore",["growth:copper-plate"]="copper-ore"}
+local function producer_roles()
+    local result={"recipe:iron-plate","recipe:copper-plate"}
+    if campaign.successors_enabled then result[#result+1]="growth:iron-plate";result[#result+1]="growth:copper-plate" end
+    return result
+end
 local vectors={{x=0,y=-1},{x=1,y=0},{x=0,y=1},{x=-1,y=0}}
 local function point(p) return {x=p.x or p[1],y=p.y or p[2]} end
 local function add(a,b) return {x=a.x+b.x,y=a.y+b.y} end
@@ -194,11 +200,13 @@ local function valid(site,owned)
 end
 campaign.observe_production_sites=function()
     local rows={}
-    for _,role in ipairs({"recipe:iron-plate","recipe:copper-plate"}) do
+    for _,role in ipairs(producer_roles()) do
         local site=sites.owned[role];local state,reason="rejected",sites.reasons[role]
         if site then
             local ok=pcall(valid,site,true);state=ok and "owned" or "fault"
             reason=ok and (sites.reasons[role] or "joint_layout_owned") or "production_source_identity_changed"
+        elseif string.sub(role,1,7)=="growth:" and not campaign.entities["recipe:"..string.sub(role,8)] then
+            sites.offers[role]=nil;reason="predecessor_missing"
         elseif campaign.entities[role] then
             sites.offers[role]=nil
             reason="existing_manual_cell"
@@ -231,14 +239,17 @@ local function chosen(role,name,anchor)
     assert(site and site.anchor==anchor,"Stale production-site offer")
     local player=valid(site,false)
     assert(player.crafting_queue_size==0,"Do not build during native crafting")
+    if campaign.successor_admit then campaign.successor_admit(site,false) end
     return site,player
 end
 campaign.prepare_production_site=function(role,name,anchor)
     local site=chosen(role,name,anchor)
+    if campaign.successor_prepare then campaign.successor_prepare(site) end
     rcon.print(helpers.table_to_json({position=site.position,name=name}))
 end
 campaign.build_production_site=function(role,name,anchor)
     local site,player=chosen(role,name,anchor)
+    if campaign.successor_admit then campaign.successor_admit(site,true) end
     local before=player.get_item_count(name)
     fair.place(name,site.position,0)
     local entity=player.surface.find_entity(name,site.position)
@@ -246,6 +257,7 @@ campaign.build_production_site=function(role,name,anchor)
         and player.get_item_count(name)==before-1,"Production furnace placement not paid")
     campaign.entities[role]=entity;site.entity=entity;site.source_unit=entity.unit_number
     sites.owned[role]=site;sites.offers[role]=nil
+    if campaign.successor_bound then campaign.successor_bound(site) end
     rcon.print(helpers.table_to_json({unit_number=entity.unit_number}))
 end
 campaign.production_output_offer=function(role,item)

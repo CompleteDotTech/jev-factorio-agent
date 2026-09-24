@@ -100,6 +100,7 @@ campaign.begin_craft_job = function(id, recipe_name, batches)
     job.paid, job.status = true, "running"
     job.queue_valid = queue_valid(player, job)
     if not job.queue_valid then invalidate("queue_mismatch"); error("Native craft queue mismatch") end
+    if campaign.successor_craft_paid then campaign.successor_craft_paid(job,before) end
     rcon.print("Native craft accepted; output remains unverified")
 end
 

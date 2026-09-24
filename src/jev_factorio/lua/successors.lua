@@ -137,7 +137,7 @@ c.observe_successors=function(result)
             for source,claim in pairs(pending.claims) do
                 local m=s.records[source];local route=storage.input_routes.cells[source]
                 if m and route and input_ready(source) and m.source_unit==claim.source_unit
-                    and route.layout==claim.layout and claim.quantity>=3 then
+                    and route.layout==claim.layout and claim.quantity>=3 and not m.use then
                     m.use={job_id=job.id,recipe=job.recipe,quantity=claim.quantity,source_unit=m.source_unit,
                         input_layout=route.layout,completed_tick=job.completed_tick,
                         requested=job.requested,finished=job.finished,outputs=job.outputs}

@@ -108,6 +108,10 @@ class FactoryPlanner:
         path = self._visit("item:" + item, path)
         missing = math.ceil(amount - have)
         for role, machine in sorted(self.entities.items()):
+            if 'successors' in self.factory:
+                from ..successors import private_output
+                if private_output(role, self.snapshot):
+                    continue  # Trial or preferred output needs the successor-aware planner.
             available = machine.get("output", {}).get(item, 0)
             if available:
                 return self._transfer(role, item, min(missing, available), extracting=True)

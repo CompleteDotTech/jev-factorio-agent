@@ -65,6 +65,8 @@ class OutputBufferPlanner(ReadyWorkPlanner):
         if self.focus is None:
             self._set_focus(item, amount)
         for row in sources(self.snapshot).values():
+            if row.get("source", "").startswith("growth:"):
+                continue  # Explicit trial/preference policy owns successor collection.
             if row.get("item") != item or row.get("state") == "fault":
                 continue
             machine = self.entities[row["source"]]

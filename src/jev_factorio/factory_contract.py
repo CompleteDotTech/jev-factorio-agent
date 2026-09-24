@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 
 from .state import GameSnapshot
-from . import output_buffers, input_routes, production_sites, mining_outposts
+from . import output_buffers, input_routes, production_sites, mining_outposts, successors
 
 COMMAND_FIELDS = {
     mining_outposts.COMMAND: mining_outposts.FIELDS,
@@ -25,7 +25,7 @@ COMMAND_FIELDS = {
     "factory_wait": set(),
 }
 EFFECTS = {
-    "player_bound", "machine", "machine_recipe", "machine_input", "machine_fuel",
+    "successor_route_available", "player_bound", "machine", "machine_recipe", "machine_input", "machine_fuel",
     "machine_output", "connection", "research_started", "researched", "research_progress",
     "crafting_idle", "rocket_ready", "rocket_parts", "rocket_launched", "produced", "transfer",
     "explored", "powered", "craft_job_complete", *mining_outposts.EFFECTS, *output_buffers.EFFECTS, *input_routes.EFFECTS,
@@ -77,6 +77,8 @@ def connected(factory: dict, source: str, target: str, kind: str, fluid: str) ->
 
 def satisfied(effect: str, item: str, threshold: float, parameters: dict, snapshot: GameSnapshot,
               action: str = "") -> bool:
+    if effect == "successor_route_available":
+        return action == "factory_wait" and parameters.get("role") in input_routes.sources(snapshot)
     if effect == "outpost_component":
         return action == mining_outposts.COMMAND and mining_outposts.component_complete(parameters, snapshot)
     if effect == "outpost_flow":
@@ -143,6 +145,14 @@ def satisfied(effect: str, item: str, threshold: float, parameters: dict, snapsh
 
 def allowed(action: str, parameters: dict, snapshot: GameSnapshot) -> bool:
     validate_command(action, parameters)
+    if "successors" in snapshot.factory:
+        try:
+            if not successors.permits(action, parameters, snapshot):
+                return False
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return False
+    elif parameters.get('role') in successors.ROLES or parameters.get('source') in successors.ROLES:
+        return False
     if "mining_outposts" in snapshot.factory:
         try:
             if not mining_outposts.permits(action, parameters, snapshot):
