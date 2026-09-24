@@ -128,7 +128,7 @@ class FairActions:
                 return gained
         raise RuntimeError("Mining target budget exhausted")
 
-    def approach_build(self, position: Any) -> None:
+    def approach_build(self, position: Any, name: str, direction: int) -> None:
         """Walk only when the native placement center is outside build reach."""
         from fle.env import Position
 
@@ -139,9 +139,13 @@ class FairActions:
             + json.dumps(json.dumps(center)) + "); "
             "local dx=player.position.x-target.x; local dy=player.position.y-target.y; "
             "local distance_squared=dx*dx+dy*dy; local reach=player.build_distance; "
-            "if distance_squared<=reach^2 then "
+            "local placeable=player.surface.can_place_entity{name=" + json.dumps(name)
+            + ",position=target,direction=" + json.dumps(direction)
+            + ",force=player.force,build_check_type=defines.build_check_type.manual}; "
+            "if distance_squared<=reach^2 and placeable then "
             "rcon.print(helpers.table_to_json({reachable=true})); return end; "
             "assert(reach>0, 'No native build reach'); "
+            "if distance_squared==0 then dx=1; dy=0; distance_squared=1 end; "
             "local distance=math.sqrt(distance_squared); local radius=math.max(0,reach-0.5); "
             "local near={x=target.x+dx/distance*radius,y=target.y+dy/distance*radius}; "
             "local position=player.surface.find_non_colliding_position('character',near,1,0.25); "
@@ -165,7 +169,7 @@ class FairActions:
         if not exact:
             site = self.call("find_build_site", name, target, 8)
             target, direction_value = site["position"], site["direction"]
-        self.approach_build(Position(**target))
+        self.approach_build(Position(**target), name, direction_value)
         result = self.call("place", name, target, direction_value)
         return SimpleNamespace(
             name=result["name"], position=Position(**result["position"]),
