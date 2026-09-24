@@ -64,12 +64,16 @@ class ServiceBudget:
                 else:
                     self.deadline = min(self.deadline, row['deadline_tick']) if self.deadline is not None else row['deadline_tick']
         self.other_emergency = len(self.entities) > MAX_DEADLINE_ENTITIES
-        for role, machine in list(sorted(self.entities.items()))[:MAX_DEADLINE_ENTITIES]:
-            fuel = machine.get('fuel', {}).get('coal')
-            burner = planner.catalog.machines.get(machine.get('name'), {}).get('burner')
-            if (role not in cell and (role == 'utility:boiler' or burner and machine.get('crafting'))
-                    and type(fuel) in {int, float} and math.isfinite(fuel) and fuel < 2):
-                self.other_emergency = True
+        # Do not sort or scan an unbounded role set just to reject extra service.
+        if not self.other_emergency:
+            for role, machine in sorted(self.entities.items()):
+                fuel = machine.get('fuel', {}).get('coal', 0)
+                burner = planner.catalog.machines.get(machine.get('name'), {}).get('burner')
+                if role not in cell and (role == 'utility:boiler' or burner and machine.get('crafting')):
+                    # Native empty fuel inventories omit coal; absence is zero,
+                    # while malformed measurements cannot establish safe slack.
+                    if type(fuel) not in {int, float} or not math.isfinite(fuel) or fuel < 2:
+                        self.other_emergency = True
 
     def admit(self, step) -> bool:
         target = position(self.entities.get(step.parameters['role'], {}).get('position'))
