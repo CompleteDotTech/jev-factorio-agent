@@ -142,6 +142,93 @@ def test_checkpoint_resume_never_requeues_a_background_craft(tmp_path):
         CampaignMemory.load(tmp_path / "state.json", backend.state.session_id, restored.target)
 
 
+def delay_native_craft_start(backend, monkeypatch, *, corrupt=None):
+    execute = backend.execute
+
+    def delayed(action, parameters):
+        # The real game keeps ticking while write-ahead persistence or dispatch
+        # preparation runs. This exceeds the craft's 1800-tick execution budget.
+        if action == "factory_craft_job":
+            backend.state.tick += 3794
+        result = execute(action, parameters)
+        if action == "factory_craft_job" and corrupt is not None:
+            field, value = corrupt
+            backend.state.factory["craft_job"][field] = value
+        return result
+
+    monkeypatch.setattr(backend, "execute", delayed)
+
+
+def test_delayed_native_start_admits_once_and_survives_resume(tmp_path, monkeypatch):
+    backend = ReceiptBackend()
+    delay_native_craft_start(backend, monkeypatch)
+    loop = controller(backend, tmp_path)
+    result = loop.step()
+    assert result["background_job"] and loop.memory.pending is None
+    job = deepcopy(loop.memory.background_job)
+    attempt = deepcopy(loop.memory.background_attempt)
+    assert job["started_tick"] == attempt["started_tick"] + 3794
+    assert job["deadline_tick"] == job["started_tick"] + 1800
+
+    resumed = controller(backend, tmp_path, resume=True)
+    resumed.step()  # Independent work must not requeue the paid craft.
+    assert resumed.memory.background_job["deadline_tick"] == job["deadline_tick"]
+    assert resumed.memory.background_attempt == attempt
+    backend.complete()
+    # A late observation still accepts native completion inside the fixed budget.
+    backend.state.tick = job["deadline_tick"] + 100
+    result = resumed.step()
+    assert result["status"] == "completed" and resumed.memory.background_job is None
+    assert [action for action, _ in backend.calls].count("factory_craft_job") == 1
+
+
+@pytest.mark.parametrize("complete_late", [False, True])
+def test_delayed_start_retains_fixed_native_execution_timeout(tmp_path, monkeypatch, complete_late):
+    backend = ReceiptBackend()
+    delay_native_craft_start(backend, monkeypatch)
+    loop = controller(backend, tmp_path)
+    loop.step()
+    deadline = loop.memory.background_job["deadline_tick"]
+    backend.state.tick = deadline
+    if complete_late:
+        backend.complete()  # Native completion itself now misses the deadline.
+    result = loop.step()
+    assert result["status"] == "uncertain"
+    assert loop.memory.background_job["deadline_tick"] == deadline
+    assert [action for action, _ in backend.calls] == ["factory_craft_job"]
+
+
+@pytest.mark.parametrize("corrupt", [("paid", False), ("queue_valid", False), ("id", "other-job")])
+def test_delayed_start_cannot_admit_untrusted_native_receipt(tmp_path, monkeypatch, corrupt):
+    backend = ReceiptBackend()
+    delay_native_craft_start(backend, monkeypatch, corrupt=corrupt)
+    loop = controller(backend, tmp_path)
+    loop.step()
+    assert loop.memory.pending and loop.memory.background_job is None
+    result = loop.step()
+    assert result["status"] == "uncertain"
+    assert loop.memory.pending and loop.memory.background_job is None
+    assert [action for action, _ in backend.calls] == ["factory_craft_job"]
+
+
+@pytest.mark.parametrize("dispatch", ["prepared", "ambiguous"])
+def test_delayed_unacknowledged_craft_keeps_original_pending_barrier(tmp_path, monkeypatch, dispatch):
+    backend = ReceiptBackend()
+    delay_native_craft_start(backend, monkeypatch)
+    backend.lose_ack = True
+    loop = controller(backend, tmp_path)
+    loop.step()
+    loop.memory.pending["dispatch"] = dispatch
+    pending = deepcopy(loop.memory.pending)
+    loop._save()
+    resumed = controller(backend, tmp_path, resume=True)
+    result = resumed.step()
+    assert result["status"] == "uncertain" and resumed.memory.background_job is None
+    assert resumed.memory.pending["started_tick"] == pending["started_tick"]
+    assert resumed.memory.pending["dispatch"] == dispatch
+    assert [action for action, _ in backend.calls] == ["factory_craft_job"]
+
+
 def test_exhausted_independent_work_waits_for_background_completion(tmp_path, monkeypatch):
     backend = ReceiptBackend()
     initial = controller(backend, tmp_path)

@@ -170,7 +170,10 @@ class CraftJob:
             actor={key: receipt[key] for key in ("player_index", "unit_number", "surface_index", "force_index")},
             inputs=deepcopy(receipt["inputs"]), outputs=deepcopy(receipt["outputs"]),
             baseline=deepcopy(receipt["baseline"]), started_tick=receipt["started_tick"],
-            deadline_tick=pending["started_tick"] + step.timeout_ticks,
+            # Write-ahead persistence can delay dispatch after its observation.
+            # Only this validated, acknowledged native start anchors execution;
+            # the resulting deadline stays fixed across polls and resumes.
+            deadline_tick=receipt["started_tick"] + step.timeout_ticks,
             finished=receipt["finished"], last_progress_tick=receipt["last_progress_tick"],
         )
         return cls.from_dict(data)
