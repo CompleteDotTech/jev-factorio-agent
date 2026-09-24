@@ -1,0 +1,59 @@
+name: Verify complete launch inventory capacity
+on:
+  push:
+    branches: [feat/first-rocket-launch-readiness]
+    paths: ['.github/workflows/launch-capacity-review.yml']
+permissions:
+  contents: write
+jobs:
+  verify:
+    if: github.repository == 'CompleteDotTech/jev-factorio-agent' && github.ref == 'refs/heads/feat/first-rocket-launch-readiness'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Assemble and verify exact locally tested corrections
+        run: |
+          python - <<'PY'
+          import hashlib, subprocess
+          from pathlib import Path
+          base='d3540c4d985ffc4d64804b3c57fd4ed3bc0e4726'
+          changed=set(subprocess.check_output(['git','diff','--name-only',base,'HEAD'],text=True).splitlines())
+          assert changed=={'.github/launch-capacity-fix.py','.github/workflows/launch-capacity-review.yml'}
+          subprocess.run(['python','.github/launch-capacity-fix.py'],check=True)
+          expected={
+              'src/jev_factorio/lua/launch_readiness.lua':'b01fe73bc12055d7fc831f84d097094096610033e4d7a1195d623ea190c03bf5',
+              'tests/fixtures/launch_runtime.lua':'966ebfd208ab03814bd4e98607104012c5d1a4f572bc9308d6d07787a88fe401',
+              'tests/test_launch_readiness.py':'dec4cd3eff454da92b6386c1a81ae16a581cc8e605f1cdc2973417123677118d',
+              'docs/LAUNCH_READINESS.md':'11ace7e976f89281b1979953c7b9e2e443376b0c24826db745ea9f9b9a33655e'}
+          for path,digest in expected.items():
+              assert hashlib.sha256(Path(path).read_bytes()).hexdigest()==digest,path
+          print('All four corrections match locally tested source')
+          PY
+      - name: Commit locally without publishing untested source
+        run: |
+          set -euo pipefail
+          git rm .github/launch-capacity-fix.py .github/workflows/launch-capacity-review.yml
+          git add src/jev_factorio/lua/launch_readiness.lua tests/fixtures/launch_runtime.lua tests/test_launch_readiness.py docs/LAUNCH_READINESS.md
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Require complete fish yield and satellite destination capacity'
+      - run: python -m pip install -e '.[test]'
+      - run: python -m pytest tests/test_launch_readiness.py -q
+      - run: python -m pytest tests/ --ignore=tests/test_dashboard_browser.py -q
+      - run: python -m compileall -q src
+      - name: Publish only passing source to the feature branch
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          BRANCH=feat/first-rocket-launch-readiness
+          test "$(git ls-remote origin refs/heads/$BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          git push origin HEAD:refs/heads/$BRANCH
