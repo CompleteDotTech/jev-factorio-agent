@@ -162,6 +162,28 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                                       'factory_buffer_build', 'factory_input_build'} for s in plan.steps),
             'estimate_basis': 'native_observation_and_catalog_with_declared_policy_heuristics',
         }
+    # A nearer bulk pickup of the same currently needed material is not
+    # discretionary stockpiling. Compare its cost using only the current need,
+    # not all extra handled units. This is evidence/ranking, never permission.
+    def acquired_item(plan):
+        if len(plan.steps) != 1 or plan.steps[0].action not in {'factory_extract', 'factory_gather'}:
+            return None
+        step = plan.steps[0]
+        parameters = step.parameters or {}
+        item = parameters.get('item', parameters.get('resource', step.item))
+        return item if isinstance(item, str) and item else None
+
+    required = {}
+    for plan in plans:
+        item, row = acquired_item(plan), result[plan.id]
+        if item and row['work_scope'] == 'immediate' and row['processed_units'] > 0:
+            required[item] = max(required.get(item, 0), row['processed_units'])
+    for plan in plans:
+        item, row = acquired_item(plan), result[plan.id]
+        if item in required and row['work_scope'] == 'lookahead' and row['processed_units'] > 0:
+            row['work_scope'] = 'shared_prerequisite'
+            row['current_prerequisite_units'] = min(required[item], row['processed_units'])
+            row['reasons'].append('same_item_current_prerequisite')
     return result
 
 
@@ -174,7 +196,7 @@ def ranking_key(row: dict) -> tuple:
     This is a scheduling heuristic, not a success probability or calibrated value.
     """
     duration = row['actor_ticks_estimate']
-    amount = max(1, row['processed_units'])
+    amount = max(1, row.get('current_prerequisite_units', row['processed_units']))
     return (row['passive'], -row['urgency'], row.get('work_scope') == 'lookahead', duration is None,
             (duration / amount) if duration is not None else 0,
             row['compiler_order'])

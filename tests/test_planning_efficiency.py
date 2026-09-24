@@ -19,12 +19,12 @@ from test_local_decisions import transfers
 
 def scoped_transfers():
     state, data, _ = transfers()
-    state.factory['entities']['near']['output']['iron-plate'] = 200
+    state.factory['entities']['near']['output']['copper-plate'] = 200
     worker = ReadyWorkPlanner(data, state, 'rocket_launch')
     worker.focus = ('iron-plate', 2)
     immediate = worker._transfer('far', 'iron-plate', 2, extracting=True)
     worker.speculative = True
-    optional = worker._transfer('near', 'iron-plate', 200, extracting=True)
+    optional = worker._transfer('near', 'copper-plate', 200, extracting=True)
     return state, data, immediate, optional
 
 
@@ -116,3 +116,17 @@ def test_frontier_reports_budget_rejection_and_dedup_without_resetting_history()
     assert record['failure_budgets'][bad.id] == loop.memory.failures[bad.id] == 2
     assert record['mining_outposts'] is False
     assert client.calls == 0 and record['usage'] is None
+
+
+def test_nearer_bulk_pickup_of_same_current_material_remains_eligible_for_priority():
+    state, data, immediate, _ = scoped_transfers()
+    state.factory['entities']['near']['output']['iron-plate'] = 200
+    worker = ReadyWorkPlanner(data, state, 'rocket_launch')
+    worker.focus, worker.speculative = ('iron-plate', 2), True
+    shared = worker._transfer('near', 'iron-plate', 200, extracting=True)
+    support = scheduling_context(state, data, [immediate, shared], 'rocket_launch')
+    assert support['deterministic_ranking'][0] == shared.id
+    evidence = support['candidate_evidence'][shared.id]
+    assert evidence['work_scope'] == 'shared_prerequisite'
+    assert evidence['processed_units'] == 200
+    assert evidence['current_prerequisite_units'] == 2
