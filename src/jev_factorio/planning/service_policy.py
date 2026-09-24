@@ -25,13 +25,14 @@ def carried_stock(planner) -> dict:
 
     Collections and acknowledged craft output never add to this budget. Missing
     ledger evidence cannot authorize an extra delivery. The original first action
-    still uses the ordinary controller's fresh preconditions.
+    still uses the ordinary controller's fresh preconditions. The ledger uses
+    floats; rounding down never borrows a fractional reserved item.
     """
     carried = getattr(getattr(planner, 'ledger', None), 'carried', {})
-    return {item: min(count, carried.get(item, 0))
+    return {item: math.floor(min(count, carried.get(item, 0)))
             for item, count in planner.snapshot.inventory.items()
-            if type(count) is int and count >= 0
-            and type(carried.get(item, 0)) is int and carried.get(item, 0) >= 0}
+            if all(type(v) in {int, float} and math.isfinite(v) and v >= 0
+                   for v in (count, carried.get(item, 0)))}
 
 
 class ServiceBudget:
