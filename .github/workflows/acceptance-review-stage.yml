@@ -47,6 +47,9 @@ jobs:
                'from jev_factorio.acceptance_boundaries import probe_source_sha256\nfrom jev_factorio.acceptance_io import canonical, load_json, sha256, stable_read')
           edit('tests/test_native_acceptance.py',"'query_sha256': 'f' * 64", "'query_sha256': probe_source_sha256()")
           edit('tests/test_acceptance_review.py',"'expected_commit':'baseline' if arm=='baseline' else 'treatment'", "'expected_commit':'same-approved-source'")
+          p=Path('tests/test_acceptance_regression_gates.py');text=p.read_text()
+          assert text.count('steam_power')==3
+          p.write_text(text.replace('steam_power','bootstrap_mining'))
           edit('docs/NATIVE_ACCEPTANCE.md',
                'Use the same instrumented commit for baseline and treatment where possible, with',
                'Use the same instrumented commit and source fingerprint for both arms, with')
@@ -57,7 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           git rm .github/workflows/acceptance-review-stage.yml
-          git add src/jev_factorio/native_acceptance.py tests/test_native_acceptance.py tests/test_acceptance_review.py docs/NATIVE_ACCEPTANCE.md
+          git add src/jev_factorio/native_acceptance.py tests/test_native_acceptance.py tests/test_acceptance_review.py tests/test_acceptance_regression_gates.py docs/NATIVE_ACCEPTANCE.md
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
