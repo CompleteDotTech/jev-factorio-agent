@@ -135,6 +135,18 @@ walking permits trying another candidate. Transport errors, walking failures,
 timeouts and placement failures still stop the operation. Operator-assisted
 completion is kept separate from autonomous performance evidence.
 
+The alternate approach successfully walked around the shoreline and placed four
+more paid pipes, exposing a fluid-clearance problem at `(13.5,49.5)`: the sulfur
+plant's native filter assigns that inlet to petroleum gas, while its water inlet
+is `(11.5,49.5)`. Before construction the empty candidate was buildable, but the
+new adjacent water pipe made native placement reject the incompatible connection.
+Pipe surveys now exclude incompatible native fluid ports and their neighboring
+connection clearance, including empty recipe-filtered ports. Incompatible pipe
+segments are also excluded. A native read-only survey verified the exclusions
+and a remaining water route. The misplaced adjacent paid pipe must be reclaimed
+through ordinary mining in the audited recovery; this is not synthetic deletion
+or an autonomous-efficiency result.
+
 The useful transferable principles are minimizing travel, keeping acknowledged
 crafting and research supplied during independent work, and preparing the next
 production bottleneck. The existing ready-work/background controller already
