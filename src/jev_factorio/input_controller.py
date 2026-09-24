@@ -127,11 +127,13 @@ def input_loop_type(base):
         def load(cls, path, session_id, target):
             memory = super().load(path, session_id, target)
             if (type(memory.input_routes_schema) is not int or memory.input_routes_schema != 1
-                    or not isinstance(memory.input_commitments, dict) or len(memory.input_commitments) > 2):
+                    or not isinstance(memory.input_commitments, dict)
+                    or len(memory.input_commitments) > (4 if hasattr(memory, "successor_schema") else 2)):
                 raise ValueError("Invalid input-route checkpoint extension")
             from .input_routes import ORES
             for source, entry in memory.input_commitments.items():
-                if (source not in ORES or not isinstance(entry, dict)
+                if (source not in ORES or source.startswith("growth:") and not hasattr(memory, "successor_schema")
+                        or not isinstance(entry, dict)
                         or set(entry) != {"layout", "source_unit", "parts"}
                         or not isinstance(entry["layout"], str) or not 0 < len(entry["layout"]) <= 128
                         or type(entry["source_unit"]) is not int or entry["source_unit"] <= 0

@@ -219,3 +219,10 @@ current world and every paid asset; it is not a save rewind.
 See [Phase 2 safe production](PHASE2_SAFE_PRODUCTION.md) for deadline-aware
 paid service visits and bounded rotating retrofit surveys. Native VM validation
 and additive successor production remain separate gates.
+
+## Ore-side successors
+
+The opt-in [ore-side successor lifecycle](ORE_SIDE_SUCCESSORS.md) adds separately owned
+production, paid construction, native flow checks and bounded downstream-use
+qualification without replacing the established factory. Development VM
+validation and production cutover remain separate gates.

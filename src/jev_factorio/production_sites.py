@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from copy import deepcopy
 
-ROLES = {'recipe:iron-plate', 'recipe:copper-plate'}
+ROLES = {'recipe:iron-plate', 'recipe:copper-plate', 'growth:iron-plate', 'growth:copper-plate'}
 PARTS = {'stone-furnace', 'burner-mining-drill', 'burner-inserter', 'wooden-chest', 'transport-belt'}
 
 
@@ -18,6 +18,8 @@ def sources(snapshot) -> dict:
             or set(data['sources']) - ROLES):
         raise ValueError('Missing or stale production-site evidence')
     for role, row in data['sources'].items():
+        if role.startswith('growth:') and 'successors' not in snapshot.factory:
+            raise ValueError('Successor production requires its explicit capability')
         if (not isinstance(row, dict) or row.get('state') not in {'proposed', 'owned', 'rejected'}
                 or not isinstance(row.get('reason'), str) or not 0 < len(row['reason']) <= 128):
             raise ValueError('Invalid or faulted production-site evidence')

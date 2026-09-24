@@ -53,6 +53,8 @@ def cli() -> None:
                    help="Opt-in paid burner-inserter output buffers; requires ready-work FLE")
     p.add_argument("--furnace-input-belts", action="store_true",
                    help="Opt-in owned drill/belt input routes; requires furnace output buffers")
+    p.add_argument("--ore-side-successors", action="store_true",
+                   help="Opt-in additive ore-side producers; requires background work and input belts")
     p.add_argument("--mining-outposts", action="store_true",
                    help="Opt-in paid mining outposts for existing manual cells; requires furnace input belts")
     p.add_argument("--background-work", action="store_true",
@@ -95,6 +97,10 @@ def cli() -> None:
         or args.backend != "fle" or args.target == "bootstrap_mining"
     ):
         p.error("--background-work requires hierarchical FLE ready-work and a native production target")
+    if args.ore_side_successors and (not args.furnace_input_belts or not args.background_work
+                                     or args.mining_outposts or args.target != 'rocket_launch'
+                                     or not args.resume or not args.resume_controller):
+        p.error('--ore-side-successors requires background-work input belts, rocket goal, existing resumed campaign, and no mining outposts')
     if args.mining_outposts and (not args.furnace_input_belts or args.target != 'rocket_launch'):
         p.error('--mining-outposts requires --furnace-input-belts and --target rocket_launch')
     if args.furnace_input_belts and not args.furnace_output_buffers:
@@ -126,6 +132,19 @@ def cli() -> None:
                 p.error("--resume-controller requires an existing --checkpoint")
             if args.backend == "fle" and not args.resume:
                 p.error("Resuming live controller memory requires --resume to preserve the world")
+        if args.ore_side_successors:
+            try:
+                import json
+                from .background import BackgroundWorkLoop
+                from .buffer_controller import buffered_loop_type
+                from .input_controller import input_loop_type
+                from .successor_controller import successor_loop_type
+                path = Path(args.checkpoint)
+                identity = json.loads(path.read_text(encoding='utf-8'))
+                kind = successor_loop_type(input_loop_type(buffered_loop_type(BackgroundWorkLoop)))
+                kind.memory_type.load(path, identity.get('session_id'), args.target)
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                p.error('Successor checkpoint preflight failed; backend not started')
         # Resolve credentials before starting a backend that initializes a world.
         try:
             client = (None if args.policy == "deterministic" else
@@ -164,6 +183,7 @@ def cli() -> None:
             factory_scheduling=args.factory_scheduling, background_work=args.background_work,
             furnace_output_buffers=args.furnace_output_buffers,
             furnace_input_belts=args.furnace_input_belts, mining_outposts=args.mining_outposts,
+            ore_side_successors=args.ore_side_successors,
         )
     with ExitStack() as cleanup:
         research = None
@@ -198,6 +218,9 @@ def cli() -> None:
                 from .input_controller import input_loop_type
 
                 loop_type = input_loop_type(loop_type)
+            if args.ore_side_successors:
+                from .successor_controller import successor_loop_type
+                loop_type = successor_loop_type(loop_type)
             if args.mining_outposts:
                 from .outpost_controller import outpost_loop_type
                 loop_type = outpost_loop_type(loop_type)

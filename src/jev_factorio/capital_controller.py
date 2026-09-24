@@ -139,6 +139,8 @@ def _protected_work(snapshot):
 def frontier(loop, snapshot):
     """Final capability-composed frontier: urgent work, committed kit, optional work."""
     original, blocker = loop._compile_candidates(snapshot)
+    if any('successor_project' in (p.materials or {}) for p in original):
+        return original, blocker  # An explicit successor proposal is not another capital kit.
     if not enabled(loop) or loop.memory.active_goal != 'rocket_launch':
         return original, blocker
     state = loop.memory.capital_investment

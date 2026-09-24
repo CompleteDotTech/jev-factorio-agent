@@ -196,3 +196,10 @@ development VM acceptance gates. The [offline evidence audit](docs/EVIDENCE_AUDI
 verifies capture hashes and reports measurement coverage without contacting a
 backend or treating missing gameplay metrics as zero. Source integration is not
 production cutover or proof of native throughput improvement.
+
+## Ore-side successors
+
+The opt-in [ore-side successor lifecycle](docs/ORE_SIDE_SUCCESSORS.md) adds separately owned
+production, paid construction, native flow checks and bounded downstream-use
+qualification without replacing the established factory. Development VM
+validation and production cutover remain separate gates.

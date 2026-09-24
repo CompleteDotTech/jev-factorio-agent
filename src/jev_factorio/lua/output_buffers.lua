@@ -31,7 +31,7 @@ local function source_for(role)
         and source.name == "stone-furnace" and source.force == player.force
         and source.surface == player.surface, "Output-buffer source changed")
     local recipe = source.get_recipe()
-    assert(not recipe or "recipe:" .. recipe.name == role, "Output-buffer source recipe changed")
+    assert(not recipe or recipe.name == string.sub(role,8), "Output-buffer source recipe changed")
     return source
 end
 local function geometry(cell)
@@ -209,8 +209,11 @@ b.observer = function()
     local rows = {}
     b.offers = {}
     local handler_ok = script.get_event_handler(defines.events.on_tick) == b.tick_handler
-    for _, item in ipairs(supported) do
-        local role = "recipe:" .. item
+    local roles={}
+    for _,item in ipairs(supported) do roles[#roles+1]="recipe:"..item end
+    if campaign.successors_enabled then roles[#roles+1]="growth:iron-plate";roles[#roles+1]="growth:copper-plate" end
+    for _, role in ipairs(roles) do
+        local item=string.sub(role,8)
         local cell = b.cells[role]
         local source = campaign.entities[role]
         if cell or (source and source.valid and source.name == "stone-furnace") then

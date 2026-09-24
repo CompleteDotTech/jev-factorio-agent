@@ -4,7 +4,13 @@ assert(campaign and fair and output, "Input routes require verified output-buffe
 local r = storage.input_routes or {protocol = 1, cells = {}, offers = {}, serial = 0}
 assert(r.protocol == 1, "Unsupported input-route runtime")
 storage.input_routes = r
-local ores = {["recipe:iron-plate"] = "iron-ore", ["recipe:copper-plate"] = "copper-ore"}
+local ores={["recipe:iron-plate"]="iron-ore",["recipe:copper-plate"]="copper-ore",
+    ["growth:iron-plate"]="iron-ore",["growth:copper-plate"]="copper-ore"}
+local function producer_roles()
+    local result={"recipe:iron-plate","recipe:copper-plate"}
+    if campaign.successors_enabled then result[#result+1]="growth:iron-plate";result[#result+1]="growth:copper-plate" end
+    return result
+end
 local max_belts = 64
 local vectors = {{x=0,y=-1}, {x=1,y=0}, {x=0,y=1}, {x=-1,y=0}}
 local function point(p) return {x=p.x or p[1], y=p.y or p[2]} end
@@ -38,7 +44,7 @@ local function source_for(role)
         and cell.parts.inserter.entity.drop_target==cell.parts.chest.entity,
         "Output topology changed")
     local recipe=entity.get_recipe()
-    assert(not recipe or "recipe:"..recipe.name==role, "Input recipe changed")
+    assert(not recipe or recipe.name==string.sub(role,8), "Input recipe changed")
     return entity,cell
 end
 local function geometry(cell)
@@ -379,7 +385,7 @@ if previous_observe==r.observer then previous_observe=r.previous_observe end
 r.previous_observe=previous_observe
 r.observer=function()
     local result=previous_observe(); local rows={}; local diagnostics={}
-    for _,source in ipairs({"recipe:iron-plate","recipe:copper-plate"}) do
+    for _,source in ipairs(producer_roles()) do
         if storage.mining_outposts and storage.mining_outposts.cells[ores[source]] and not r.cells[source] then
             r.offers[source]=nil
         end
@@ -416,7 +422,7 @@ r.observer=function()
                 state=cell.fault and "fault" or (r.cells[source] and (linked and "ready" or "building") or "proposed")}
         end
     end
-    for _,role in ipairs({"recipe:iron-plate","recipe:copper-plate"}) do
+    for _,role in ipairs(producer_roles()) do
         local source=campaign.entities[role];local out=output.cells[role]
         local saved=r.survey_diagnostics and r.survey_diagnostics[role]
         local detail={}
@@ -441,6 +447,7 @@ r.observer=function()
     end
     result.input_routes={protocol=1,session_id=storage.jev_session_id,tick=result.tick,sources=rows,diagnostics=diagnostics}
     if campaign.observe_production_sites then result.production_sites=campaign.observe_production_sites() end
+    if campaign.observe_successors then result.successors=campaign.observe_successors(result) end
     return result
 end
 campaign.observe=r.observer
@@ -462,6 +469,9 @@ r.transfer=function(role,item,quantity,receipt,extracting)
             if role==out.chest_role and extracting then assert(cell.flow,"Input flow not commissioned") end
         end
     end
-    return previous_transfer(role,item,quantity,receipt,extracting)
+    local before=campaign.successor_before_transfer and campaign.successor_before_transfer(role,item,quantity,extracting)
+    local value=previous_transfer(role,item,quantity,receipt,extracting)
+    if campaign.successor_after_transfer then campaign.successor_after_transfer(role,item,quantity,receipt,extracting,before) end
+    return value
 end
 campaign.transfer=r.transfer

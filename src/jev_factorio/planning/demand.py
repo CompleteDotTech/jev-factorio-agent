@@ -41,6 +41,10 @@ class SupplyLedger:
             key = category, identity, item
             buckets[key] = max(buckets.get(key, 0), count)
         for role, machine in sorted(snapshot.factory.get('entities', {}).items()):
+            if 'successors' in snapshot.factory:
+                from ..successors import private_output
+                if private_output(role, snapshot):
+                    continue  # Uncollected qualification/trial stock is not general forecast supply.
             unit = machine.get('unit_number')
             identity = ('unit', unit) if type(unit) is int and unit > 0 else ('role', role)
             for item, count in machine.get('output', {}).items():

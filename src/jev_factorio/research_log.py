@@ -96,6 +96,7 @@ class RunConfiguration:
     furnace_output_buffers: bool = False
     furnace_input_belts: bool = False
     mining_outposts: bool = False
+    ore_side_successors: bool = False
 
 
 def canonical_bytes(value: object) -> bytes:
