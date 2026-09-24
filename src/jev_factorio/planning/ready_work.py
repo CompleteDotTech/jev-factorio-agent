@@ -185,7 +185,7 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
         if (primary.steps[0].action not in {
                 "factory_gather", "factory_insert", "factory_extract", "factory_wait"
             } or not self.focus or self.factory.get("crafting_queue", 0)):
-            return [primary]
+            return [service_visit(self, primary)]
         candidates = [primary]
         # Evaluate a bounded frontier, not every item in a rocket-sized tree.
         for item, amount in list(sorted(self.targets.items()))[:32]:

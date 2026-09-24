@@ -144,6 +144,8 @@ def test_service_input_delivery_respects_observed_remaining_native_stack_capacit
     # stack size.  The normal furnace may consume meanwhile, which only makes
     # this value safer at dispatch.
     planner.targets['iron-ore'] = 100
+    # The fixture changed inventory after compilation; recapture its new boundary.
+    planner.ledger = SupplyLedger.capture(state, data)
 
     visit = service_visit(planner, first)
 

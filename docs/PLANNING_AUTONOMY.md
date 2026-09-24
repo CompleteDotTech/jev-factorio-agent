@@ -213,3 +213,9 @@ an old checkpoint reader over newer ownership state, reset history, discard
 pending work, grant items, teleport, change speed, replace the world, or remove
 existing production before its successor is verified. Rollback preserves the
 current world and every paid asset; it is not a save rewind.
+
+## Phase 2 implementation
+
+See [Phase 2 safe production](PHASE2_SAFE_PRODUCTION.md) for deadline-aware
+paid service visits and bounded rotating retrofit surveys. Native VM validation
+and additive successor production remain separate gates.
