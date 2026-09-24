@@ -7,6 +7,8 @@ import math
 from copy import deepcopy
 from dataclasses import replace
 
+from .service_policy import ServiceBudget, carried_stock
+
 TRANSFER_ACTIONS = {'factory_insert', 'factory_extract'}
 
 
@@ -40,8 +42,9 @@ def service_visit(planner, plan, *, max_steps: int = 3):
     producer = entities.get(source, {})
     recipe = planner.catalog.recipes.get(producer.get('recipe', ''), {})
     view = deepcopy(snapshot)
-    spendable = dict(snapshot.inventory)
+    spendable = carried_stock(planner)
     steps, signatures = [], set()
+    budget = ServiceBudget(planner, first, cell)
 
     def add(step):
         parameters = step.parameters or {}
@@ -55,6 +58,8 @@ def service_visit(planner, plan, *, max_steps: int = 3):
             return
         # Fresh preconditions will still be rechecked by the real dispatcher.
         if not step.allowed(view) or step.satisfied(view):
+            return
+        if steps and not budget.admit(step):
             return
         steps.append(step)
         signatures.add(signature)
@@ -73,6 +78,16 @@ def service_visit(planner, plan, *, max_steps: int = 3):
     add(first)
     if not steps:
         return plan
+    # Science packs already carried can service one lab in one committed visit.
+    # Keep the selected first transfer unchanged, including a one-pack tail.
+    if source == 'utility:lab':
+        for row in budget.science:
+            item = row['item']
+            count = min(row['amount'], spendable.get(item, 0),
+                        max(0, planner.catalog.stack_sizes.get(item, 200)
+                            - view.factory['entities'][source].get('input', {}).get(item, 0)))
+            if count > 0:
+                add(planner._transfer(source, item, count).steps[0])
     for target in sorted(cell):
         machine = entities.get(target, {})
         name = machine.get('name', '')
@@ -92,16 +107,10 @@ def service_visit(planner, plan, *, max_steps: int = 3):
         item, each = ingredient['name'], ingredient['amount']
         target = planner.targets.get(item, 0)
         if item in {'iron-ore', 'copper-ore', 'stone'}:
-            target = max(target, min(20 * each, snapshot.inventory.get(item, 0)))
+            target = max(target, min(20 * each, spendable.get(item, 0)))
         buffered = view.factory['entities'][source].get('input', {}).get(item, 0)
         need = max(0, math.ceil(target - buffered - (each if producer.get('crafting') else 0)))
-        # A furnace input is one native item stack.  A service visit may be
-        # committed while its producer is still consuming an earlier batch, so
-        # bound the additional delivery to the observed free space in that
-        # stack.  Consumption can only make this conservative bound safer
-        # before dispatch.  Without it, a 50-stack with five ore already
-        # present could request all 50 and reach the fair Lua transfer only to
-        # be rejected for insufficient insertable capacity.
+        # Use observed free stack space; consumption can only increase it.
         stack_size = planner.catalog.stack_sizes.get(item, 200)
         free_stack = max(0, stack_size - buffered)
         count = min(200, need, spendable.get(item, 0), free_stack)
@@ -125,5 +134,8 @@ def service_visit(planner, plan, *, max_steps: int = 3):
                 | {'action': s.action} for s in steps]
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:16]
     return replace(plan, id=f'service:{source}:{digest}', steps=tuple(steps),
+                   materials={**(plan.materials or {}), 'service_visit': {
+                       **budget.summary(), 'steps': len(steps),
+                       'unit_numbers': [entities[s.parameters['role']]['unit_number'] for s in steps]}},
                    description=f'Service {source} in {len(steps)} individually verified transfers. '
                                + plan.description)
