@@ -126,6 +126,15 @@ payment remain authoritative. This geometric probe does not itself prove the
 complete connection can be built; paid partial work and operator recovery must
 remain explicit in live acceptance evidence.
 
+The subsequent audited operator trial demonstrated that the first standing point
+was collision-free but unreachable around the shoreline. Native pathfinding
+failed before walking; all 43 existing pipe identities and 37 inventory pipes
+remained unchanged. Approach planning now considers at most 16 deduplicated,
+margin-checked angular candidates. Only a typed native no-route result before
+walking permits trying another candidate. Transport errors, walking failures,
+timeouts and placement failures still stop the operation. Operator-assisted
+completion is kept separate from autonomous performance evidence.
+
 The useful transferable principles are minimizing travel, keeping acknowledged
 crafting and research supplied during independent work, and preparing the next
 production bottleneck. The existing ready-work/background controller already

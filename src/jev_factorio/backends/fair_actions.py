@@ -10,6 +10,10 @@ from typing import Any
 from .errors import ConnectionPreflightRejected
 
 
+class NativePathNotFound(RuntimeError):
+    """The native path request terminated before walking could begin."""
+
+
 class FairActions:
     def __init__(self, backend: Any) -> None:
         self.backend = backend
@@ -46,6 +50,8 @@ class FairActions:
                 if state["status"] == "completed":
                     return state
                 if state["status"] == "failed":
+                    if state.get("error") == "Native pathfinder could not find a route":
+                        raise NativePathNotFound(state["error"])
                     raise RuntimeError(state.get("error", "Native controls failed"))
                 time.sleep(0.1)
             raise TimeoutError("Native action exceeded its bounded observation window")
@@ -149,19 +155,30 @@ class FairActions:
             # Native walking may finish within 0.25 of its final waypoint,
             # and request_path permits a 0.2 endpoint radius. Leave one full
             # tile after collision search rather than merely checking reach.
-            "local distance=math.sqrt(distance_squared); local position; "
-            "for inset=2,6,2 do local radius=math.max(0,reach-inset); "
-            "local near={x=target.x+dx/distance*radius,y=target.y+dy/distance*radius}; "
+            "local distance=math.sqrt(distance_squared); local positions={}; local seen={}; "
+            "for inset=2,4,2 do local radius=math.max(0,reach-inset); "
+            "for _,turn in ipairs({0,1,-1,2,-2,3,-3,4}) do local angle=turn*math.pi/4; "
+            "local ux=(dx*math.cos(angle)-dy*math.sin(angle))/distance; "
+            "local uy=(dx*math.sin(angle)+dy*math.cos(angle))/distance; "
+            "local near={x=target.x+ux*radius,y=target.y+uy*radius}; "
             "local candidate=player.surface.find_non_colliding_position('character',near,1,0.25); "
             "if candidate and (candidate.x-target.x)^2+(candidate.y-target.y)^2 "
-            "<=(reach-1)^2 then position=candidate; break end end; "
-            "assert(position, 'No collision-free build approach with arrival margin'); "
-            "rcon.print(helpers.table_to_json(position))"
+            "<=(reach-1)^2 then local key=candidate.x..':'..candidate.y; "
+            "if not seen[key] then seen[key]=true; table.insert(positions,candidate) end end end end; "
+            "assert(#positions>0, 'No collision-free build approach with arrival margin'); "
+            "rcon.print(helpers.table_to_json({positions=positions}))"
         ))
         if result.get("reachable") is True:
             self._note("approaches_skipped_in_reach")
             return
-        self.move_to(Position(**result))
+        for candidate in result["positions"]:
+            try:
+                self.move_to(Position(**candidate))
+                return
+            except NativePathNotFound as error:
+                if type(error) is not NativePathNotFound:
+                    raise
+        raise NativePathNotFound("No native route to any bounded build approach")
 
     def place_entity(self, prototype: Any, position: Any, direction: Any,
                      exact: bool = False) -> Any:
