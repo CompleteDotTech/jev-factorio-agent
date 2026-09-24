@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from jev_factorio.acceptance_boundaries import probe_source_sha256
 from jev_factorio.acceptance_io import canonical, load_json, sha256, stable_read
 from jev_factorio.acceptance_capture import capture, verify
 from jev_factorio.dev_preflight import inspect_native, probe
@@ -48,7 +49,7 @@ def source_files(root, trial_id='trial1', arm='baseline', pair_id='pair1', span=
     preflight = {'schema': 'jev-factorio.dev-preflight.v1', 'vm_uuid': DEV, 'production_vm_uuid': PROD,
         'checkpoint_sha256': trial['initial_checkpoint_sha256'], 'native': native(),
         'ready_for_coordinated_validation': True, 'deployment_authorized': False,
-        'observed_at_utc': '2026-09-24T00:00:00+00:00', 'query_sha256': 'f' * 64,
+        'observed_at_utc': '2026-09-24T00:00:00+00:00', 'query_sha256': probe_source_sha256(),
         'issues': [], 'gameplay_started': False}
     def state(tick):
         return {'tick': tick, 'session_id': first_cp['session_id'], 'world_kind': world,

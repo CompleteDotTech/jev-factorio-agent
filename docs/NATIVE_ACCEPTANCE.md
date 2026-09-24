@@ -87,7 +87,7 @@ five minutes before the first record, and native tick/session consistency.
 
 ## 2. Predetermine the comparison
 
-Use the same instrumented commit for baseline and treatment where possible, with
+Use the same instrumented commit and source fingerprint for both arms, with
 only `ore_side_successors` disabled versus enabled. Keep model, policy, save,
 checkpoint, active goal, runtime/mods, and all other flags matched. Instrumentation
 adds consumption-counter reads inside the existing observation; its cost must be
@@ -267,3 +267,25 @@ Performance pairs and the uninterrupted soak each require one nonempty controlle
 even if cumulative counter values happen to exceed their previous values after
 reattachment. Restart/fault trials are separate recovery evidence, not silently
 pooled into uninterrupted performance measurements.
+
+## Post-review consistency requirements
+
+The matched successor comparison rejects different commits or source fingerprints
+between baseline and treatment, even when each arm is internally consistent. Only
+the declared successor feature flag differs; comparing unrelated code revisions
+requires a separately designed experiment, not this gate.
+
+The reported preflight query digest must match this package's fixed UTF-8 probe
+source. Old, missing or altered query identities cannot pass. This is a consistency
+check on reported evidence, not a signature proving which command actually ran.
+
+The final successor checkpoint is checked against final gameplay project state,
+native source/predecessor identities, paid input/output component receipts and
+layouts, and exact use/qualification proofs. Previously owned or observed sources
+cannot disappear at the boundary. A legitimate unplaced acquisition intent is
+not mistaken for a paid furnace. No checkpoint is repaired to make evidence fit.
+
+An observed research/victory goal must remain present in subsequent observations.
+Milestone timing must also match the final checkpoint. Withdrawn or changed goal
+evidence fails the trial and cannot earn an early completion time or bypass the
+minimum horizon. These corrections do not change gameplay or authorize deployment.

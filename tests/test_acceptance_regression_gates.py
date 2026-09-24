@@ -92,11 +92,11 @@ def test_persistent_native_goal_can_end_a_short_trial(tmp_path, kind):
 @pytest.mark.parametrize('checkpoint_tick', [None, 2700, 1800])
 def test_milestone_completion_must_match_final_checkpoint_tick(tmp_path, checkpoint_tick):
     args, rows = source_files(tmp_path / 'inputs', span=3600)
-    trial = load_json(args['trial_path'].read_bytes()); trial['goal'] = 'milestone:steam_power'
+    trial = load_json(args['trial_path'].read_bytes()); trial['goal'] = 'milestone:bootstrap_mining'
     args['trial_path'].write_bytes(canonical(trial))
-    for row in rows: row['completed_goals']['steam_power'] = 1800
+    for row in rows: row['completed_goals']['bootstrap_mining'] = 1800
     final = load_json(args['final_checkpoint'].read_bytes())
-    if checkpoint_tick is not None: final['completed_goals']['steam_power'] = checkpoint_tick
+    if checkpoint_tick is not None: final['completed_goals']['bootstrap_mining'] = checkpoint_tick
     args['final_checkpoint'].write_bytes(canonical(final))
     rewrite(args, rows); capture(**args, environ={})
     result = analyze(args['output'])
