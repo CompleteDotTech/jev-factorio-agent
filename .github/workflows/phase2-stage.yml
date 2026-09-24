@@ -24,6 +24,7 @@ jobs:
               'src/jev_factorio/lua/input_routes.lua': 'ab6026ae0fafdc4504524bdbdc270e93a0f6b989',
               'src/jev_factorio/planning/ready_work.py': '645ae018e8b7de613acae5bba449ea436ed461df',
               'src/jev_factorio/planning/output_buffers.py': 'd4d81ae33fb1fa3513a36be6ad2ba91539ce34ce',
+              'tests/test_demand_service.py': '7d69b957ac9700622525679b0a3c4831a800d3f3',
           }
           for path, sha in expected.items():
               assert subprocess.check_output(['git','hash-object',path],text=True).strip()==sha, path
@@ -36,6 +37,39 @@ jobs:
           edit('src/jev_factorio/planning/output_buffers.py',
                '            return [primary]\n        candidates = [primary]',
                '            return [primary] if self._buffer_service else [service_visit(self, primary)]\n        candidates = [primary]')
+          edit('tests/test_demand_service.py', "    planner.targets['iron-ore'] = 100\n", "    planner.targets['iron-ore'] = 100\n    # The fixture changed inventory after compilation; recapture its new boundary.\n    planner.ledger = SupplyLedger.capture(state, data)\n")
+          p=Path('tests/test_phase2_automation.py')
+          p.write_text(p.read_text()+'''
+
+          def test_new_inventory_does_not_expand_a_stale_frontiers_spending_budget():
+              from jev_factorio.planning.service_policy import carried_stock
+              state, _, _, planner, _ = visit_fixture()
+              state.inventory['iron-ore'] = 80
+              assert carried_stock(planner)['iron-ore'] == 20
+
+
+          @pytest.mark.parametrize('value', [True, -1, float('nan'), float('inf')])
+          def test_invalid_carried_ledger_values_cannot_authorize_service(value):
+              from jev_factorio.planning.service_policy import carried_stock
+              _, _, planner, _ = lab_fixture()
+              planner.ledger.carried['green'] = value
+              assert carried_stock(planner).get('green', 0) == 0
+
+
+          def test_fractional_reservations_round_down_instead_of_borrowing():
+              from jev_factorio.planning.service_policy import carried_stock
+              state, data, planner, _ = lab_fixture()
+              planner.ledger = SupplyLedger.capture(state, data, reserved={'green': 0.5})
+              assert carried_stock(planner)['green'] == 19
+
+
+          def test_cached_survey_is_marked_stale_after_source_moves(tmp_path):
+              execute(\'''resources={};storage.campaign.observe();game.tick=game.tick+1
+                  source.position={x=20,y=0}
+                  local d=storage.campaign.observe().input_routes.diagnostics["recipe:iron-plate"]
+                  assert(d.reason=="stale_source_evidence" and placements==0)
+              \''', tmp_path)
+          ''')
           p=Path('src/jev_factorio/lua/input_routes.lua');text=p.read_text()
           first=text.index('local function path(');last=text.index('local function parameters(',first)
           text=text[:first]+Path('.github/phase2-survey.fragment').read_text()+text[last:]
@@ -72,9 +106,6 @@ jobs:
                   diagnostics[role]=detail
               end
           '''
-          # Dedent only the embedding indentation, retaining Lua's logical nesting.
-          lines=diagnostic.splitlines(True)
-          diagnostic=lines[0]+''.join(line[10:] if line.startswith('          ') else line for line in lines[1:])
           p.write_text(text[:first]+diagnostic+text[last:])
           p=Path('docs/PLANNING_AUTONOMY.md')
           p.write_text(p.read_text()+'\n## Phase 2 implementation\n\nSee [Phase 2 safe production](PHASE2_SAFE_PRODUCTION.md) for deadline-aware\npaid service visits and bounded rotating retrofit surveys. Native VM validation\nand additive successor production remain separate gates.\n')
@@ -93,7 +124,7 @@ jobs:
           BRANCH=feat/phase2-safe-production-service
           test "$(git ls-remote origin refs/heads/$BRANCH | cut -f1)" = "$EXPECTED_HEAD"
           git rm .github/phase2-survey.fragment .github/workflows/phase2-stage.yml
-          git add src/jev_factorio/lua/input_routes.lua src/jev_factorio/planning/ready_work.py src/jev_factorio/planning/output_buffers.py docs/PLANNING_AUTONOMY.md
+          git add src/jev_factorio/lua/input_routes.lua src/jev_factorio/planning/ready_work.py src/jev_factorio/planning/output_buffers.py docs/PLANNING_AUTONOMY.md tests/test_demand_service.py tests/test_phase2_automation.py
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
