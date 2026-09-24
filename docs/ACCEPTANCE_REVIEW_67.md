@@ -23,6 +23,19 @@ The isolated integration run `35963669602` tested source commit
 and whitespace checks passed. These are synthetic/offline results; normal PR CI
 and independent review of the final head remain distinct checks.
 
+The subsequent review identified two terminal-state edge cases. Run `35964123697`
+passed the expanded focused suite, full non-browser suite, compilation and
+whitespace checks after the following corrections:
+
+- A paused project cannot become active/qualified or acquire another source. This
+  is checked from the initial checkpoint through logged project history to the
+  final checkpoint. Active-to-paused and active-to-qualified remain valid.
+- Native research/victory completion must be retained by an observation at a
+  strictly later native tick. Repeated copies of the last-tick state do not count.
+  A lone terminal sample has no credited completion time and cannot shorten the
+  trial horizon. This is a conservative measurement rule, not an instruction to
+  restart a stopped controller or alter a save.
+
 No native guest connection, live preflight, session handoff, gameplay trial,
 fault injection, recovery soak or production cutover was performed as part of
 this remediation. Execution requires an authorized development-guest connection
