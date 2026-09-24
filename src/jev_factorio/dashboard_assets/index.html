@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark"><meta name="theme-color" content="#272722"><title>JEV · Factorio Mission Control</title>
-<link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script>
+<link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/mission.css">
+<script src="/mission.js" defer></script><script src="/app.js" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -55,6 +56,17 @@
   </section>
 
   <aside class="right-column">
+    <section class="panel mission-panel" id="mission-panel" aria-labelledby="launch-headline">
+      <div class="panel-heading"><span class="eyebrow">ROCKET / FACTORY READINESS</span><button id="inspect-mission" class="text-button">Evidence ↗</button></div>
+      <h2 id="launch-headline">Launch evidence unavailable</h2>
+      <span id="launch-sample" class="mono">Observation tick —</span>
+      <span id="mission-freshness" class="mission-freshness">AWAITING EVIDENCE</span>
+      <ol id="launch-gates" class="mission-gates"><li class="muted">Not captured by this feed.</li></ol>
+      <p class="mission-boundary" id="mission-native-label">RECORDED FACTS · NOT ACCEPTANCE</p>
+      <details><summary>Production, automation and planning</summary><dl id="mission-production"></dl><ul id="mission-automation" class="mission-automation"></ul><dl id="mission-features"></dl></details>
+      <details><summary>Source, release and acceptance boundaries</summary><dl id="mission-release"></dl></details>
+      <p class="mission-boundary">Submitted ≠ victory. A source merge is not deployment. This viewer cannot launch, repair, approve or change the campaign.</p>
+    </section>
     <section class="panel workflow-panel"><div class="panel-heading"><span class="eyebrow">03 / WORKFLOW</span><span class="tag" id="controller-status">UNKNOWN</span></div><h2>The control circuit.</h2><p class="muted">Select a stage to inspect its evidence.</p><div id="workflow" class="workflow"></div><a class="source-link" href="https://github.com/CompleteDotTech/jev-factorio-agent/blob/main/docs/workflows/mmd/00-complete-workflow.mmd" target="_blank" rel="noreferrer">Canonical Mermaid workflow ↗</a></section>
     <section class="panel verification"><div class="section-title"><h2>Action verification</h2><span class="verification-mark" id="verified-icon">◇</span></div><strong id="verification-status">No pending action observed</strong><p id="verification-detail" class="muted">Returned ≠ verified. Only the controller's observed postcondition advances a step.</p><div class="verification-footer"><span id="pending-polls">POLL COUNT —</span><button class="text-button" id="inspect-pending">Evidence ↗</button></div></section>
     <section class="panel repair"><div class="section-title"><h2>Supervisor & repair</h2><span id="repair-state" class="tag">UNCONNECTED</span></div><p id="repair-detail" class="muted">Connect an existing supervisor state file to see repair status. This viewer cannot initiate repairs.</p></section>

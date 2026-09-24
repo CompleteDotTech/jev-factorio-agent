@@ -270,3 +270,11 @@ recent recorded actions instead of an empty candidate table.
 The evidence-coverage ticker pauses on hover or keyboard focus and respects
 reduced-motion preferences. In the studio composition it uses the existing notice
 strip without moving the native video cutout; actionable notices take precedence.
+
+## Launch and factory readiness
+
+The [launch and factory evidence panel](MISSION_CONTROL_LAUNCH.md) separates
+landing-pad preparation, carried payload, loaded cargo, submitted launch and
+native victory. It also shows bounded automation/planning facts and the recorded
+controller revision. Missing telemetry, source merge, deployment and native
+acceptance remain distinct; the viewer has no game-control or approval endpoints.
