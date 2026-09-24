@@ -226,3 +226,9 @@ The opt-in [ore-side successor lifecycle](ORE_SIDE_SUCCESSORS.md) adds separatel
 production, paid construction, native flow checks and bounded downstream-use
 qualification without replacing the established factory. Development VM
 validation and production cutover remain separate gates.
+
+## Native acceptance preparation
+
+[Native acceptance tooling](NATIVE_ACCEPTANCE.md) provides a fixed read-only development
+preflight, private checksummed operational captures and paired measurement
+checks. It never starts gameplay or authorizes production cutover.

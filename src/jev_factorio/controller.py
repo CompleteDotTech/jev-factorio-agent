@@ -267,6 +267,12 @@ class HierarchicalLoop(AgentLoop):
         if isinstance(metrics, dict):
             record["fair_action_metrics"] = dict(metrics)
         record.update(self._record_extras())
+        record["acceptance_configuration"] = {
+            "factory_scheduling": getattr(self, "factory_scheduling", "serial"),
+            **{name: record.get(name) is True for name in (
+                "background_work", "furnace_output_buffers", "furnace_input_belts",
+                "mining_outposts", "ore_side_successors")},
+        }
         if self.log_file:
             self.log_file.parent.mkdir(parents=True, exist_ok=True)
             with self.log_file.open("a", encoding="utf-8") as stream:
@@ -275,7 +281,11 @@ class HierarchicalLoop(AgentLoop):
         return record
 
     def _model_facts(self, snapshot: GameSnapshot) -> dict:
-        return snapshot.for_jev()
+        facts = snapshot.for_jev()
+        # Diagnostic-only additions must not grow/change model prompts.
+        facts.get("factory", {}).pop("acceptance_runtime", None)
+        facts.get("factory", {}).pop("consumed", None)
+        return facts
 
     def _record_extras(self) -> dict:
         if self.memory.capital_investment is not None:
