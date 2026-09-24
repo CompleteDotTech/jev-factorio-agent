@@ -9,7 +9,8 @@ import re
 import math
 
 from .acceptance_capture import verify
-from .acceptance_boundaries import final_successor_issues, probe_source_sha256, successor_history_issues
+from .acceptance_boundaries import (final_successor_issues, probe_source_sha256,
+                                    project_history_issues, successor_history_issues)
 from .acceptance_io import canonical, load_json, sha256, stable_read, write_new
 from .dev_preflight import checkpoint_read, inspect_native
 from .evidence_audit import measurements
@@ -94,6 +95,7 @@ def analyze(directory: Path) -> dict:
     initial_uses = {value.get('use', {}).get('job_id') for value in first.get('factory', {}).get('successors', {}).get('sources', {}).values()}
     goal_tick = None
     goal_evidence_regressed = False
+    goal_confirmed_at_tick = None
     first_goal = goal_observed(trial['goal'], first, {'completed_goals': initial.get('completed_goals', {})})
     reject(first_goal, 'goal_already_complete_at_baseline')
     for row in rows:
@@ -156,6 +158,8 @@ def analyze(directory: Path) -> dict:
                 produced_series.append(factory.get('produced'))
                 consumed_series.append(factory.get('consumed'))
             observed_goal = goal_observed(trial['goal'], state, row)
+            if observed_goal and goal_tick is not None and tick > goal_tick and goal_confirmed_at_tick is None:
+                goal_confirmed_at_tick = tick
             if goal_tick is not None and not observed_goal:
                 goal_evidence_regressed = True
             if goal_tick is not None and trial['goal'].startswith('milestone:'):
@@ -187,6 +191,7 @@ def analyze(directory: Path) -> dict:
     reject(any(final.get('failures', {}).get(k, -1) < value for k, value in failures.items()), 'final_failure_history_regressed')
     issues.extend(final_successor_issues(initial, final, rows[-1], observed_successor_sources))
     issues.extend(successor_history_issues(rows))
+    issues.extend(project_history_issues(initial, rows, final))
     reject(len(resolved_models) > 1, 'resolved_model_drift')
     reject(len(process_ids) != 1 or len(execution_ids) != 1, 'interrupted_or_mixed_invocation')
     reject(not runtimes or any(canonical(r) != canonical(runtimes[0]) for r in runtimes), 'native_actor_mod_or_surface_drift')
@@ -221,9 +226,12 @@ def analyze(directory: Path) -> dict:
         name = trial['goal'].split(':', 1)[1]
         final_tick = final.get('completed_goals', {}).get(name)
         final_goal_mismatch = type(final_tick) is not int or final_tick != goal_tick
+    confirmation_missing = (goal_tick is not None and not trial['goal'].startswith('milestone:')
+                            and goal_confirmed_at_tick is None)
+    reject(confirmation_missing, 'goal_confirmation_missing')
     reject(final_goal_mismatch, 'final_goal_checkpoint_mismatch')
     reject(goal_evidence_regressed, 'goal_evidence_regressed')
-    if goal_evidence_regressed or final_goal_mismatch:
+    if goal_evidence_regressed or final_goal_mismatch or confirmation_missing:
         goal_tick = None  # Inconsistent evidence cannot shorten a trial or earn timing credit.
     minimum = 432000 if trial['arm'] == 'soak' else 108000
     reject(native_ticks < minimum and (trial['arm'] == 'soak' or goal_tick is None), 'trial_horizon_incomplete')
@@ -244,6 +252,7 @@ def analyze(directory: Path) -> dict:
         'native_ticks': native_ticks, 'wall_seconds': wall, 'max_observation_gap_ticks': max_gap,
         'goal_first_observed_elapsed_ticks': goal_tick - start if goal_tick is not None else None,
         'goal_progress_delta': progress, 'runtime_identity': runtimes[0] if runtimes else None,
+        'goal_confirmation_tick': goal_confirmed_at_tick if goal_tick is not None else None,
         'production_delta': counter_delta(produced_series[0], produced_series[-1]),
         'consumption_delta': counter_delta(consumed_series[0], consumed_series[-1]),
         'fair_counter_delta_lower_bound': counter_delta(fair_series[0], fair_series[-1]),

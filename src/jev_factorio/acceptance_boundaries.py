@@ -65,6 +65,8 @@ def final_successor_issues(initial: dict, final: dict, record: dict,
             successors.project_valid(project, source, snapshot['tick'])
             old = initial_projects.get(source)
             if old:
+                if old['status'] == 'paused' and not _same(old, project):
+                    issues.add('paused_successor_reactivated')
                 fixed = ('anchor', 'predecessor_unit', 'started_tick', 'deadline_tick')
                 if (any(not _same(project[k], old[k]) for k in fixed)
                         or old['source_unit'] and not _same(project['source_unit'], old['source_unit'])
@@ -153,4 +155,33 @@ def successor_history_issues(records: list[dict]) -> list[str]:
                         if old.get(proof) and not _same(old[proof], row.get(proof)):
                             issues.add('successor_' + proof + '_history_regressed')
                 seen[role] = row  # Read-only references to immutable input records.
+    return sorted(issues)
+
+
+def project_history_issues(initial: dict, records: list[dict], final: dict) -> list[str]:
+    """Paused project generations cannot resume during an acceptance trial."""
+    previous = initial.get('successor_projects', {})
+    issues: set[str] = set()
+    for state in [*records, final]:
+        projects = state.get('successor_projects', {})
+        if not isinstance(projects, dict):
+            issues.add('successor_project_history_invalid')
+            continue
+        if not previous.keys() <= projects.keys():
+            issues.add('successor_project_history_missing')
+        for source, old in previous.items():
+            current = projects.get(source)
+            if not isinstance(current, dict) or not isinstance(old, dict):
+                issues.add('successor_project_history_invalid')
+                continue
+            if old.get('status') == 'paused' and not _same(old, current):
+                issues.add('paused_successor_reactivated')
+            if old.get('status') == 'qualified' and current.get('status') != 'qualified':
+                issues.add('qualified_successor_project_regressed')
+            if any(not _same(old.get(k), current.get(k)) for k in
+                   ('anchor', 'predecessor_unit', 'started_tick', 'deadline_tick')):
+                issues.add('successor_project_identity_changed')
+            if old.get('source_unit') and not _same(old['source_unit'], current.get('source_unit')):
+                issues.add('successor_project_identity_changed')
+        previous = projects
     return sorted(issues)

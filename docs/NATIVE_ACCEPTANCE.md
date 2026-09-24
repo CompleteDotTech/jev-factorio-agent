@@ -293,3 +293,11 @@ minimum horizon. These corrections do not change gameplay or authorize deploymen
 Once observed, paid successor identities and completed use/qualification proofs
 must also persist through the trial. Agreement of the final checkpoint and final
 observation cannot excuse an intervening disappearance or reassigned proof.
+
+A paused project is terminal for this acceptance protocol, including pauses first
+observed mid-trial; it cannot acquire a new source or become active/qualified.
+An active project may legitimately pause or qualify. Research/victory completion
+requires a second retaining observation at a strictly later native tick before
+it earns goal timing or shortens a trial. Repeating the same last-tick snapshot
+is not confirmation. A stopped trial lacking this evidence remains incomplete;
+the evaluator does not resume gameplay to obtain a passing result.
