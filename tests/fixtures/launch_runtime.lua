@@ -7,7 +7,8 @@ local function inventory(initial)
         return result
     end
     value.get_item_count=function(name) return stock[name] or 0 end
-    value.can_insert=function(q) return (stock[q.name] or 0)+q.count<=value.limit end
+    value.can_insert=function(q) return q.count>0 and (stock[q.name] or 0)<value.limit end
+    value.get_insertable_count=function(name) return math.max(0,value.limit-(stock[name] or 0)) end
     value.is_empty=function() return #value.get_contents()==0 end
     value.remove=function(q) local n=math.min(stock[q.name] or 0,q.count);stock[q.name]=(stock[q.name] or 0)-n;return n end
     value.insert=function(q) local n=math.min(q.count,math.max(0,value.limit-(stock[q.name] or 0)));stock[q.name]=(stock[q.name] or 0)+n;return n end
@@ -17,7 +18,7 @@ make_inventory=inventory
 main=inventory({["raw-fish"]=0,["cargo-landing-pad"]=1});cargo=inventory()
 pads={};builds=0;launches=0;mines=0;force={index=1,technologies={["rocket-silo"]={researched=true}},recipes={}}
 surface={index=1};character={valid=true,unit_number=10};events={};game={tick=100,speed=1}
-defines={inventory={rocket_silo_rocket=99},rocket_silo_status={rocket_ready=9},build_check_type={manual=1},events={on_player_mined_entity=42}}
+defines={inventory={rocket_silo_rocket=99,cargo_landing_pad_main=100},rocket_silo_status={rocket_ready=9},build_check_type={manual=1},events={on_player_mined_entity=42}}
 script={active_mods={base="2.0.77"},get_event_handler=function(event)return events[event] end,
     on_event=function(event,handler) events[event]=handler end}
 prototypes={entity={["cargo-landing-pad"]={tile_width=8}}}
@@ -47,7 +48,10 @@ storage.fair={actor=function()assert(game.speed==1 and player.character==charact
     place=function(name,position,direction)
         assert(not obstacle and player.get_item_count(name)>=1 and not pads[1])
         assert(main.remove{name=name,count=1}==1);builds=builds+1
-        local pad={name=name,valid=true,unit_number=50,position=position,force=force,surface=surface,can_insert=function(q)return not pad_full end};pads={pad}
+        local pad={name=name,valid=true,unit_number=50,position=position,force=force,surface=surface,can_insert=function(q)return not pad_full end,
+            get_inventory=function(index) assert(index==100);return {
+                get_insertable_count=function(item) assert(item=="space-science-pack")
+                    return pad_full and 0 or (pad_room or 1000) end} end};pads={pad}
         if placement_error then error("lost placement result") end
         return pad
     end}
@@ -65,4 +69,7 @@ function harvest_event()
     fish.valid=false;main.insert{name="raw-fish",count=5}
 end
 function observe()return storage.campaign.observe().launch_readiness end
-function add_pad()pads={{name="cargo-landing-pad",valid=true,unit_number=50,position={x=0,y=2},force=force,surface=surface,can_insert=function(q)return not pad_full end}} end
+function add_pad()pads={{name="cargo-landing-pad",valid=true,unit_number=50,position={x=0,y=2},force=force,surface=surface,can_insert=function(q)return not pad_full end,
+            get_inventory=function(index) assert(index==100);return {
+                get_insertable_count=function(item) assert(item=="space-science-pack")
+                    return pad_full and 0 or (pad_room or 1000) end} end}} end

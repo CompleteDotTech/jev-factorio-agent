@@ -168,3 +168,17 @@ alone is not production authorization.
 - [2.0.77 LuaEntity: rocket, launch and automatic settings](https://lua-api.factorio.com/2.0.77/classes/LuaEntity.html)
 - [2.0.77 inventory defines](https://lua-api.factorio.com/2.0.77/defines.html#defines.inventory)
 - [Rocket silo mechanics](https://wiki.factorio.com/Rocket_silo) (unversioned; pinned prototypes/API take precedence)
+
+
+### Partial-capacity API semantics
+
+In the pinned runtime, `can_insert` means **at least some** of a requested stack
+fits; it is not proof that all five harvested fish or 1,000 satellite products
+fit. Full-batch admission uses `get_insertable_count` on the character's main
+inventory and the pad's `cargo_landing_pad_main` inventory. Its documented basic-
+item/basic-inventory scope matches these normal, non-durable items; the native
+launch remains final authority. Tests include one free slot/unit and 999-space-
+science capacity, not just entirely full/empty destinations. The one-unit cargo
+transfer still checks its actual inserted count and preserves an ambiguous intent.
+
+- [Pinned inventory insertion semantics](https://lua-api.factorio.com/2.0.77/classes/LuaInventory.html)

@@ -436,3 +436,35 @@ def test_reattachment_with_interposed_wrappers_does_not_create_recursive_callbac
         assert(previous_calls==1 and observe().receipts.fish1.quantity==5)
         storage.campaign.transfer("stock:1","iron-plate",1,"t1",false)
         assert(transfer_seen.receipt=="t1")''')
+
+
+@pytest.mark.parametrize('room', [0, 1, 999])
+def test_partial_pad_capacity_does_not_authorize_loading_or_launch(room):
+    lua=lua_case('')
+    lua.execute(f'add_pad();pad_room={room};main.stock["satellite"]=1')
+    lua.execute('''local row=observe()
+        assert(row.pad.accepts.satellite==false)
+        assert(not pcall(storage.campaign.load_launch_payload,{
+            role="recipe:rocket-part",silo_unit=30,rocket_unit=31,item="satellite",receipt="short-pad"}))
+        assert(not storage.launch_readiness.attempts.load and main.stock.satellite==1 and cargo.is_empty())
+        cargo.stock.satellite=1
+        assert(not pcall(storage.campaign.launch,"recipe:rocket-part"))
+        assert(not storage.launch_readiness.attempts.launch and launches==0)
+    ''')
+
+
+@pytest.mark.parametrize('room', [0, 1, 4])
+def test_partial_main_inventory_capacity_does_not_start_fish_mining(room):
+    lua=lua_case('');lua.execute(f'main.limit={room}')
+    lua.execute('''local row=observe()
+        assert(not pcall(storage.campaign.begin_launch_fish,{target=row.fish.id,receipt="short-fish"}))
+        assert(not storage.launch_readiness.attempts.fish and mines==0 and fish.valid)
+    ''')
+
+
+def test_exact_five_item_fish_capacity_is_enough():
+    lua=lua_case('');lua.execute('''main.limit=5;local row=observe()
+        storage.campaign.begin_launch_fish{target=row.fish.id,receipt="five-fish"}
+        harvest_event()
+        assert(main.get_item_count("raw-fish")==5 and storage.launch_readiness.receipts["five-fish"])
+    ''')

@@ -49,7 +49,10 @@ local function destination_ready(pad,item)
     if item~="satellite" then return false end
     -- Base 2.0.77 satellites yield exactly 1000 space science. Check the
     -- actual pad's room; do not empty or enlarge an existing destination.
-    return pad.can_insert{name="space-science-pack",count=1000}
+    local inventory=pad.get_inventory(defines.inventory.cargo_landing_pad_main)
+    -- can_insert only proves that *some* of a stack fits. These normal,
+    -- non-durable items use the basic inventory's full insertable count.
+    return inventory and inventory.get_insertable_count("space-science-pack")>=1000 or false
 end
 local function silo_for(player)
     local silo=campaign.entities[silo_role]
@@ -170,7 +173,7 @@ campaign.begin_launch_fish=function(p)
     assert(offer and offer.id==p.target and fish.valid and fish.minable and player.can_reach_entity(fish), "Fish left normal reach")
     assert(player.crafting_queue_size==0 and player.get_item_count("raw-fish")==0
         and player.get_item_count("satellite")==0, "Payload already available or craft active")
-    assert(player.get_main_inventory().can_insert{name="raw-fish",count=5}, "No room for native fish yield")
+    assert(player.get_main_inventory().get_insertable_count("raw-fish")>=5, "No room for native fish yield")
     player.update_selected_entity(fish.position)
     assert(player.selected==fish, "Fish obscured")
     storage.fair.stop()
