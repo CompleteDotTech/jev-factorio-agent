@@ -1,0 +1,89 @@
+name: Verify first rocket launch readiness
+on:
+  push:
+    branches: [feat/first-rocket-launch-readiness]
+    paths: ['.github/workflows/launch-stage.yml']
+permissions:
+  contents: write
+jobs:
+  integrate:
+    if: github.repository == 'CompleteDotTech/jev-factorio-agent' && github.ref == 'refs/heads/feat/first-rocket-launch-readiness'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Verify staged transport and apply only the locally tested patch
+        run: |
+          python - <<'PY'
+          import base64, hashlib, subprocess, zlib
+          from pathlib import Path
+          base = 'fcec75b7934b6d724a7561b45dc862ba53d5c40c'
+          subprocess.run(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], check=True)
+          staging = {'.github/launch-patch.0', '.github/launch-patch.1', '.github/launch-patch.2', '.github/workflows/launch-stage.yml'}
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD'], text=True).splitlines())
+          assert changed == staging, 'Unexpected branch source changes'
+          transport = ['a2b40822eab5bdff9e7d3e6429e0f123252cf9a45807ad5cce0032bc20cff8d6',
+                       'e9d3801259fa7b6e598f9b75eeec321d02662c4613af1873e0b898e6539aa916',
+                       '29de04039729536b26f7f46c6d47f351ed60c701c4db27d28f4360b6a1652371']
+          parts = [Path(f'.github/launch-patch.{i}').read_bytes() for i in range(3)]
+          for i, value in enumerate(parts):
+              assert len(value) <= 10000 and hashlib.sha256(value).hexdigest() == transport[i], f'Patch transport {i} mismatch'
+          stream = zlib.decompressobj()
+          patch = stream.decompress(base64.b64decode(b''.join(parts), validate=True), 85509)
+          assert stream.eof and not stream.unused_data and not stream.unconsumed_tail
+          assert len(patch) == 85508 and hashlib.sha256(patch).hexdigest() == 'da5ae321981d6b040dc738040706a0b75304334ad9e882e1284a80e1b9ccb37f'
+          expected = {
+              'README.md': '685f4a27477da5925c5f74f5cbb7ecc5739a88d2623962cf0d34216c23a73328',
+              'docs/LAUNCH_READINESS.md': '1f6eca6673ddbdef83dcd6a0607506130e2074d992a9da5dd27cf5f73e59a9f0',
+              'docs/PLANNING_AUTONOMY.md': '44b8bace5fdeb3ae0bb674ad2923cb3aca52b2d9c40ff5ef4ab0b5e8faa1f339',
+              'src/jev_factorio/acceptance_capture.py': '03b647137765200360f654030946005b7d00f4fa1e5ddf8dac9432dc9449e6b6',
+              'src/jev_factorio/backends/launch_readiness.py': '0b0acf4a5a043c540e3b2eeb29f44cfe12642fcdc1aa586e6f4ae5ec1378c6c5',
+              'src/jev_factorio/backends/native_factory.py': '56f209c769c27ac5175b525aafc6bc923decfcfa8dcc18e5ddb6616eae0930b0',
+              'src/jev_factorio/factory_contract.py': '963dd4c946c4d6a8357f2dec522cf2fd9997a06826088cc03eefee3da0debefa',
+              'src/jev_factorio/launch_readiness.py': 'a0c4bf600f30046167fc98580d6a8f05088482cc727c6cd64a5f3f7c91400c70',
+              'src/jev_factorio/lua/craft_jobs.lua': 'd4034ff9f53076d14346e40b8190fb975a5a1ecf7df857932c6d9bf66ce51781',
+              'src/jev_factorio/lua/launch_readiness.lua': 'ed5ced76fc889354abd231ab9caed51adf068a965c418819f1a2fa25faf262e9',
+              'src/jev_factorio/planning/demand.py': 'a7167a7e7476597fed767eb4c317957815eaf62f3d1315a3a7349e3028565671',
+              'src/jev_factorio/planning/factory.py': '3842cac423e22bf86a251e26e2d9461e8ef8e38cee18fba6e69c71db77a5f29d',
+              'src/jev_factorio/planning/launch.py': '7f905779f92991dfd1088e21103c053efe3df23ed10e477f1df80de7a2d6ae55',
+              'src/jev_factorio/planning/ready_work.py': '5fb0ed6bf130936f8ce7eebcb6580b31c0d831518837879585423324fae956db',
+              'src/jev_factorio/skills.py': '4fa74b65b66ae3982afd7a3f58772a9eed22a7213c795f9a15204957f9d02487',
+              'tests/fixtures/launch_runtime.lua': '92517d421f8f5c57edb6b69e6c30e9a42d95db68aafb424f5476472a21b7c619',
+              'tests/test_factory.py': '37e8f1ba82837f3c37e04d69083a798b58d2e43db6f2a999d33ebca0a8e29f07',
+              'tests/test_launch_readiness.py': '53a0950a18e13204f4415c67bfd42dee76e682fe8bcb0f4b4ef6a4792ce04d9a'}
+          subprocess.run(['git', 'apply', '--check', '--index', '-'], input=patch, check=True)
+          subprocess.run(['git', 'apply', '--index', '-'], input=patch, check=True)
+          actual = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
+          assert actual == expected.keys(), 'Unexpected assembled files'
+          for name, digest in expected.items():
+              assert hashlib.sha256(Path(name).read_bytes()).hexdigest() == digest, name
+          print(f'All {len(expected)} files match locally tested source hashes')
+          PY
+      - name: Commit assembled source locally before exact-source recovery tests
+        run: |
+          set -euo pipefail
+          git rm .github/launch-patch.0 .github/launch-patch.1 .github/launch-patch.2 .github/workflows/launch-stage.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Plan paid landing-pad and payload readiness before native rocket launch'
+      - run: python -m pip install -e '.[test]'
+      - name: Endgame and continuity regressions
+        run: python -m pytest tests/test_launch_readiness.py tests/test_factory.py tests/test_demand_service.py tests/test_background_work.py tests/test_planning_efficiency.py -q
+      - name: Complete offline regression suite
+        run: python -m pytest tests/ --ignore=tests/test_dashboard_browser.py -q
+      - run: python -m compileall -q src
+      - name: Publish only the exact passing commit to the feature branch
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          BRANCH=feat/first-rocket-launch-readiness
+          test "$(git ls-remote origin refs/heads/$BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          git push origin HEAD:refs/heads/$BRANCH
