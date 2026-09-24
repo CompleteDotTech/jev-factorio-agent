@@ -1,0 +1,226 @@
+name: Stage bounded planning review
+on:
+  push:
+    branches: [fix/bounded-planning-audit-20260924]
+    paths: [.github/workflows/stage-planning-review.yml]
+permissions:
+  contents: write
+jobs:
+  stage:
+    if: github.repository == 'CompleteDotTech/jev-factorio-agent' && github.ref == 'refs/heads/fix/bounded-planning-audit-20260924'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Apply exact bounded source edits and verify against local tested hashes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, subprocess
+          root = Path('.')
+          base = '79f262ead7a1855951075a84e55f86665c15e3eb'
+          subprocess.run(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], check=True)
+          allowed = {'src/jev_factorio/evidence_audit.py', 'tests/test_evidence_audit.py',
+                     'tests/test_planning_efficiency.py', 'docs/EVIDENCE_AUDIT.md',
+                     'docs/PLANNING_AUTONOMY.md', '.github/workflows/stage-planning-review.yml'}
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD'], text=True).splitlines())
+          assert changed == allowed, 'Unexpected review branch inputs'
+          def edit(path, old, new):
+              p = root / path
+              text = p.read_text()
+              assert text.count(old) == 1, path
+              p.write_text(text.replace(old, new, 1))
+          edit('src/jev_factorio/planning/ready_work.py', '''            "ultimate_goal": self.goal,
+                  }})''','''            "ultimate_goal": self.goal,
+                  }, "work_intent": {
+                      "scope": "lookahead" if self.speculative else "immediate",
+                      "observed_tick": self.snapshot.tick,
+                  }})''')
+          edit('src/jev_factorio/planning/ready_work.py','''    def candidates(self) -> list[Plan]:
+          ''','''    def _candidate_worker(self):
+                  """Fork lookahead within this observation; never cache across decisions.
+
+                  The ledger and native facts are read-only. Copy the bounded economic
+                  workload so speculative probes cannot mutate their parent's demand.
+                  Execution still checks the original live snapshot and its reservations.
+                  """
+                  worker = type(self)(self.catalog, self.snapshot, self.goal,
+                                      self.collection_batch, self.max_candidates)
+                  worker.focus, worker.raw_targets = self.focus, dict(self.raw_targets)
+                  worker.materials = self.materials or {}
+                  worker.ledger, worker.demands = self.ledger, dict(self.demands)
+                  worker.speculative = True
+                  worker.allow_service_visits = self.allow_service_visits
+                  worker._economic_products = dict(self._remaining_products())
+                  return worker
+
+              def candidates(self) -> list[Plan]:
+          ''')
+          edit('src/jev_factorio/planning/ready_work.py','''            worker = type(self)(self.catalog, self.snapshot, self.goal,
+                                                self.collection_batch, self.max_candidates)
+                      worker.focus, worker.raw_targets = self.focus, dict(self.raw_targets)
+                      worker.materials = self.materials or {}
+                      worker.ledger, worker.demands = self.ledger, dict(self.demands)
+                      worker.speculative = True
+                      worker.allow_service_visits = self.allow_service_visits
+          ''','''            worker = self._candidate_worker()
+          ''')
+          edit('src/jev_factorio/planning/output_buffers.py','''            worker = type(self)(self.catalog, self.snapshot, self.goal,
+                                                   self.collection_batch, self.max_candidates)
+                      worker.focus, worker.raw_targets = self.focus, dict(self.raw_targets)
+                      worker.materials = self.materials or {}
+                      worker.ledger, worker.demands = self.ledger, dict(self.demands)
+                      worker.speculative = True
+                      worker.allow_service_visits = self.allow_service_visits
+          ''','''            worker = self._candidate_worker()
+          ''')
+          edit('src/jev_factorio/planning/economics.py','''    def _workload(self, item, immediate=0):
+                  if not hasattr(self, '_economic_products'):
+                      self._economic_products = remaining_products(self.snapshot, self.catalog)
+                  return min(MAX_PRODUCT_HORIZON, max(immediate, self._economic_products.get(item, 0),
+                                                     getattr(self, 'demands', {}).get(item, 0)))
+          ''','''    def _remaining_products(self):
+                  """One bounded workload calculation per snapshot-local planner frontier."""
+                  if not hasattr(self, '_economic_products'):
+                      self._economic_products = remaining_products(self.snapshot, self.catalog)
+                  return self._economic_products
+
+              def _workload(self, item, immediate=0):
+                  return min(MAX_PRODUCT_HORIZON, max(immediate, self._remaining_products().get(item, 0),
+                                                     getattr(self, 'demands', {}).get(item, 0)))
+          ''')
+          edit('src/jev_factorio/planning/productive_work.py', 'from .economics import remaining_products, solid_recipe', 'from .economics import solid_recipe')
+          edit('src/jev_factorio/planning/productive_work.py','''    demand = remaining_products(planner.snapshot, planner.catalog)
+          ''','''    demand = dict(planner._remaining_products())
+          ''')
+          edit('src/jev_factorio/planning/decision_support.py','''        passive = all(s.action in {'factory_wait', 'idle'} for s in plan.steps)
+                  result[plan.id] = {
+          ''','''        intent = (plan.materials or {}).get('work_intent', {})
+                  scope = (intent.get('scope') if isinstance(intent, dict)
+                           and intent.get('observed_tick') == snapshot.tick else None)
+                  scope = scope if scope in {'immediate', 'lookahead'} else 'unclassified'
+                  passive = all(s.action in {'factory_wait', 'idle'} for s in plan.steps)
+                  result[plan.id] = {
+                      'work_scope': scope,
+                      'processed_units_basis': 'handling_volume_not_useful_production',
+          ''')
+          edit('src/jev_factorio/planning/decision_support.py','''    Unknown cost is never zero-cost work. Among equally urgent, fully estimated
+              options prefer useful units per occupied actor tick; ties use compiler order.
+          ''','''    Unknown cost is never zero-cost work. Among equally urgent options, a
+              current prerequisite precedes discretionary lookahead. Handling volume is
+              only a tie-breaker within a demand class, not proof of useful production.
+          ''')
+          edit('src/jev_factorio/planning/decision_support.py','''    return (row['passive'], -row['urgency'], duration is None,
+          ''','''    return (row['passive'], -row['urgency'], row.get('work_scope') == 'lookahead', duration is None,
+          ''')
+          edit('src/jev_factorio/planning/decision_support.py', '''                           'A single useful action need not complete the ultimate goal.',
+          ''','''                           'A single useful action need not complete the ultimate goal. '
+                                     'Immediate prerequisites precede discretionary lookahead at equal urgency; '
+                                     'moving more items is not evidence of more useful production.',
+          ''')
+          edit('src/jev_factorio/lua/input_routes.lua','''    table.sort(resources,function(a,b)
+          ''','''    -- No local source means no candidate can exist. Do not enumerate receiver
+              -- arms or run placement/path probes for this rejected survey. The observer
+              -- retains its existing rejection, resurvey interval and native build guards.
+              if #resources==0 then return nil end
+              table.sort(resources,function(a,b)
+          ''')
+          edit('src/jev_factorio/background.py','''        return {"background_work": True, "background_schema": self.memory.background_schema,
+          ''','''        return {**super()._record_extras(),
+                          "background_work": True, "background_schema": self.memory.background_schema,
+          ''')
+          edit('src/jev_factorio/controller.py','''            "attempt_outcomes": deepcopy(self.memory.attempt_outcomes[-8:]),
+          ''','''            "attempt_outcomes": deepcopy(self.memory.attempt_outcomes[-8:]),
+                      "planning_diagnostics": deepcopy(getattr(self, "_planning_diagnostics", {})),
+                      "failure_budgets": dict(self.memory.failures),
+                      "mining_outposts": bool(getattr(self, "_mining_outposts_enabled", False)),
+          ''')
+          edit('src/jev_factorio/controller.py','''        self._selection_support = {}
+                  self._trace.observation_phase = "before_decision"
+          ''','''        self._selection_support = {}
+                  self._planning_diagnostics = {}
+                  self._trace.observation_phase = "before_decision"
+          ''')
+          edit('src/jev_factorio/controller.py','''            plans = [p for p in plans if self.memory.failures.get(p.id, 0) < 2]
+                      if self._trace.enabled:
+                          self._trace.emit("candidate_set_filtered", {"eligible_plan_ids": [p.id for p in plans],
+                                                                     "filter": "existing_plan_failure_budget"})
+          ''','''            generated = list(plans)
+                      rejected = [{"plan_id": p.id, "reason": "plan_failure_budget",
+                                   "failures": self.memory.failures[p.id]}
+                                  for p in generated if self.memory.failures.get(p.id, 0) >= 2]
+                      plans = [p for p in generated if self.memory.failures.get(p.id, 0) < 2]
+                      # This boundary is after capability/capital compilation, not a claim
+                      # that every Lua survey or earlier eligibility rejection was retained.
+                      self._planning_diagnostics = {
+                          "schema": 1, "observed_tick": snapshot.tick,
+                          "boundary": "post_capability_frontier",
+                          "generated_plan_ids": [p.id for p in generated],
+                          "eligible_plan_ids": [p.id for p in plans],
+                          "failure_budget_rejections": rejected,
+                          "duplicate_plan_ids": [], "ranked_plan_ids": [],
+                      }
+                      if self._trace.enabled:
+                          self._trace.emit("candidate_set_filtered", {
+                              **deepcopy(self._planning_diagnostics), "filter": "existing_plan_failure_budget"})
+          ''')
+          edit('src/jev_factorio/controller.py','''                plans = distinct_candidates(plans)
+                          self._selection_support = scheduling_context(
+          ''','''                retained = distinct_candidates(plans)
+                          self._planning_diagnostics["duplicate_plan_ids"] = [
+                              p.id for p in plans if all(p is not kept for kept in retained)]
+                          plans = retained
+                          self._selection_support = scheduling_context(
+          ''')
+          edit('src/jev_factorio/controller.py','''                plans = [by_id[key] for key in self._selection_support["deterministic_ranking"]]
+                      singleton =''','''                plans = [by_id[key] for key in self._selection_support["deterministic_ranking"]]
+                          self._planning_diagnostics["ranked_plan_ids"] = [p.id for p in plans]
+                          self._planning_diagnostics["candidate_evidence"] = deepcopy(
+                              self._selection_support["candidate_evidence"])
+                      singleton =''')
+          p = Path('tests/test_input_routes_lua.py')
+          p.write_text(p.read_text() + "\n\ndef test_empty_ore_survey_skips_layout_probes_and_can_recover_after_resurvey(tmp_path):\n    execute('''\n        resources={}\n        local probes=0\n        local original=source.surface.can_place_entity\n        source.surface.can_place_entity=function(q) probes=probes+1; return original(q) end\n        local result=storage.campaign.observe().input_routes\n        assert(next(result.sources)==nil and placements==0 and probes==0)\n        assert(result.diagnostics[\"recipe:iron-plate\"].reason==\"ore_outside_local_survey\")\n        resources[1]={name=\"iron-ore\",position={x=0.5,y=0.5},amount=1000,valid=true,minable=true}\n        game.tick=game.tick+300\n        local row=storage.campaign.observe().input_routes.sources[\"recipe:iron-plate\"]\n        assert(row and #row.steps<=66 and probes>0 and placements==0)\n    ''', tmp_path)\n")
+          p = Path('README.md')
+          p.write_text(p.read_text() + '\n## Planning efficiency and staged autonomy\n\nThe [bounded planning and autonomy plan](docs/PLANNING_AUTONOMY.md) documents\nsnapshot-local planning improvements, safe additive expansion requirements, and\ndevelopment VM acceptance gates. The [offline evidence audit](docs/EVIDENCE_AUDIT.md)\nverifies capture hashes and reports measurement coverage without contacting a\nbackend or treating missing gameplay metrics as zero. Source integration is not\nproduction cutover or proof of native throughput improvement.\n')
+          hashes = {
+              'README.md': '9b759f273dcacabc498025d73ef8ce06035d31579064902884deb4466a25b311',
+              'docs/EVIDENCE_AUDIT.md': 'fa2a7cf17aa280e37c21388c70461b67a8f82190b4db00176481db5245402c21',
+              'docs/PLANNING_AUTONOMY.md': '8c64e30e178ef8c3daffae5954ade18769fb47fb82cf1d0f37fb692427a10b76',
+              'src/jev_factorio/background.py': '5257910e73255be2c5f8534326ccfa9c3cb7c78808c230fe056b37e1af5faba0',
+              'src/jev_factorio/controller.py': 'f282e900d45612423a5c88137cf04414d771a294cd3d7c4d427280ee5289c586',
+              'src/jev_factorio/evidence_audit.py': '16432dbfb5c0f784f0659c11e39528a7a34c20f983ba5fcefe8f883cfe2e80a2',
+              'src/jev_factorio/lua/input_routes.lua': '74253ba6098a02412a5bf2fdaa0e247da1af2a0ef4e4245ddc580826df9d7130',
+              'src/jev_factorio/planning/decision_support.py': '2817feefea09b631feac57dc72d623019802e750a24bb02a6f410a0ae4dbaccc',
+              'src/jev_factorio/planning/economics.py': 'ebb4413640ba7a95f725f091c884ea2747f78546e783b5c17386e7229250afc0',
+              'src/jev_factorio/planning/output_buffers.py': 'c36ebaa4c7c91c2d6dc22f82d4e342fdff63869be21931fe961d48f45e80d3c1',
+              'src/jev_factorio/planning/productive_work.py': '949bea1569445327697bdeeda51cbd63a8a52a4b1c3ef4117739efc8b580e5a8',
+              'src/jev_factorio/planning/ready_work.py': 'c3ddd454e9f3f44f057d1e61c2b9248ac50543fa447cdf43c6071b72dc655a62',
+              'tests/test_evidence_audit.py': '3b8275ebdaf862876f872488138576ff195bbe416ebf0de90dbc3ccb62b4995f',
+              'tests/test_input_routes_lua.py': '5c12b1823a46d653d594a7de7f56b55ee7b72cf37853448326d2d400037d4b82',
+              'tests/test_planning_efficiency.py': 'f51d20c33740c2833b8c9733c3c722e688bda7942b2cbf58291fd463b23e0f6c'}
+          for name, expected in hashes.items():
+              assert hashlib.sha256(Path(name).read_bytes()).hexdigest() == expected, name
+          print('All 15 changed files exactly match locally tested source hashes')
+          PY
+      - run: python -m pip install -e '.[test]'
+      - run: python -m pytest tests/ --ignore=tests/test_dashboard_browser.py -q
+      - run: python -m compileall -q src
+      - name: Commit only verified source changes to this feature branch
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          BRANCH=fix/bounded-planning-audit-20260924
+          test "$(git ls-remote origin refs/heads/$BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          git rm .github/workflows/stage-planning-review.yml
+          git add README.md docs/EVIDENCE_AUDIT.md docs/PLANNING_AUTONOMY.md src/jev_factorio/background.py src/jev_factorio/controller.py src/jev_factorio/evidence_audit.py src/jev_factorio/lua/input_routes.lua src/jev_factorio/planning/decision_support.py src/jev_factorio/planning/economics.py src/jev_factorio/planning/output_buffers.py src/jev_factorio/planning/productive_work.py src/jev_factorio/planning/ready_work.py tests/test_evidence_audit.py tests/test_input_routes_lua.py tests/test_planning_efficiency.py
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Prioritize immediate production, reuse frontier workload, preserve audit evidence'
+          git push origin HEAD:refs/heads/$BRANCH
