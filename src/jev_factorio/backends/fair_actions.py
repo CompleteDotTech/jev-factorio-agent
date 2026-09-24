@@ -226,6 +226,25 @@ class FairActions:
             (left, right, target_y - 8, target_y + 8),
         ]
 
+    @staticmethod
+    def _pipe_fallback_rectangles(start: dict, end: dict, *, searched: int) -> list[tuple[int, int, int, int]]:
+        """Discover a complete detour area without exceeding the query budget.
+
+        Two narrow L corridors can each be cut even when an ordinary pipe
+        route exists between their legs. Keep native queries at 16,384 cells
+        and all discovery, including those corridors, at 65,536 cells.
+        """
+        left = math.floor(min(start["x"], end["x"])) - 8
+        right = math.floor(max(start["x"], end["x"])) + 8
+        top = math.floor(min(start["y"], end["y"])) - 8
+        bottom = math.floor(max(start["y"], end["y"])) + 8
+        width = right - left + 1
+        if width > 16_384 or searched + width * (bottom - top + 1) > 65_536:
+            return []
+        rows = 16_384 // width
+        return [(left, right, y, min(bottom, y + rows - 1))
+                for y in range(top, bottom + 1, rows)]
+
     def _connection_cells(self, name: str, fluid: str,
                           rectangles: list[tuple[int, int, int, int]]) -> tuple[set, set]:
         searched = sum((right - left + 1) * (bottom - top + 1)
@@ -300,11 +319,15 @@ class FairActions:
         end = self.position(getattr(target, "position", target))
         route = None
         route_error = None
+        searched = 0
         for horizontal_first in (True, False):
+            rectangles = self._connection_corridor(
+                start, end, horizontal_first=horizontal_first,
+            )
+            searched += sum((right - left + 1) * (bottom - top + 1)
+                            for left, right, top, bottom in rectangles)
             buildable, existing = self._connection_cells(
-                name, fluid, self._connection_corridor(
-                    start, end, horizontal_first=horizontal_first,
-                ),
+                name, fluid, rectangles,
             )
             origin, destination = (start["x"], start["y"]), (end["x"], end["y"])
             if name == "small-electric-pole":
@@ -327,6 +350,18 @@ class FairActions:
                 else:
                     route = shortest_pipe_path(origin, destination, buildable, existing)
                 break
+            except ValueError as error:
+                route_error = error
+        if route is None and name == "pipe":
+            buildable, existing = set(), set()
+            for rectangle in self._pipe_fallback_rectangles(start, end, searched=searched):
+                chunk_buildable, chunk_existing = self._connection_cells(name, fluid, [rectangle])
+                buildable.update(chunk_buildable)
+                existing.update(chunk_existing)
+            try:
+                route = shortest_pipe_path(
+                    (start["x"], start["y"]), (end["x"], end["y"]), buildable, existing,
+                )
             except ValueError as error:
                 route_error = error
         if route is None:

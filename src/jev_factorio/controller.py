@@ -828,10 +828,14 @@ class HierarchicalLoop(AgentLoop):
                     result=lambda value: {"plans": [plan.to_dict() for plan in value[0]],
                                           "blocker": value[1]})
             generated = list(plans)
+            from .planning.connection_identity import connection_failures
+            budget_counts = {p.id: connection_failures(
+                p.id, self.memory.failures, self.memory.connection_failure_attribution)
+                for p in generated}
             rejected = [{"plan_id": p.id, "reason": "plan_failure_budget",
-                         "failures": self.memory.failures[p.id]}
-                        for p in generated if self.memory.failures.get(p.id, 0) >= 2]
-            plans = [p for p in generated if self.memory.failures.get(p.id, 0) < 2]
+                         "failures": budget_counts[p.id]}
+                        for p in generated if budget_counts[p.id] >= 2]
+            plans = [p for p in generated if budget_counts[p.id] < 2]
             # This boundary is after capability/capital compilation, not a claim
             # that every Lua survey or earlier eligibility rejection was retained.
             self._planning_diagnostics = {

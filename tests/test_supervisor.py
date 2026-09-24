@@ -259,6 +259,23 @@ def test_operational_result_requires_unchanged_source(supervisor, tmp_path, monk
     assert not supervisor.validate_repair(result, supervisor.checkpoint(), ("other", "diff"))
 
 
+def test_repair_cannot_introduce_legacy_failure_attribution(supervisor, tmp_path, monkeypatch):
+    from jev_factorio.planning.connection_identity import PREFIX, connection_key
+    result = operational_result(supervisor, tmp_path)
+    monkeypatch.setattr(supervisor, 'source_identity', lambda: ('head', 'diff'))
+    previous = supervisor.checkpoint()
+    current = dict(previous, connection_failure_attribution={})
+    atomic_json(supervisor.config.checkpoint, current)
+    assert supervisor.validate_repair(result, previous, ('head', 'diff'))
+    key = PREFIX + connection_key(dict(source='pump', target='refinery', kind='pipe', fluid='crude-oil'))
+    previous['failures'] = {PREFIX: 2}
+    current['failures'] = {PREFIX: 2, key: 2}
+    current['connection_failure_attribution'] = {
+        PREFIX: dict(count=2, allocations={key: 2}, evidence='plausible but unapproved attribution')}
+    atomic_json(supervisor.config.checkpoint, current)
+    assert not supervisor.validate_repair(result, previous, ('head', 'diff'))
+
+
 def test_pending_cannot_be_cleared_by_repair_ack(supervisor, tmp_path, monkeypatch):
     result = operational_result(supervisor, tmp_path)
     monkeypatch.setattr(supervisor, "source_identity", lambda: ("head", "diff"))

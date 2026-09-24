@@ -668,6 +668,8 @@ Only report repaired when every acceptance requirement is verified.
                     "pending", "active_plan", "step_index", "reservations", "attempt"
                 )):
                     return False
+            if current.get('connection_failure_attribution', {}) != previous.get('connection_failure_attribution', {}):
+                return False
             extension_keys = ("background_schema", "background_job", "background_attempt",
                               "input_routes_schema", "input_commitments", "outposts_schema", "outpost_commitments",
                               "successor_schema", "successor_projects", "successor_receipts")
