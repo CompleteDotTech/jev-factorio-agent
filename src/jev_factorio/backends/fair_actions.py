@@ -237,11 +237,39 @@ class FairActions:
             "include(horizontal, vertical) end end; "
             for left, right, top, bottom in rectangles
         )
+        fluid_scan = ""
+        if name == "pipe":
+            areas = "".join(
+                f"scan({{{{{left-1},{top-1}}},{{{right+2},{bottom+2}}}}}); "
+                for left, right, top, bottom in rectangles
+            )
+            fluid_scan = (
+                "local inspected={}; local function scan(area) "
+                "for _,entity in pairs(player.surface.find_entities_filtered{area=area}) do "
+                "if not inspected[entity] then inspected[entity]=true; "
+                "for index=1,#entity.fluidbox do "
+                "local filter=entity.fluidbox.get_filter(index); "
+                "local filter_name=type(filter)=='string' and filter or (filter and filter.name); "
+                "local contents=entity.fluidbox[index]; "
+                "if (filter_name and filter_name~='' and filter_name~=" + json.dumps(fluid)
+                + ") or (contents and contents.name~=" + json.dumps(fluid) + ") then "
+                "for _,port in pairs(entity.fluidbox.get_pipe_connections(index)) do "
+                "if port.connection_type=='normal' and port.target_position then "
+                "local p=port.target_position; blocked[p.x..':'..p.y]=true; "
+                "if entity.name~='pipe' then "
+                "for _,offset in ipairs({{1,0},{-1,0},{0,1},{0,-1}}) do "
+                "blocked[(p.x+offset[1])..':'..(p.y+offset[2])]=true end end end end; "
+                "if entity.name=='pipe' then blocked[entity.position.x..':'..entity.position.y]=true end "
+                "end end end end end; " + areas
+            )
         cells = json.loads(self.command(
             "local player = storage.fair.actor(); local result = {buildable={}, existing={}}; "
+            "local blocked={}; " + fluid_scan
+            + "local function blocked_cell(position) return blocked[position.x..':'..position.y] end; "
             "local seen = {}; local function include(horizontal, vertical) "
             "local key = horizontal .. ':' .. vertical; if seen[key] then return end; seen[key] = true; "
             "local position = {x=horizontal+0.5,y=vertical+0.5}; "
+            "if blocked_cell(position) then return end; "
             "local entity = player.surface.find_entity(" + json.dumps(name) + ", position); "
             "if entity and entity.force == player.force then "
             "local contents = #entity.fluidbox > 0 and entity.fluidbox[1]; "
