@@ -1,0 +1,678 @@
+{
+  "all_captured": {
+    "records": 880,
+    "first_utc": "2026-09-24T10:33:51.760014+00:00",
+    "last_utc": "2026-09-25T21:49:24.297475+00:00",
+    "elapsed_seconds": 126932.537461,
+    "actions": {
+      "factory_insert": 228,
+      "factory_extract": 181,
+      "factory_gather": 125,
+      "factory_craft_job": 120,
+      "verify": 8,
+      "factory_wait": 2,
+      "observe": 186,
+      "factory_research": 1,
+      "factory_place": 6,
+      "factory_configure": 6,
+      "factory_connect": 13,
+      "factory_buffer_build": 2,
+      "reconcile": 1,
+      "factory_launch_fish": 1
+    },
+    "status": {
+      "running": 874,
+      "uncertain": 4,
+      "blocked": 2
+    },
+    "model_calls": {
+      "False": 475,
+      "True": 405
+    },
+    "phase_timings": {
+      "observe": {
+        "count": 880,
+        "sum_seconds": 14009.42853363599,
+        "median_seconds": 5.0744450695056,
+        "p95_seconds": 50.28041162001318
+      },
+      "verification": {
+        "count": 867,
+        "sum_seconds": 44.23516145691974,
+        "median_seconds": 0.029679687999305315,
+        "p95_seconds": 0.15079592599067837
+      },
+      "approach": {
+        "count": 410,
+        "sum_seconds": 1612.1728732155461,
+        "median_seconds": 0.2355585954937851,
+        "p95_seconds": 14.245287788988207
+      },
+      "transfer_rpc": {
+        "count": 531,
+        "sum_seconds": 28.500801383997896,
+        "median_seconds": 0.05105825199279934,
+        "p95_seconds": 0.09428232000209391
+      },
+      "dispatch": {
+        "count": 677,
+        "sum_seconds": 10184.434851884143,
+        "median_seconds": 2.089209166006185,
+        "p95_seconds": 104.20737441399251
+      },
+      "post_dispatch_observe": {
+        "count": 677,
+        "sum_seconds": 13660.781952577774,
+        "median_seconds": 7.2819847670034505,
+        "p95_seconds": 59.92028840299463
+      },
+      "planning": {
+        "count": 690,
+        "sum_seconds": 4970.959023679752,
+        "median_seconds": 5.2920180179862655,
+        "p95_seconds": 19.313156035001157
+      },
+      "selection": {
+        "count": 688,
+        "sum_seconds": 825.5673304450902,
+        "median_seconds": 0.9638852940115612,
+        "p95_seconds": 3.5165490999934264
+      },
+      "pre_dispatch_observe": {
+        "count": 688,
+        "sum_seconds": 13240.228657804124,
+        "median_seconds": 7.03440884349402,
+        "p95_seconds": 52.76470266099204
+      },
+      "entity_lookup": {
+        "count": 2,
+        "sum_seconds": 0.08768766600405797,
+        "median_seconds": 0.04384383300202899,
+        "p95_seconds": 0.023782128002494574
+      }
+    },
+    "inclusive_call_timings": {
+      "observation": {
+        "count": 880,
+        "sum_seconds": 38580.329297293,
+        "median_seconds": 12.152576257,
+        "p95_seconds": 151.12766305
+      },
+      "checkpoint_written": {
+        "count": 880,
+        "sum_seconds": 1510.073174915,
+        "median_seconds": 1.632616691,
+        "p95_seconds": 3.450697333
+      },
+      "candidate_set_created": {
+        "count": 690,
+        "sum_seconds": 4891.422767466,
+        "median_seconds": 5.186829686499999,
+        "p95_seconds": 19.077860292
+      },
+      "model_response": {
+        "count": 405,
+        "sum_seconds": 681.793859904,
+        "median_seconds": 1.108259475,
+        "p95_seconds": 4.766542992
+      }
+    },
+    "observation_phase_seconds": 40910.43914401789,
+    "production_delta": {
+      "advanced-circuit": 30,
+      "assembling-machine-1": 3,
+      "assembling-machine-2": 2,
+      "automation-science-pack": 135,
+      "boiler": 0,
+      "burner-inserter": 1,
+      "chemical-plant": 2,
+      "chemical-science-pack": 20,
+      "coal": 1664,
+      "copper-cable": 602,
+      "copper-ore": 416,
+      "copper-plate": 421,
+      "electronic-circuit": 150,
+      "engine-unit": 20,
+      "inserter": 35,
+      "iron-gear-wheel": 269,
+      "iron-ore": 1514,
+      "iron-plate": 1514,
+      "lab": 0,
+      "logistic-science-pack": 35,
+      "offshore-pump": 0,
+      "oil-refinery": 1,
+      "pipe": 585,
+      "pipe-to-ground": 4,
+      "plastic-bar": 140,
+      "pumpjack": 0,
+      "science": 54,
+      "small-electric-pole": 32,
+      "steam-engine": 0,
+      "steel-plate": 48,
+      "stone": 20,
+      "stone-brick": 10,
+      "stone-furnace": 0,
+      "sulfur": 92,
+      "transport-belt": 56,
+      "wooden-chest": 1
+    },
+    "transfer_batches": {
+      "factory_extract:copper-plate": {
+        "count": 33,
+        "quantity_sum": 431,
+        "median_quantity": 16,
+        "one_item_transfers": 0
+      },
+      "factory_insert:coal": {
+        "count": 45,
+        "quantity_sum": 1631,
+        "median_quantity": 50,
+        "one_item_transfers": 0
+      },
+      "factory_extract:logistic-science-pack": {
+        "count": 4,
+        "quantity_sum": 55,
+        "median_quantity": 15.5,
+        "one_item_transfers": 0
+      },
+      "factory_insert:logistic-science-pack": {
+        "count": 3,
+        "quantity_sum": 55,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_insert:transport-belt": {
+        "count": 4,
+        "quantity_sum": 55,
+        "median_quantity": 17.0,
+        "one_item_transfers": 1
+      },
+      "factory_insert:automation-science-pack": {
+        "count": 4,
+        "quantity_sum": 54,
+        "median_quantity": 16.5,
+        "one_item_transfers": 1
+      },
+      "factory_insert:copper-plate": {
+        "count": 16,
+        "quantity_sum": 130,
+        "median_quantity": 1.0,
+        "one_item_transfers": 10
+      },
+      "factory_insert:copper-ore": {
+        "count": 27,
+        "quantity_sum": 421,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_insert:inserter": {
+        "count": 2,
+        "quantity_sum": 35,
+        "median_quantity": 17.5,
+        "one_item_transfers": 0
+      },
+      "factory_extract:automation-science-pack": {
+        "count": 4,
+        "quantity_sum": 39,
+        "median_quantity": 9.5,
+        "one_item_transfers": 1
+      },
+      "factory_insert:iron-ore": {
+        "count": 89,
+        "quantity_sum": 1504,
+        "median_quantity": 20,
+        "one_item_transfers": 4
+      },
+      "factory_extract:iron-plate": {
+        "count": 119,
+        "quantity_sum": 1504,
+        "median_quantity": 13,
+        "one_item_transfers": 9
+      },
+      "factory_insert:iron-plate": {
+        "count": 6,
+        "quantity_sum": 240,
+        "median_quantity": 25.0,
+        "one_item_transfers": 0
+      },
+      "factory_extract:steel-plate": {
+        "count": 8,
+        "quantity_sum": 48,
+        "median_quantity": 5.0,
+        "one_item_transfers": 1
+      },
+      "factory_insert:copper-cable": {
+        "count": 3,
+        "quantity_sum": 120,
+        "median_quantity": 38,
+        "one_item_transfers": 0
+      },
+      "factory_insert:iron-gear-wheel": {
+        "count": 10,
+        "quantity_sum": 160,
+        "median_quantity": 20.0,
+        "one_item_transfers": 0
+      },
+      "factory_insert:electronic-circuit": {
+        "count": 4,
+        "quantity_sum": 80,
+        "median_quantity": 20.0,
+        "one_item_transfers": 0
+      },
+      "factory_insert:stone": {
+        "count": 1,
+        "quantity_sum": 20,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_extract:stone-brick": {
+        "count": 1,
+        "quantity_sum": 10,
+        "median_quantity": 10,
+        "one_item_transfers": 0
+      },
+      "factory_insert:sulfur": {
+        "count": 2,
+        "quantity_sum": 30,
+        "median_quantity": 15.0,
+        "one_item_transfers": 0
+      },
+      "factory_extract:sulfur": {
+        "count": 2,
+        "quantity_sum": 30,
+        "median_quantity": 15.0,
+        "one_item_transfers": 0
+      },
+      "factory_extract:plastic-bar": {
+        "count": 4,
+        "quantity_sum": 100,
+        "median_quantity": 25.0,
+        "one_item_transfers": 0
+      },
+      "factory_insert:plastic-bar": {
+        "count": 4,
+        "quantity_sum": 100,
+        "median_quantity": 25.0,
+        "one_item_transfers": 0
+      },
+      "factory_extract:advanced-circuit": {
+        "count": 3,
+        "quantity_sum": 30,
+        "median_quantity": 10,
+        "one_item_transfers": 0
+      },
+      "factory_insert:advanced-circuit": {
+        "count": 2,
+        "quantity_sum": 30,
+        "median_quantity": 15.0,
+        "one_item_transfers": 0
+      },
+      "factory_insert:pipe": {
+        "count": 2,
+        "quantity_sum": 61,
+        "median_quantity": 30.5,
+        "one_item_transfers": 0
+      },
+      "factory_insert:steel-plate": {
+        "count": 1,
+        "quantity_sum": 20,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_extract:engine-unit": {
+        "count": 1,
+        "quantity_sum": 20,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_insert:engine-unit": {
+        "count": 1,
+        "quantity_sum": 20,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_extract:chemical-science-pack": {
+        "count": 1,
+        "quantity_sum": 20,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_insert:chemical-science-pack": {
+        "count": 1,
+        "quantity_sum": 20,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      }
+    }
+  },
+  "accepted_revision": {
+    "records": 280,
+    "first_utc": "2026-09-25T11:43:01.393127+00:00",
+    "last_utc": "2026-09-25T21:49:24.297475+00:00",
+    "elapsed_seconds": 36382.904348,
+    "actions": {
+      "verify": 4,
+      "factory_gather": 60,
+      "factory_insert": 96,
+      "factory_extract": 74,
+      "factory_craft_job": 41,
+      "factory_connect": 2,
+      "factory_place": 1,
+      "factory_configure": 1,
+      "factory_launch_fish": 1
+    },
+    "status": {
+      "running": 280
+    },
+    "model_calls": {
+      "False": 99,
+      "True": 181
+    },
+    "phase_timings": {
+      "observe": {
+        "count": 280,
+        "sum_seconds": 9979.620504375838,
+        "median_seconds": 32.15184633299941,
+        "p95_seconds": 64.76714063397958
+      },
+      "verification": {
+        "count": 277,
+        "sum_seconds": 14.988955553853884,
+        "median_seconds": 0.03358396500698291,
+        "p95_seconds": 0.16687918800744228
+      },
+      "planning": {
+        "count": 279,
+        "sum_seconds": 1052.1328161637066,
+        "median_seconds": 3.5143404219998047,
+        "p95_seconds": 7.407922910992056
+      },
+      "selection": {
+        "count": 279,
+        "sum_seconds": 346.78035220320453,
+        "median_seconds": 0.8975457150081638,
+        "p95_seconds": 3.9910775780153926
+      },
+      "pre_dispatch_observe": {
+        "count": 279,
+        "sum_seconds": 9693.659595533885,
+        "median_seconds": 31.79087736699148,
+        "p95_seconds": 63.0978639050154
+      },
+      "dispatch": {
+        "count": 276,
+        "sum_seconds": 3988.5586943691014,
+        "median_seconds": 4.202275670511881,
+        "p95_seconds": 71.50533647398697
+      },
+      "post_dispatch_observe": {
+        "count": 276,
+        "sum_seconds": 10254.197375498712,
+        "median_seconds": 32.24882345450169,
+        "p95_seconds": 73.90771444700658
+      },
+      "approach": {
+        "count": 170,
+        "sum_seconds": 841.9173649398726,
+        "median_seconds": 2.9374244194914354,
+        "p95_seconds": 13.94308869400993
+      },
+      "transfer_rpc": {
+        "count": 212,
+        "sum_seconds": 10.819482896884438,
+        "median_seconds": 0.04621101001976058,
+        "p95_seconds": 0.09424981402116828
+      }
+    },
+    "inclusive_call_timings": {
+      "observation": {
+        "count": 280,
+        "sum_seconds": 28911.421499419,
+        "median_seconds": 94.1766815875,
+        "p95_seconds": 187.183435241
+      },
+      "checkpoint_written": {
+        "count": 280,
+        "sum_seconds": 449.656804911,
+        "median_seconds": 1.4880989955000001,
+        "p95_seconds": 2.787823694
+      },
+      "candidate_set_created": {
+        "count": 279,
+        "sum_seconds": 1027.308790101,
+        "median_seconds": 3.427074214,
+        "p95_seconds": 7.058317303
+      },
+      "model_response": {
+        "count": 181,
+        "sum_seconds": 302.802943138,
+        "median_seconds": 0.856040317,
+        "p95_seconds": 8.271702695
+      }
+    },
+    "observation_phase_seconds": 29927.477475408436,
+    "production_delta": {
+      "advanced-circuit": 30,
+      "assembling-machine-1": 1,
+      "assembling-machine-2": 0,
+      "automation-science-pack": 78,
+      "boiler": 0,
+      "burner-inserter": 0,
+      "chemical-plant": 0,
+      "chemical-science-pack": 20,
+      "coal": 885,
+      "copper-cable": 354,
+      "copper-ore": 13,
+      "copper-plate": 13,
+      "electronic-circuit": 93,
+      "engine-unit": 20,
+      "inserter": 20,
+      "iron-gear-wheel": 165,
+      "iron-ore": 603,
+      "iron-plate": 672,
+      "lab": 0,
+      "logistic-science-pack": 20,
+      "offshore-pump": 0,
+      "oil-refinery": 0,
+      "pipe": 100,
+      "pipe-to-ground": 0,
+      "plastic-bar": 140,
+      "pumpjack": 0,
+      "science": 20,
+      "small-electric-pole": 16,
+      "steam-engine": 0,
+      "steel-plate": 20,
+      "stone": 0,
+      "stone-brick": 0,
+      "stone-furnace": 0,
+      "sulfur": 40,
+      "transport-belt": 40,
+      "wooden-chest": 0
+    },
+    "transfer_batches": {
+      "factory_insert:coal": {
+        "count": 22,
+        "quantity_sum": 852,
+        "median_quantity": 50.0,
+        "one_item_transfers": 0
+      },
+      "factory_insert:sulfur": {
+        "count": 2,
+        "quantity_sum": 30,
+        "median_quantity": 15.0,
+        "one_item_transfers": 0
+      },
+      "factory_insert:iron-ore": {
+        "count": 39,
+        "quantity_sum": 672,
+        "median_quantity": 20,
+        "one_item_transfers": 2
+      },
+      "factory_extract:iron-plate": {
+        "count": 55,
+        "quantity_sum": 672,
+        "median_quantity": 13,
+        "one_item_transfers": 6
+      },
+      "factory_extract:sulfur": {
+        "count": 2,
+        "quantity_sum": 30,
+        "median_quantity": 15.0,
+        "one_item_transfers": 0
+      },
+      "factory_extract:plastic-bar": {
+        "count": 4,
+        "quantity_sum": 100,
+        "median_quantity": 25.0,
+        "one_item_transfers": 0
+      },
+      "factory_insert:plastic-bar": {
+        "count": 4,
+        "quantity_sum": 100,
+        "median_quantity": 25.0,
+        "one_item_transfers": 0
+      },
+      "factory_extract:advanced-circuit": {
+        "count": 3,
+        "quantity_sum": 30,
+        "median_quantity": 10,
+        "one_item_transfers": 0
+      },
+      "factory_insert:copper-cable": {
+        "count": 2,
+        "quantity_sum": 58,
+        "median_quantity": 29.0,
+        "one_item_transfers": 0
+      },
+      "factory_insert:electronic-circuit": {
+        "count": 3,
+        "quantity_sum": 70,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_insert:advanced-circuit": {
+        "count": 2,
+        "quantity_sum": 30,
+        "median_quantity": 15.0,
+        "one_item_transfers": 0
+      },
+      "factory_insert:iron-plate": {
+        "count": 1,
+        "quantity_sum": 100,
+        "median_quantity": 100,
+        "one_item_transfers": 0
+      },
+      "factory_insert:pipe": {
+        "count": 2,
+        "quantity_sum": 61,
+        "median_quantity": 30.5,
+        "one_item_transfers": 0
+      },
+      "factory_extract:steel-plate": {
+        "count": 2,
+        "quantity_sum": 20,
+        "median_quantity": 10.0,
+        "one_item_transfers": 0
+      },
+      "factory_insert:steel-plate": {
+        "count": 1,
+        "quantity_sum": 20,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_insert:iron-gear-wheel": {
+        "count": 6,
+        "quantity_sum": 120,
+        "median_quantity": 20.0,
+        "one_item_transfers": 0
+      },
+      "factory_extract:engine-unit": {
+        "count": 1,
+        "quantity_sum": 20,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_insert:engine-unit": {
+        "count": 1,
+        "quantity_sum": 20,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_extract:chemical-science-pack": {
+        "count": 1,
+        "quantity_sum": 20,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_insert:chemical-science-pack": {
+        "count": 1,
+        "quantity_sum": 20,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_insert:transport-belt": {
+        "count": 2,
+        "quantity_sum": 40,
+        "median_quantity": 20.0,
+        "one_item_transfers": 0
+      },
+      "factory_insert:copper-plate": {
+        "count": 3,
+        "quantity_sum": 60,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_insert:copper-ore": {
+        "count": 2,
+        "quantity_sum": 13,
+        "median_quantity": 6.5,
+        "one_item_transfers": 0
+      },
+      "factory_extract:copper-plate": {
+        "count": 2,
+        "quantity_sum": 13,
+        "median_quantity": 6.5,
+        "one_item_transfers": 0
+      },
+      "factory_insert:inserter": {
+        "count": 1,
+        "quantity_sum": 20,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_extract:logistic-science-pack": {
+        "count": 1,
+        "quantity_sum": 20,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_insert:logistic-science-pack": {
+        "count": 1,
+        "quantity_sum": 20,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      },
+      "factory_extract:automation-science-pack": {
+        "count": 3,
+        "quantity_sum": 20,
+        "median_quantity": 3,
+        "one_item_transfers": 1
+      },
+      "factory_insert:automation-science-pack": {
+        "count": 1,
+        "quantity_sum": 20,
+        "median_quantity": 20,
+        "one_item_transfers": 0
+      }
+    }
+  },
+  "accepted_commit": "a88963db68031b61988effb1bbe655667caa12bb",
+  "limitations": [
+    "Sequential file-prefix snapshots, not an atomic campaign snapshot.",
+    "Older records can lack code_revision; accepted-revision subset uses explicit exact commit equality.",
+    "Observation phase totals are sequential phase measurements; inclusive call timers and nested approach/transfer phases must not be added to dispatch.",
+    "Production deltas use cumulative native counters, not measured sustainable capacity or continuous utilization.",
+    "Action counts are records, not unique native mutations; observe/verify and background actions differ.",
+    "Archive scope is the active campaign directory, not all historic campaigns or all raw research events."
+  ]
+}

@@ -1,0 +1,262 @@
+{
+  "schema": 1,
+  "captured_at_utc": "2026-09-25T21:51:18.418490+00:00",
+  "source_files": [
+    {
+      "path": "continuation-20260925T101251Z-2703081e/supervision/gameplay.jsonl",
+      "captured_bytes": 64860778,
+      "complete_bytes": 64860778,
+      "sha256_complete_prefix": "2dcd4cd064fe4aa1435aaa61a1684b053c61a34719cfd9fadad278c0c40dfd92",
+      "records": 284
+    },
+    {
+      "path": "supervision/gameplay.jsonl",
+      "captured_bytes": 35438286,
+      "complete_bytes": 35438286,
+      "sha256_complete_prefix": "41d0773eee8db1aac7199fae3aab780bb398766d36dbb43706ceee76d25ce6b8",
+      "records": 265
+    },
+    {
+      "path": "supervision-resume-20260924T163225Z/gameplay.jsonl",
+      "captured_bytes": 11553579,
+      "complete_bytes": 11553579,
+      "sha256_complete_prefix": "39d34e1de204c8d286501523cd7c27d4a578b14c98e4e2a0f6f3d44b9773c647",
+      "records": 102
+    },
+    {
+      "path": "supervision-resume-20260924T172700Z/gameplay.jsonl",
+      "captured_bytes": 5695705,
+      "complete_bytes": 5695705,
+      "sha256_complete_prefix": "328d970216508dacf345eace735832d9016d2fecba3a6b97315cdacfadac46d9",
+      "records": 51
+    },
+    {
+      "path": "supervision-resume-20260924T175734Z/gameplay.jsonl",
+      "captured_bytes": 25620324,
+      "complete_bytes": 25620324,
+      "sha256_complete_prefix": "643ae8aa700cf31912e076f94e48751793143ef01ecab9e5854854281099aa8c",
+      "records": 178
+    }
+  ],
+  "checkpoint": {
+    "status": "running",
+    "target": "rocket_launch",
+    "active_goal": "rocket_launch",
+    "active_plan": {
+      "description": "Next production batch: 20 chemical-science-pack. Collect 40 plastic-bar from recipe:plastic-bar",
+      "goal": "rocket_launch",
+      "id": "factory:factory_extract:recipe:plastic-bar",
+      "materials": {
+        "automation_sites": {
+          "recipe:copper-plate": {
+            "fallback": "batched_manual_supply",
+            "reason": "existing_manual_cell",
+            "state": "rejected"
+          },
+          "recipe:iron-plate": {
+            "fallback": "batched_manual_supply",
+            "reason": "existing_manual_cell",
+            "state": "rejected"
+          }
+        },
+        "batches": {
+          "assembling-machine-1": 1,
+          "copper-cable": 4,
+          "copper-plate": 4,
+          "electronic-circuit": 3,
+          "iron-gear-wheel": 5,
+          "iron-plate": 22
+        },
+        "local_objective": {
+          "inventory_target": 20,
+          "item": "chemical-science-pack",
+          "ultimate_goal": "rocket_launch"
+        },
+        "remaining": {
+          "assembling-machine-1": 0.0,
+          "coal": 33.0,
+          "copper-cable": 0.0,
+          "copper-ore": 0,
+          "copper-plate": 0,
+          "electronic-circuit": 0,
+          "iron-gear-wheel": 0,
+          "iron-ore": 0,
+          "iron-plate": 0,
+          "pipe-to-ground": 1.0,
+          "raw-fish": 5.0,
+          "small-electric-pole": 34.0,
+          "sulfur": 20.0,
+          "transport-belt": 1.0
+        },
+        "route_diagnostics": {
+          "recipe:copper-plate": {
+            "belt_budget_exhausted": false,
+            "cached": false,
+            "depleted_resources": 0,
+            "fallback": "batched_manual_supply",
+            "length_limited_paths": 0,
+            "max_belts": 64,
+            "mixed_resources": 0,
+            "next_survey_tick": 19650963,
+            "observed_tick": 19650663,
+            "output_layout": "output:243:1:-1:12",
+            "path_attempts": 0,
+            "path_expansions": 0,
+            "path_probes": 0,
+            "placement_checks": 0,
+            "reason": "ore_outside_local_survey",
+            "receiver_count": 0,
+            "resource_count": 0,
+            "resource_result_limit_reached": false,
+            "resource_sample_limits": 0,
+            "sampled_resources": 0,
+            "schema": 1,
+            "search_budget_exhausted": false,
+            "source_position": {
+              "x": 0,
+              "y": 32
+            },
+            "source_unit": 243,
+            "survey_radius": 40,
+            "survey_tick": 19650663
+          },
+          "recipe:iron-plate": {
+            "belt_budget_exhausted": false,
+            "cached": false,
+            "depleted_resources": 0,
+            "fallback": "batched_manual_supply",
+            "length_limited_paths": 0,
+            "max_belts": 64,
+            "mixed_resources": 0,
+            "next_survey_tick": 19650963,
+            "observed_tick": 19650663,
+            "output_layout": "output:334:1:-1:12",
+            "path_attempts": 0,
+            "path_expansions": 0,
+            "path_probes": 0,
+            "placement_checks": 0,
+            "reason": "ore_outside_local_survey",
+            "receiver_count": 0,
+            "resource_count": 0,
+            "resource_result_limit_reached": false,
+            "resource_sample_limits": 0,
+            "sampled_resources": 0,
+            "schema": 1,
+            "search_budget_exhausted": false,
+            "source_position": {
+              "x": 12,
+              "y": 32
+            },
+            "source_unit": 334,
+            "survey_radius": 40,
+            "survey_tick": 19650663
+          }
+        },
+        "shortages": {
+          "copper-ore": 4,
+          "iron-ore": 22
+        },
+        "work_intent": {
+          "observed_tick": 19650663,
+          "scope": "lookahead"
+        }
+      },
+      "steps": [
+        {
+          "action": "factory_extract",
+          "costs": {},
+          "effect": "transfer",
+          "item": "",
+          "parameters": {
+            "item": "plastic-bar",
+            "quantity": 40,
+            "receipt": "19650663:factory_extract:recipe:plastic-bar:plastic-bar",
+            "role": "recipe:plastic-bar"
+          },
+          "threshold": 0,
+          "timeout_ticks": 1800,
+          "verification": null
+        }
+      ]
+    },
+    "last_tick": 19653033,
+    "pending": {
+      "action": "factory_extract",
+      "dispatch": "returned",
+      "polls": 0,
+      "started_tick": 19653033
+    },
+    "step_index": 0,
+    "failures": {
+      "capital:29edd709f5dd5e29e7f716be": 2,
+      "capital:61021e5f1f348cf88204dc5b": 2,
+      "capital:7867cc2c1c998fa05db04f5f": 2,
+      "capital:94a655656f25475ba8ebafd7": 2,
+      "capital:f5ae20de9c4c5777d6b375de": 2,
+      "capital:f5ae20de9c4c5777d6b375de:supply:factory:factory_connect:": 1,
+      "capital:f5ae20de9c4c5777d6b375de:supply:factory:factory_connect:a689abfbb5655aca44109d264b9e1d6d9d7fb1789dcf622c6f3930051bbfe486": 1,
+      "factory:factory_connect:": 2,
+      "factory:factory_connect:42dcfc522c4ee57679b84afb96e59b41ee144ab91fcb533958b5309f18bafc3a": 2,
+      "factory:factory_connect:a689abfbb5655aca44109d264b9e1d6d9d7fb1789dcf622c6f3930051bbfe486": 1,
+      "factory:factory_connect:d48f9e0ce2aee224c1f0c6f9d278e5c8d9bf47425ff74ebf219889838d1fe1bb": 1,
+      "factory:factory_gather:coal:target:46:site:{\"name\":\"coal\",\"position\":{\"x\":62.5,\"y\":-25.5},\"surface_index\":1}": 1,
+      "factory:factory_gather:iron-ore:target:59:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}": 1
+    },
+    "stalled_decisions": 0,
+    "completed_goals": {
+      "bootstrap_mining": 7350950,
+      "stockpile_fuel": 7348648
+    },
+    "reason": ""
+  },
+  "supervisor": {
+    "phase": "gameplay",
+    "repair_required": false,
+    "attempt": 5,
+    "cutoff": 1790417571.0,
+    "started_at": 1790331171.0,
+    "code_revision": {
+      "commit": "a88963db68031b61988effb1bbe655667caa12bb",
+      "source_sha256": "b7481e923845aeba093ca8eb83f725dbfdfb5b3d6a714b615259c5c218fe8aca"
+    },
+    "gameplay_configuration": {
+      "background_work": true,
+      "factory_scheduling": "ready-work",
+      "furnace_input_belts": true,
+      "furnace_output_buffers": true
+    }
+  },
+  "accepted_source": "a88963db68031b61988effb1bbe655667caa12bb",
+  "scope": "All complete gameplay.jsonl records under the active production campaign; allowlisted projections, not raw or replay-complete logs.",
+  "projection": {
+    "records": 880,
+    "uncompressed_sha256": "f02424377ca2c9ce6a111642dce461e002a07dbfb7fc0f27586ba7c0473694f5",
+    "excluded": "Credentials, environment, connection settings, authentication files, raw model prompts/responses, process IDs, repeated histories, raw research events. Only selected gameplay and operational fields retained."
+  },
+  "artifacts": {
+    "action-log-excerpts.txt": {
+      "bytes": 90628,
+      "sha256": "e2c8e6a4aee0d9959c880c35eeeab4a9e64f4cb1ace75bfd9169a72eb26a46e7"
+    },
+    "actions.csv": {
+      "bytes": 287755,
+      "sha256": "4e27c8ddbd22d8d1d71012cf3c21ffe2a4f08edfda0eed6a52c3bc4be68acbe5"
+    },
+    "analyze.py": {
+      "bytes": 2648,
+      "sha256": "9f7816fba8694dd120d05d1aa6ac5b77a66d721d4fed10d0c754a36360cc0004"
+    },
+    "gameplay-projection.jsonl.gz": {
+      "bytes": 658156,
+      "sha256": "da1c95d4adb185be60109ef54a2e5e7b9ca42cda946c98ee2bf0f7cc52bbd3ce"
+    },
+    "latest-state.json": {
+      "bytes": 18582,
+      "sha256": "7914a5fb98e26dd7a7bcd2688ab55ac3834c754afb74eebb2a3fd6faa4d31c11"
+    },
+    "summary.json": {
+      "bytes": 18939,
+      "sha256": "dc2abef05cdd13ab55a3d1e359ced5202be2c90e9e7e4554cc3f18281f701e52"
+    }
+  }
+}

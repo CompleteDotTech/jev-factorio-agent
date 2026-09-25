@@ -1,0 +1,702 @@
+{
+  "recorded_at_utc": "2026-09-25T21:49:24.297475+00:00",
+  "source": "continuation-20260925T101251Z-2703081e/supervision/gameplay.jsonl",
+  "source_line": 284,
+  "state": {
+    "tick": 19648098,
+    "player_position": [
+      -0.4,
+      58.2
+    ],
+    "inventory": {
+      "transport-belt": 1,
+      "small-electric-pole": 34,
+      "pipe-to-ground": 1,
+      "coal": 33,
+      "raw-fish": 5,
+      "sulfur": 20,
+      "copper-cable": 1
+    },
+    "power_satisfaction": 1.0,
+    "researched": [
+      "advanced-circuit",
+      "advanced-material-processing",
+      "automation",
+      "automation-2",
+      "automation-science-pack",
+      "chemical-science-pack",
+      "concrete",
+      "electronics",
+      "engine",
+      "flammables",
+      "fluid-handling",
+      "logistic-science-pack",
+      "oil-gathering",
+      "oil-processing",
+      "plastics",
+      "steam-power",
+      "steel-axe",
+      "steel-processing",
+      "sulfur-processing"
+    ],
+    "victory": false,
+    "game_version": "2.0.77",
+    "factory": {
+      "research": "advanced-oil-processing",
+      "research_progress": 0.2666666666665353,
+      "produced": {
+        "wooden-chest": 3,
+        "transport-belt": 1336,
+        "burner-inserter": 3,
+        "inserter": 1311,
+        "small-electric-pole": 152,
+        "pipe": 649,
+        "pipe-to-ground": 4,
+        "stone-brick": 10,
+        "boiler": 1,
+        "steam-engine": 1,
+        "offshore-pump": 1,
+        "pumpjack": 1,
+        "stone-furnace": 7,
+        "assembling-machine-1": 5,
+        "assembling-machine-2": 4,
+        "oil-refinery": 1,
+        "chemical-plant": 2,
+        "lab": 1,
+        "coal": 4547,
+        "stone": 55,
+        "iron-ore": 11987,
+        "copper-ore": 3971,
+        "iron-plate": 11987,
+        "copper-plate": 3971,
+        "steel-plate": 58,
+        "plastic-bar": 140,
+        "sulfur": 92,
+        "iron-gear-wheel": 3774,
+        "copper-cable": 4632,
+        "electronic-circuit": 1453,
+        "advanced-circuit": 30,
+        "engine-unit": 20,
+        "automation-science-pack": 1655,
+        "logistic-science-pack": 1311,
+        "chemical-science-pack": 20,
+        "science": 1444
+      },
+      "consumed": {
+        "transport-belt": 1315,
+        "inserter": 1311,
+        "pipe": 102,
+        "stone-brick": 10,
+        "stone-furnace": 1,
+        "assembling-machine-1": 4,
+        "wood": 82,
+        "coal": 4219,
+        "stone": 55,
+        "iron-ore": 11987,
+        "copper-ore": 3971,
+        "iron-plate": 11987,
+        "copper-plate": 3971,
+        "steel-plate": 58,
+        "plastic-bar": 60,
+        "sulfur": 10,
+        "iron-gear-wheel": 3752,
+        "copper-cable": 4631,
+        "electronic-circuit": 1433,
+        "advanced-circuit": 30,
+        "engine-unit": 20,
+        "automation-science-pack": 1445,
+        "logistic-science-pack": 1310,
+        "chemical-science-pack": 20
+      },
+      "rockets_launched": 0,
+      "rocket_baseline": 0,
+      "force_entity_counts": {
+        "stone-furnace": 6,
+        "small-electric-pole": 118,
+        "chemical-plant": 2,
+        "pipe": 526,
+        "assembling-machine-2": 4,
+        "character": 1,
+        "assembling-machine-1": 1,
+        "burner-inserter": 3,
+        "wooden-chest": 4,
+        "pipe-to-ground": 3,
+        "offshore-pump": 1,
+        "pumpjack": 1,
+        "burner-mining-drill": 1,
+        "lab": 1,
+        "boiler": 1,
+        "steam-engine": 1,
+        "oil-refinery": 1
+      },
+      "crafting_queue": 0,
+      "entities": {
+        "recipe:copper-plate": {
+          "name": "stone-furnace",
+          "unit_number": 243,
+          "position": {
+            "x": 0,
+            "y": 32
+          },
+          "status": 18,
+          "energy": 100,
+          "fuel": {
+            "coal": 44
+          },
+          "input": {},
+          "output": {},
+          "fluids": {},
+          "recipe": "",
+          "products_finished": 3912,
+          "crafting": false,
+          "crafting_progress": 0
+        },
+        "recipe:iron-plate": {
+          "name": "stone-furnace",
+          "unit_number": 334,
+          "position": {
+            "x": 12,
+            "y": 32
+          },
+          "status": 18,
+          "energy": 100,
+          "fuel": {
+            "coal": 41
+          },
+          "input": {},
+          "output": {},
+          "fluids": {},
+          "recipe": "",
+          "products_finished": 11802,
+          "crafting": false,
+          "crafting_progress": 0
+        },
+        "output-chest:334": {
+          "name": "wooden-chest",
+          "unit_number": 495,
+          "position": {
+            "x": 14.5,
+            "y": 31.5
+          },
+          "status": 2,
+          "energy": 0,
+          "fuel": {},
+          "input": {},
+          "output": {},
+          "fluids": {}
+        },
+        "output-arm:334": {
+          "name": "burner-inserter",
+          "unit_number": 496,
+          "position": {
+            "x": 13.5,
+            "y": 31.5
+          },
+          "status": 32,
+          "energy": 1909.999986588955,
+          "fuel": {
+            "coal": 2
+          },
+          "input": {},
+          "output": {},
+          "fluids": {}
+        },
+        "utility:lab": {
+          "name": "lab",
+          "unit_number": 507,
+          "position": {
+            "x": 48.5,
+            "y": 32.5
+          },
+          "status": 31,
+          "energy": 1066.6666666666667,
+          "fuel": {},
+          "input": {
+            "automation-science-pack": 20,
+            "logistic-science-pack": 1
+          },
+          "output": {},
+          "fluids": {}
+        },
+        "utility:water": {
+          "name": "offshore-pump",
+          "unit_number": 523,
+          "position": {
+            "x": 24.5,
+            "y": 42.5
+          },
+          "status": 1,
+          "energy": 2976579765,
+          "fuel": {},
+          "input": {},
+          "output": {},
+          "fluids": {
+            "water": 99.96886074542999
+          }
+        },
+        "utility:boiler": {
+          "name": "boiler",
+          "unit_number": 524,
+          "position": {
+            "x": 34.5,
+            "y": 43
+          },
+          "status": 1,
+          "energy": 22658.40244293213,
+          "fuel": {
+            "coal": 42
+          },
+          "input": {},
+          "output": {},
+          "fluids": {
+            "water": 200,
+            "steam": 199.6886134147644
+          }
+        },
+        "utility:engine": {
+          "name": "steam-engine",
+          "unit_number": 525,
+          "position": {
+            "x": 43.5,
+            "y": 41.5
+          },
+          "status": 1,
+          "energy": 5658.333333333334,
+          "fuel": {},
+          "input": {},
+          "output": {},
+          "fluids": {
+            "steam": 199.68861711025238
+          }
+        },
+        "output-chest:243": {
+          "name": "wooden-chest",
+          "unit_number": 609,
+          "position": {
+            "x": 2.5,
+            "y": 31.5
+          },
+          "status": 2,
+          "energy": 0,
+          "fuel": {},
+          "input": {},
+          "output": {},
+          "fluids": {}
+        },
+        "output-arm:243": {
+          "name": "burner-inserter",
+          "unit_number": 610,
+          "position": {
+            "x": 1.5,
+            "y": 31.5
+          },
+          "status": 32,
+          "energy": 1909.999986588955,
+          "fuel": {
+            "coal": 3
+          },
+          "input": {},
+          "output": {},
+          "fluids": {}
+        },
+        "stock:242": {
+          "name": "wooden-chest",
+          "unit_number": 242,
+          "position": {
+            "x": 56.5,
+            "y": -80.5
+          },
+          "status": 2,
+          "energy": 0,
+          "fuel": {},
+          "input": {},
+          "output": {},
+          "fluids": {}
+        },
+        "recipe:steel-plate": {
+          "name": "stone-furnace",
+          "unit_number": 2523,
+          "position": {
+            "x": 48,
+            "y": 44
+          },
+          "status": 18,
+          "energy": 100,
+          "fuel": {
+            "coal": 29
+          },
+          "input": {},
+          "output": {},
+          "fluids": {},
+          "recipe": "",
+          "products_finished": 58,
+          "crafting": false,
+          "crafting_progress": 0
+        },
+        "recipe:automation-science-pack": {
+          "name": "assembling-machine-2",
+          "unit_number": 2524,
+          "position": {
+            "x": 60.5,
+            "y": 44.5
+          },
+          "status": 27,
+          "energy": 2755.5555555555557,
+          "fuel": {},
+          "input": {
+            "iron-gear-wheel": 2
+          },
+          "output": {
+            "automation-science-pack": 190
+          },
+          "fluids": {},
+          "recipe": "automation-science-pack",
+          "products_finished": 1325,
+          "crafting": false,
+          "crafting_progress": 0
+        },
+        "recipe:logistic-science-pack": {
+          "name": "assembling-machine-2",
+          "unit_number": 2528,
+          "position": {
+            "x": 0.5,
+            "y": 56.5
+          },
+          "status": 26,
+          "energy": 2755.5555555555557,
+          "fuel": {},
+          "input": {
+            "transport-belt": 20
+          },
+          "output": {},
+          "fluids": {},
+          "recipe": "logistic-science-pack",
+          "products_finished": 1116,
+          "crafting": false,
+          "crafting_progress": 0
+        },
+        "recipe:stone-brick": {
+          "name": "stone-furnace",
+          "unit_number": 2539,
+          "position": {
+            "x": 10,
+            "y": 54
+          },
+          "status": 18,
+          "energy": 100,
+          "fuel": {
+            "coal": 49
+          },
+          "input": {},
+          "output": {},
+          "fluids": {},
+          "recipe": "",
+          "products_finished": 10,
+          "crafting": false,
+          "crafting_progress": 0
+        },
+        "capacity:copper-plate:2": {
+          "name": "stone-furnace",
+          "unit_number": 2540,
+          "position": {
+            "x": 10,
+            "y": 32
+          },
+          "status": 18,
+          "energy": 100,
+          "fuel": {
+            "coal": 45
+          },
+          "input": {},
+          "output": {},
+          "fluids": {},
+          "recipe": "",
+          "products_finished": 59,
+          "crafting": false,
+          "crafting_progress": 0
+        },
+        "capacity:iron-plate:2": {
+          "name": "stone-furnace",
+          "unit_number": 2541,
+          "position": {
+            "x": 22,
+            "y": 32
+          },
+          "status": 18,
+          "energy": 100,
+          "fuel": {
+            "coal": 36
+          },
+          "input": {},
+          "output": {},
+          "fluids": {},
+          "recipe": "",
+          "products_finished": 185,
+          "crafting": false,
+          "crafting_progress": 0
+        },
+        "utility:pumpjack": {
+          "name": "pumpjack",
+          "unit_number": 2542,
+          "position": {
+            "x": 15.5,
+            "y": 383.5
+          },
+          "status": 1,
+          "energy": 1600,
+          "fuel": {},
+          "input": {},
+          "output": {},
+          "fluids": {
+            "crude-oil": 267.59119176864624
+          }
+        },
+        "recipe:advanced-circuit": {
+          "name": "assembling-machine-2",
+          "unit_number": 2604,
+          "position": {
+            "x": 57.5,
+            "y": 54.5
+          },
+          "status": 26,
+          "energy": 2755.5555555555557,
+          "fuel": {},
+          "input": {
+            "plastic-bar": 40,
+            "electronic-circuit": 20
+          },
+          "output": {},
+          "fluids": {},
+          "recipe": "advanced-circuit",
+          "products_finished": 30,
+          "crafting": false,
+          "crafting_progress": 0
+        },
+        "recipe:plastic-bar": {
+          "name": "chemical-plant",
+          "unit_number": 2608,
+          "position": {
+            "x": -4.5,
+            "y": 63.5
+          },
+          "status": 27,
+          "energy": 3857.7777777777774,
+          "fuel": {},
+          "input": {},
+          "output": {
+            "plastic-bar": 40
+          },
+          "fluids": {
+            "petroleum-gas": 40
+          },
+          "recipe": "plastic-bar",
+          "products_finished": 70,
+          "crafting": false,
+          "crafting_progress": 0
+        },
+        "recipe:chemical-science-pack": {
+          "name": "assembling-machine-2",
+          "unit_number": 2620,
+          "position": {
+            "x": 3.5,
+            "y": 59.5
+          },
+          "status": 26,
+          "energy": 2755.5555555555557,
+          "fuel": {},
+          "input": {
+            "sulfur": 20
+          },
+          "output": {},
+          "fluids": {},
+          "recipe": "chemical-science-pack",
+          "products_finished": 10,
+          "crafting": false,
+          "crafting_progress": 0
+        },
+        "recipe:sulfur": {
+          "name": "chemical-plant",
+          "unit_number": 2627,
+          "position": {
+            "x": 12.5,
+            "y": 51.5
+          },
+          "status": 27,
+          "energy": 3857.7777777777774,
+          "fuel": {},
+          "input": {},
+          "output": {
+            "sulfur": 42
+          },
+          "fluids": {
+            "water": 60,
+            "petroleum-gas": 10
+          },
+          "recipe": "sulfur",
+          "products_finished": 46,
+          "crafting": false,
+          "crafting_progress": 0
+        },
+        "output-chest:2523": {
+          "name": "wooden-chest",
+          "unit_number": 2662,
+          "position": {
+            "x": 48.5,
+            "y": 41.5
+          },
+          "status": 2,
+          "energy": 0,
+          "fuel": {},
+          "input": {},
+          "output": {},
+          "fluids": {}
+        },
+        "output-arm:2523": {
+          "name": "burner-inserter",
+          "unit_number": 2663,
+          "position": {
+            "x": 48.5,
+            "y": 42.5
+          },
+          "status": 32,
+          "energy": 1909.999986588955,
+          "fuel": {
+            "coal": 4
+          },
+          "input": {},
+          "output": {},
+          "fluids": {}
+        },
+        "recipe:basic-oil-processing": {
+          "name": "oil-refinery",
+          "unit_number": 2664,
+          "position": {
+            "x": 60.5,
+            "y": 68.5
+          },
+          "status": 1,
+          "energy": 7715.555555555555,
+          "fuel": {},
+          "input": {},
+          "output": {},
+          "fluids": {
+            "crude-oil": 175,
+            "petroleum-gas": 43.712462186813354
+          },
+          "recipe": "basic-oil-processing",
+          "products_finished": 320,
+          "crafting": true,
+          "crafting_progress": 0.006666666666654232
+        },
+        "recipe:engine-unit": {
+          "name": "assembling-machine-1",
+          "unit_number": 3146,
+          "position": {
+            "x": -3.5,
+            "y": 87.5
+          },
+          "status": 26,
+          "energy": 1377.7777777777778,
+          "fuel": {},
+          "input": {
+            "pipe": 21,
+            "iron-gear-wheel": 20
+          },
+          "output": {},
+          "fluids": {},
+          "recipe": "engine-unit",
+          "products_finished": 20,
+          "crafting": false,
+          "crafting_progress": 0
+        }
+      }
+    }
+  },
+  "configuration": {
+    "factory_scheduling": "ready-work",
+    "background_work": true,
+    "furnace_output_buffers": true,
+    "furnace_input_belts": true,
+    "mining_outposts": false,
+    "ore_side_successors": false
+  },
+  "route_diagnostics": {
+    "recipe:iron-plate": {
+      "schema": 1,
+      "survey_tick": 19648098,
+      "reason": "ore_outside_local_survey",
+      "resource_count": 0,
+      "sampled_resources": 0,
+      "mixed_resources": 0,
+      "depleted_resources": 0,
+      "resource_sample_limits": 0,
+      "receiver_count": 0,
+      "placement_checks": 0,
+      "path_attempts": 0,
+      "path_expansions": 0,
+      "path_probes": 0,
+      "length_limited_paths": 0,
+      "search_budget_exhausted": false,
+      "belt_budget_exhausted": false,
+      "resource_result_limit_reached": false,
+      "source_unit": 334,
+      "source_position": {
+        "x": 12,
+        "y": 32
+      },
+      "output_layout": "output:334:1:-1:12",
+      "fallback": "batched_manual_supply",
+      "max_belts": 64,
+      "survey_radius": 40,
+      "observed_tick": 19648098,
+      "cached": false,
+      "next_survey_tick": 19648398
+    },
+    "recipe:copper-plate": {
+      "schema": 1,
+      "survey_tick": 19648098,
+      "reason": "ore_outside_local_survey",
+      "resource_count": 0,
+      "sampled_resources": 0,
+      "mixed_resources": 0,
+      "depleted_resources": 0,
+      "resource_sample_limits": 0,
+      "receiver_count": 0,
+      "placement_checks": 0,
+      "path_attempts": 0,
+      "path_expansions": 0,
+      "path_probes": 0,
+      "length_limited_paths": 0,
+      "search_budget_exhausted": false,
+      "belt_budget_exhausted": false,
+      "resource_result_limit_reached": false,
+      "source_unit": 243,
+      "source_position": {
+        "x": 0,
+        "y": 32
+      },
+      "output_layout": "output:243:1:-1:12",
+      "fallback": "batched_manual_supply",
+      "max_belts": 64,
+      "survey_radius": 40,
+      "observed_tick": 19648098,
+      "cached": false,
+      "next_survey_tick": 19648398
+    }
+  },
+  "failure_budgets": {
+    "capital:29edd709f5dd5e29e7f716be": 2,
+    "capital:61021e5f1f348cf88204dc5b": 2,
+    "capital:7867cc2c1c998fa05db04f5f": 2,
+    "capital:f5ae20de9c4c5777d6b375de": 2,
+    "capital:f5ae20de9c4c5777d6b375de:supply:factory:factory_connect:": 1,
+    "capital:f5ae20de9c4c5777d6b375de:supply:factory:factory_connect:a689abfbb5655aca44109d264b9e1d6d9d7fb1789dcf622c6f3930051bbfe486": 1,
+    "factory:factory_connect:": 2,
+    "factory:factory_connect:42dcfc522c4ee57679b84afb96e59b41ee144ab91fcb533958b5309f18bafc3a": 2,
+    "factory:factory_connect:a689abfbb5655aca44109d264b9e1d6d9d7fb1789dcf622c6f3930051bbfe486": 1,
+    "factory:factory_connect:d48f9e0ce2aee224c1f0c6f9d278e5c8d9bf47425ff74ebf219889838d1fe1bb": 1,
+    "factory:factory_gather:coal:target:46:site:{\"name\":\"coal\",\"position\":{\"x\":62.5,\"y\":-25.5},\"surface_index\":1}": 1,
+    "factory:factory_gather:iron-ore:target:59:site:{\"name\":\"iron-ore\",\"position\":{\"x\":47.5,\"y\":-81.5},\"surface_index\":1}": 1,
+    "capital:94a655656f25475ba8ebafd7": 2
+  }
+}
