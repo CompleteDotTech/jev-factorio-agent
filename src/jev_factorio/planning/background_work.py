@@ -9,7 +9,7 @@ from ..craft_jobs import CraftJob
 from ..skills import Plan, Step
 from .ready_work import ReadyWorkPlanner
 from .demand import SupplyLedger
-from .scheduling import research_schedule, future_research_demands
+from .scheduling import research_schedule, future_research_demands, future_research_plan
 
 
 def research_demands(snapshot, catalog, *, early: bool = False) -> list[tuple[str, int]]:
@@ -85,7 +85,7 @@ def independent_candidates(goal, snapshot, catalog, job: CraftJob | None = None,
         for item, amount in future_research_demands(snapshot, catalog):
             try:
                 worker = new_planner()
-                candidate = worker._need(item, amount)
+                candidate = future_research_plan(worker, item, amount)
                 if candidate and candidate.steps[0].action not in {"factory_research", "factory_wait"}:
                     candidates.append(replace(candidate, description=f"Prepare next research batch: {amount} {item}. "
                                               + candidate.description))
@@ -97,15 +97,26 @@ def independent_candidates(goal, snapshot, catalog, job: CraftJob | None = None,
         except (KeyError, ValueError):
             pass  # Unsupported lookahead cannot bypass active production rules.
     unique = {}
+    rejected = []
     for plan in candidates:
         step = plan.steps[0]
         if (len(plan.steps) != 1 or step.action == "factory_wait"
                 or (job and not job.permits(step))
                 or not step.allowed(snapshot) or step.satisfied(snapshot)):
+            reason = ('single_step_or_wait' if len(plan.steps) != 1 or step.action == 'factory_wait'
+                      else 'acknowledged_job_reservation' if job and not job.permits(step)
+                      else 'native_precondition' if not step.allowed(snapshot) else 'already_satisfied')
+            if len(rejected) < 32:
+                rejected.append({'plan_id': plan.id, 'action': step.action, 'reason': reason})
             continue
         unique.setdefault(plan.id, plan)
         if len(unique) >= 8:
             break
+    if getattr(snapshot, '_campaign_diagnostics', False):
+        snapshot._background_eligibility = {'candidate_count': len(candidates),
+            'eligible_count': len(unique), 'rejected': rejected,
+            'job_active': job is not None, 'probe_count': probes, 'probe_budget': 32,
+            'reason': 'eligible_work' if unique else 'no_independent_safe_candidate'}
     return list(unique.values())
 
 

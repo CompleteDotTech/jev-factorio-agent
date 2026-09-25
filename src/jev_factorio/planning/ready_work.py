@@ -14,7 +14,7 @@ from ..state import GameSnapshot
 from .catalog import Catalog
 from .demand import SupplyLedger, horizon_demands
 from .service_visits import service_visit
-from .scheduling import scheduled_research_wait, ready_research_work
+from .scheduling import scheduled_research_wait, ready_research_work, current_research_supply
 from .factory import FactoryPlanner, RAW_ITEMS, compile_factory
 from .economics import EconomicProduction
 from .productive_work import productive_work
@@ -51,7 +51,12 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
         }})
 
     def plan(self):
+        supply = current_research_supply(self)
+        if supply is not None:
+            return supply
         primary = ready_research_work(self, super().plan())
+        if primary and (primary.materials or {}).get("collection_only_lookahead"):
+            return primary
         from .launch import opportunistic
         return opportunistic(self, self._capacity_work(productive_work(self, primary)))
 
@@ -181,6 +186,8 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
         primary = self.plan()
         if primary is None:
             return []
+        if (primary.materials or {}).get("collection_only_lookahead"):
+            return [primary]  # No speculative forks or bundled ingredient spending.
         # Binding, in-flight handcrafting, and infrastructure prerequisites stay
         # serial. Nothing here releases a pending mutation or spends its inputs.
         if (primary.steps[0].action not in {
