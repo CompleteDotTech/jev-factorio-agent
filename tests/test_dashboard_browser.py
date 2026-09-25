@@ -607,13 +607,18 @@ def test_mission_stale_snapshot_does_not_rejuvenate_on_model_event(live):
     page.goto(url)
     writer.emit('observation',2,state=mission_fixture())
     playwright.expect(page.locator('#launch-headline')).to_have_text('Launch prerequisites observed')
-    page.evaluate('''() => {
+    # Check one synchronous render: the live SSE heartbeat may replace latest
+    # between separate browser calls after this deliberately injected stale state.
+    rendered = page.evaluate('''() => {
         latest.view.state_observed_time = latest.server_time - 100;
         latest.view.last_event_time = latest.server_time;
         refreshStatus();
+        return {
+            freshness: document.querySelector('#mission-freshness').textContent,
+            historical: document.querySelector('#mission-panel').classList.contains('mission-historical')
+        };
     }''')
-    playwright.expect(page.locator('#mission-freshness')).to_have_text('STALE / DISCONNECTED')
-    assert page.locator('#mission-panel').evaluate('e=>e.classList.contains("mission-historical")')
+    assert rendered == {'freshness': 'STALE / DISCONNECTED', 'historical': True}
     assert not errors
 
 
