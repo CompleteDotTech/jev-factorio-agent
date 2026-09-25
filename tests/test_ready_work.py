@@ -317,12 +317,18 @@ def test_native_reach_controls_whether_an_approach_walks(fair_runtime, position_
             left_top = {x = -0.8, y = -0.8}, right_bottom = {x = 0.8, y = 0.8}
         }}
         built_entity = {valid = true, name = "stone-furnace"}
+        player.reach_distance = 10
         surface.find_non_colliding_position = function() return {x = 2.3, y = 0} end
         helpers, rcon = {}, {}
     ''')
     runtime.globals().reachable = reachable
     runtime.globals().helpers.json_to_table = lambda text: runtime.table_from(json.loads(text), recursive=True)
-    runtime.globals().helpers.table_to_json = lambda table: json.dumps(dict(table.items()))
+    def encode(table):
+        result = dict(table.items())
+        if "positions" in result:
+            result["positions"] = [dict(point.items()) for point in result["positions"].values()]
+        return json.dumps(result)
+    runtime.globals().helpers.table_to_json = encode
     outputs = []
     runtime.globals().rcon.print = outputs.append
     fair = FairActions.__new__(FairActions)
@@ -333,9 +339,12 @@ def test_native_reach_controls_whether_an_approach_walks(fair_runtime, position_
         runtime.execute(script)
         return outputs[-1]
 
-    fair.command, fair.move_to = command, moves.append
+    def move(position):
+        moves.append(position)
+        runtime.globals().reachable = True
+    fair.command, fair.move_to = command, move
     fair.approach(SimpleNamespace(x=0, y=0), "stone-furnace")
-    assert len(scripts) == 1  # Reach check is part of the existing RCON command.
+    assert len(scripts) == (1 if reachable else 2)  # Successful walking requires a fresh reach check.
     assert len(moves) == (0 if reachable else 1)
     assert fair.metrics["approach_requests"] == 1
     assert fair.metrics.get("approaches_skipped_in_reach", 0) == int(reachable)

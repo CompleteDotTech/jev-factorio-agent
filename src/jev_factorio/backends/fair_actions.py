@@ -74,26 +74,67 @@ class FairActions:
         return result
 
     def approach(self, position: Any, name: str = "character") -> None:
+        """Try bounded collision-free interaction approaches, then verify reach."""
         from fle.env import Position
 
         center = self.position(position)
         self._note("approach_requests")
         result = json.loads(self.command(
-            "local player = storage.fair.actor(); local prototype = prototypes.entity["
-            + json.dumps(name) + "]; local box = prototype.selection_box; "
+            "local player = storage.fair.actor(); "
             "local target = helpers.json_to_table(" + json.dumps(json.dumps(center)) + "); "
             "local entity = player.surface.find_entity(" + json.dumps(name) + ", target); "
-            "if entity and entity.valid and player.can_reach_entity(entity) then "
+            "if not entity or not entity.valid then "
+            "local box=prototypes.entity[" + json.dumps(name) + "].selection_box; "
+            "target.x=target.x+math.max(math.abs(box.left_top.x),math.abs(box.right_bottom.x))+1.5; "
+            "local point=player.surface.find_non_colliding_position('character',target,8,0.25); "
+            "assert(point, 'No collision-free approach'); "
+            "rcon.print(helpers.table_to_json(point)); return end; "
+            "if player.can_reach_entity(entity) then "
             "rcon.print(helpers.table_to_json({reachable=true})); return end; "
-            "target.x = target.x + math.max(math.abs(box.left_top.x), "
-            "math.abs(box.right_bottom.x)) + 1.5; "
-            "local position = player.surface.find_non_colliding_position('character', target, 8, 0.25); "
-            "assert(position, 'No collision-free approach'); rcon.print(helpers.table_to_json(position))"
+            "local dx=player.position.x-target.x; local dy=player.position.y-target.y; "
+            "local distance_squared=dx*dx+dy*dy; local reach=player.reach_distance; "
+            "assert(reach>1, 'Insufficient native interaction approach margin'); "
+            "if distance_squared==0 then dx=1; dy=0; distance_squared=1 end; "
+            "local distance=math.sqrt(distance_squared); local positions={}; local seen={}; "
+            "for inset=2,4,2 do local radius=math.max(0,reach-inset); "
+            "for _,turn in ipairs({0,1,-1,2,-2,3,-3,4}) do local angle=turn*math.pi/4; "
+            "local ux=(dx*math.cos(angle)-dy*math.sin(angle))/distance; "
+            "local uy=(dx*math.sin(angle)+dy*math.cos(angle))/distance; "
+            "local near={x=target.x+ux*radius,y=target.y+uy*radius}; "
+            "local candidate=player.surface.find_non_colliding_position('character',near,1,0.25); "
+            "if candidate and (candidate.x-target.x)^2+(candidate.y-target.y)^2<=(reach-1)^2 then "
+            "local key=candidate.x..':'..candidate.y; if not seen[key] then "
+            "seen[key]=true; table.insert(positions,candidate) end end end end; "
+            "assert(#positions>0, 'No collision-free interaction approach with arrival margin'); "
+            "rcon.print(helpers.table_to_json({positions=positions,unit_number=entity.unit_number}))"
         ))
         if result.get("reachable") is True:
             self._note("approaches_skipped_in_reach")
             return
-        self.move_to(Position(**result))
+        if "positions" not in result:
+            # Preserve the existing generic/construction-point API when no
+            # interaction entity existed. This does not establish entity reach.
+            self.move_to(Position(**result))
+            return
+        expected_unit = "nil" if result.get("unit_number") is None else json.dumps(result["unit_number"])
+        for candidate in result["positions"]:
+            try:
+                self.move_to(Position(**candidate))
+            except NativePathNotFound as error:
+                if type(error) is not NativePathNotFound:
+                    raise
+                continue
+            reached = json.loads(self.command(
+                "local player=storage.fair.actor(); local target=helpers.json_to_table("
+                + json.dumps(json.dumps(center)) + "); local entity=player.surface.find_entity("
+                + json.dumps(name) + ",target); "
+                "assert(entity and entity.valid, 'Interaction target is missing'); "
+                "assert(entity.unit_number==" + expected_unit + ", 'Interaction target identity changed'); "
+                "rcon.print(helpers.table_to_json({reachable=player.can_reach_entity(entity)}))"
+            ))
+            if reached["reachable"] is True:
+                return
+        raise NativePathNotFound("No native route to any reachable interaction approach")
 
     def harvest(self, resource: str, position: Any, quantity: int) -> int:
         from fle.env import Position
