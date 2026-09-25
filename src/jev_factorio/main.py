@@ -49,6 +49,16 @@ def cli() -> None:
     p.add_argument("--controller", choices=("flat", "hierarchical"), default="flat")
     p.add_argument("--factory-scheduling", choices=("serial", "ready-work"), default="serial",
                    help="Opt-in bounded production choices; does not enable concurrent mutations or belts")
+    p.add_argument("--campaign-diagnostics", action="store_true",
+                   help="30-minute progress, host pressure, eligibility and blocked-investment evidence")
+    p.add_argument("--profile-observations", action="store_true",
+                   help="Content-free observation RPC timing; hierarchical FLE only")
+    p.add_argument("--consolidated-observations", action="store_true",
+                   help="DEV PILOT: batch native discovery with identity-checked cache; implies profiling")
+    p.add_argument("--lead-time-supply", action="store_true",
+                   help="DEV PILOT: bounded current-science replenishment reserves; requires ready-work")
+    p.add_argument("--coverage-margin-lookahead", action="store_true",
+                   help="DEV PILOT: measured coverage permits only already-produced future science collection")
     p.add_argument("--furnace-output-buffers", action="store_true",
                    help="Opt-in paid burner-inserter output buffers; requires ready-work FLE")
     p.add_argument("--furnace-input-belts", action="store_true",
@@ -69,6 +79,18 @@ def cli() -> None:
     p.add_argument("--adopt-session", action="store_true",
                    help="Explicitly identify an older live FLE session without resetting it")
     args = p.parse_args()
+    if args.consolidated_observations:
+        args.profile_observations = True
+    if args.profile_observations or args.lead_time_supply or args.coverage_margin_lookahead:
+        args.campaign_diagnostics = True
+    if args.campaign_diagnostics and args.controller != "hierarchical":
+        p.error("--campaign-diagnostics requires --controller hierarchical")
+    if args.profile_observations and args.backend != "fle":
+        p.error("Observation profiling requires --backend fle")
+    if args.lead_time_supply and args.factory_scheduling != "ready-work":
+        p.error("--lead-time-supply requires --factory-scheduling ready-work")
+    if args.coverage_margin_lookahead and not args.lead_time_supply:
+        p.error("--coverage-margin-lookahead requires --lead-time-supply")
     if args.duration_hours is not None and (
         not 0 < args.duration_hours < float("inf")
     ):
@@ -184,6 +206,11 @@ def cli() -> None:
             furnace_output_buffers=args.furnace_output_buffers,
             furnace_input_belts=args.furnace_input_belts, mining_outposts=args.mining_outposts,
             ore_side_successors=args.ore_side_successors,
+            campaign_diagnostics=args.campaign_diagnostics,
+            profile_observations=args.profile_observations,
+            consolidated_observations=args.consolidated_observations,
+            lead_time_supply=args.lead_time_supply,
+            coverage_margin_lookahead=args.coverage_margin_lookahead,
         )
     with ExitStack() as cleanup:
         research = None
@@ -224,8 +251,16 @@ def cli() -> None:
             if args.mining_outposts:
                 from .outpost_controller import outpost_loop_type
                 loop_type = outpost_loop_type(loop_type)
-            loop = loop_type(make_backend(args.backend, resume=args.resume,
-                                                 adopt_session=args.adopt_session), jev=client,
+            if args.campaign_diagnostics:
+                from .campaign_controller import campaign_loop_type
+                loop_type = campaign_loop_type(loop_type)
+                options.update(lead_time_supply=args.lead_time_supply,
+                               coverage_margin_lookahead=args.coverage_margin_lookahead)
+            backend = make_backend(args.backend, resume=args.resume, adopt_session=args.adopt_session)
+            if args.backend == "fle" and args.profile_observations:
+                backend.profile_observations = True
+                backend.consolidated_observations = args.consolidated_observations
+            loop = loop_type(backend, jev=client,
                                     target=args.target, policy=args.policy, checkpoint=args.checkpoint,
                                     resume_controller=args.resume_controller,
                                     factory_scheduling=args.factory_scheduling, **options)

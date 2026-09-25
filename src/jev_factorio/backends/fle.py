@@ -44,12 +44,20 @@ class FleBackend:
         self._error = ""
         self._factory = None
         self._fair = None
+        self.profile_observations = False
+        self.consolidated_observations = False
+        self.last_observation_profile = None
+        self._observation_profile = None
 
     def enable_factory(self) -> Catalog:
         from .native_factory import NativeFactory
 
         if self._factory is None:
-            self._factory = NativeFactory(self)
+            if self.consolidated_observations:
+                from .observed_factory import ObservedFactory
+                self._factory = ObservedFactory(self)
+            else:
+                self._factory = NativeFactory(self)
         return self._factory.catalog
 
     def execute(self, action: str, parameters: dict) -> str:
@@ -180,9 +188,20 @@ class FleBackend:
     def _tools(self):
         if self._instance is None:
             raise RuntimeError("Start the FLE backend before using it")
-        return self._instance.namespace
+        tools = self._instance.namespace
+        if self._observation_profile is not None:
+            from ..observation import ProfiledTools
+            return ProfiledTools(tools, self._observation_profile)
+        return tools
 
     def observe(self) -> GameSnapshot:
+        if self.profile_observations or self.consolidated_observations:
+            from ..observation import profile_backend
+            with profile_backend(self):
+                return self._observe_legacy()
+        return self._observe_legacy()
+
+    def _observe_legacy(self) -> GameSnapshot:
         from fle.env import Prototype
 
         self._fair.call("observe")
@@ -193,13 +212,13 @@ class FleBackend:
             "session_id=storage.jev_session_id,"
             "position={agent.position.x,agent.position.y}}))"
         )
-        live = json.loads(raw)
+        live = self._observation_profile.decode(raw) if self._observation_profile else json.loads(raw)
         position = tuple(live["position"])
         inventory = dict(tools.inspect_inventory().items())
         nearby = {}
         alerts = [self._error] if self._error else []
         self._resources = {}
-        for name in ("coal", "iron-ore"):
+        for name in (() if self.consolidated_observations and self._factory else ("coal", "iron-ore")):
             try:
                 target = self.native_mine_target(name)
                 self._resources[name] = target

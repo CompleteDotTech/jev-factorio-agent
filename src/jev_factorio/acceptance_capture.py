@@ -23,7 +23,7 @@ RECORD_FIELDS = set('schema_version controller session_id world_kind target poli
     'capacity_evidence planning_diagnostics failure_budgets background_work background_schema background_job '
     'background_attempt capital_investment furnace_output_buffers furnace_input_belts mining_outposts '
     'process_id factory_scheduling goal history ore_side_successors buffer_evidence input_route_evidence mining_outpost_evidence successor_evidence '
-    'successor_projects acceptance_configuration'.split())
+    'successor_projects acceptance_configuration campaign_treatment'.split())
 STATE_FIELDS = set('tick session_id world_kind game_version inventory player_position nearby_resources '
                    'researched victory victory_source world_seed health'.split())
 FACTORY_FIELDS = set('tick entities produced consumed researched research research_progress receipts '

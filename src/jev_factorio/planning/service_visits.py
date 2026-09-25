@@ -23,6 +23,7 @@ def service_visit(planner, plan, *, max_steps: int = 3):
         raise ValueError('Invalid service visit budget')
     snapshot = planner.snapshot
     if ((plan.materials or {}).get('capital_investment')
+            or (plan.materials or {}).get('collection_only_lookahead')
             or planner.goal != 'rocket_launch' or len(plan.steps) != 1
             or plan.steps[0].action not in TRANSFER_ACTIONS
             or snapshot.factory.get('crafting_queue', 0)
@@ -49,15 +50,19 @@ def service_visit(planner, plan, *, max_steps: int = 3):
     def add(step):
         parameters = step.parameters or {}
         if step.action not in TRANSFER_ACTIONS or parameters.get('role') not in cell:
+            budget.rejections['outside_service_cell'] += 1
             return
         signature = step.action, parameters['role'], parameters['item']
         if signature in signatures or len(steps) >= max_steps:
+            budget.rejections['duplicate_or_step_budget'] += 1
             return
         costs = step.costs or {}
         if any(count > spendable.get(item, 0) for item, count in costs.items()):
+            budget.rejections['carried_stock_or_reservation'] += 1
             return
         # Fresh preconditions will still be rechecked by the real dispatcher.
         if not step.allowed(view) or step.satisfied(view):
+            budget.rejections['fresh_precondition_or_already_satisfied'] += 1
             return
         if steps and not budget.admit(step):
             return
@@ -129,6 +134,9 @@ def service_visit(planner, plan, *, max_steps: int = 3):
         if pickup and pickup.steps[0].action == 'factory_extract':
             add(pickup.steps[0])
     if len(steps) == 1:
+        if getattr(snapshot, '_campaign_diagnostics', False):
+            return replace(plan, materials={**(plan.materials or {}), 'service_visit': {
+                **budget.summary(), 'steps': 1, 'unit_numbers': [entities[role]['unit_number']]}})
         return plan
     identity = [{k: v for k, v in s.parameters.items() if k != 'receipt'}
                 | {'action': s.action} for s in steps]

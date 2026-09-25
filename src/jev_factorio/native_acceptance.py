@@ -54,6 +54,8 @@ def analyze(directory: Path) -> dict:
     checkpoint_read(directory / 'final-checkpoint.json', idle=False)
     metrics = measurements(rows)
     issues = []
+    if any(row.get('campaign_treatment') for row in rows):
+        issues.append('campaign_throughput_requires_separate_native_review')
     def reject(condition, reason):
         if condition: issues.append(reason)
     reject(preflight.get('query_sha256') != probe_source_sha256(), 'preflight_query_mismatch')

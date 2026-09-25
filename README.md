@@ -217,3 +217,13 @@ reuse, bounded timed fish acquisition/satellite fallback, reserved cargo loading
 and native guarded launch for unmodified base 2.0.77. Existing production and
 pending-action history are retained. Synthetic tests do not replace the native
 development-VM and production cutover gates.
+
+## Campaign throughput diagnostics and dev pilots
+
+[Campaign throughput](docs/CAMPAIGN_THROUGHPUT.md) implements the September 25
+progress analysis with opt-in observation profiling/consolidation, bounded
+lead-time science supply, progress alerts and conservative research lookahead.
+Controller and supervisor treatment flags remain explicit and default off.
+Offline reports separate useful science consumption from action counts; source
+integration and synthetic tests do not prove native improvement or authorize
+production cutover.

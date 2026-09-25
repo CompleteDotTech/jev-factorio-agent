@@ -59,8 +59,25 @@ class SupervisorConfig:
     furnace_input_belts: bool = False
     mining_outposts: bool = False
     ore_side_successors: bool = False
+    campaign_diagnostics: bool = False
+    profile_observations: bool = False
+    consolidated_observations: bool = False
+    lead_time_supply: bool = False
+    coverage_margin_lookahead: bool = False
 
     def validate(self) -> None:
+        for name in ("campaign_diagnostics", "profile_observations", "consolidated_observations",
+                     "lead_time_supply", "coverage_margin_lookahead"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError("Campaign options must be boolean")
+        if self.consolidated_observations:
+            self.profile_observations = True
+        if self.profile_observations or self.lead_time_supply or self.coverage_margin_lookahead:
+            self.campaign_diagnostics = True
+        if self.lead_time_supply and self.factory_scheduling != "ready-work":
+            raise ValueError("Lead-time supply requires ready-work scheduling")
+        if self.coverage_margin_lookahead and not self.lead_time_supply:
+            raise ValueError("Coverage-margin lookahead requires lead-time supply")
         if self.factory_scheduling not in {"serial", "ready-work"}:
             raise ValueError("Unknown factory scheduling mode")
         if (self.background_work or self.furnace_output_buffers or self.furnace_input_belts
@@ -284,6 +301,7 @@ class Supervisor:
         return checkpoint
 
     def initialize(self, *, record_only: bool = False) -> None:
+        self.config.validate()
         cutoff = self.config.started_at + self.config.duration_hours * 3600
         identity = {"session_id": self.config.session_id,
                     "checkpoint": str(self.config.checkpoint.resolve()),
@@ -309,6 +327,10 @@ class Supervisor:
             configuration['mining_outposts'] = True
         if self.config.ore_side_successors:
             configuration['ore_side_successors'] = True
+        for name in ("campaign_diagnostics", "profile_observations", "consolidated_observations",
+                     "lead_time_supply", "coverage_margin_lookahead"):
+            if getattr(self.config, name):
+                configuration[name] = True
         if self.state.get("gameplay_configuration", configuration) != configuration:
             raise ValueError("Existing gameplay configuration cannot be changed")
         self.save(gameplay_configuration=configuration)
@@ -414,7 +436,9 @@ class Supervisor:
             "--log-file", str(self.config.state_dir / "gameplay.jsonl"),
             "--factory-scheduling", self.config.factory_scheduling,
         ]
-        for name in ("background_work", "furnace_output_buffers", "furnace_input_belts", "mining_outposts", "ore_side_successors"):
+        for name in ("background_work", "furnace_output_buffers", "furnace_input_belts", "mining_outposts", "ore_side_successors",
+                     "campaign_diagnostics", "profile_observations", "consolidated_observations",
+                     "lead_time_supply", "coverage_margin_lookahead"):
             if getattr(self.config, name):
                 command.append("--" + name.replace("_", "-"))
         if self.config.research_dir is not None:
@@ -474,6 +498,7 @@ Incident: {(self.state.get('incident') or {}).get('incident_id')}
 Repair attempt: {self.state['attempt']}
 Controller checkpoint: {self.config.checkpoint}
 Production configuration: scheduling={self.config.factory_scheduling}, background_work={self.config.background_work}, furnace_output_buffers={self.config.furnace_output_buffers}, furnace_input_belts={self.config.furnace_input_belts}, mining_outposts={self.config.mining_outposts}, ore_side_successors={self.config.ore_side_successors}
+Campaign treatment: diagnostics={self.config.campaign_diagnostics}, profile_observations={self.config.profile_observations}, consolidated_observations={self.config.consolidated_observations}, lead_time_supply={self.config.lead_time_supply}, coverage_margin_lookahead={self.config.coverage_margin_lookahead}
 Supervisor audit/log directory: {self.config.state_dir}
 Read {self.config.state_dir / 'OPERATIONS.md'} first if present for native session
 and repository acceptance details.
@@ -892,6 +917,9 @@ def cli() -> None:
     parser.add_argument("--furnace-input-belts", action="store_true")
     parser.add_argument("--mining-outposts", action="store_true")
     parser.add_argument("--ore-side-successors", action="store_true")
+    for name in ("campaign-diagnostics", "profile-observations", "consolidated-observations",
+                 "lead-time-supply", "coverage-margin-lookahead"):
+        parser.add_argument("--" + name, action="store_true")
     arguments = vars(parser.parse_args())
     try:
         manual_path = arguments.pop("record_manual_intervention")
