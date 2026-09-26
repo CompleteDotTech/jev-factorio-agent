@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import signal
 import subprocess
 import sys
 import sysconfig
@@ -117,6 +118,22 @@ def run(cwd: Path, state_dir: Path, ttl: int = MAX_TTL) -> str:
         os.umask(previous_mask)
 
 
+def execute_suite(command: list[str], *, timeout=3600, **kwargs):
+    """Own a dedicated test group; failed/aborted waits cannot leak its children."""
+    process = subprocess.Popen(command, start_new_session=True, **kwargs)
+    try:
+        return subprocess.CompletedProcess(command, process.wait(timeout=timeout))
+    except BaseException:
+        # The unreaped group leader is ours; never target any gameplay process.
+        if process.returncode is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        process.wait()
+        raise
+
+
 def _run(cwd: Path, cache: Path, ttl: int) -> str:
     output = cache / ("pending-" + uuid.uuid4().hex)
     output.mkdir(mode=0o700)
@@ -132,7 +149,7 @@ def _run(cwd: Path, cache: Path, ttl: int) -> str:
         raise ValueError("Tests would import a different source checkout")
     report, log = output / "junit.xml", output / "pytest.log"
     with log.open("xb") as stream:
-        result = subprocess.run([sys.executable, *COMMAND, "--junitxml=" + str(report)], cwd=cwd,
+        result = execute_suite([sys.executable, *COMMAND, "--junitxml=" + str(report)], cwd=cwd,
                                 env=environment, stdin=subprocess.DEVNULL, stdout=stream,
                                 stderr=subprocess.STDOUT, timeout=3600)
         stream.flush()

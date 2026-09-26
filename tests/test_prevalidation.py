@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -29,7 +30,7 @@ def runner(tmp_path, monkeypatch):
             '<testsuites><testsuite tests="4" skipped="1" failures="0" errors="0"/></testsuites>')
         kwargs["stdout"].write(b"3 passed, 1 skipped")
         return SimpleNamespace(returncode=0)
-    monkeypatch.setattr(p.subprocess, "run", subprocess_run)
+    monkeypatch.setattr(p, "execute_suite", subprocess_run)
     return cwd, state, identity, calls
 
 
@@ -67,7 +68,7 @@ def test_partial_and_path_reference_rejected(runner):
 
 def test_failed_suite_does_not_publish(runner, monkeypatch):
     cwd, state, _, _ = runner
-    monkeypatch.setattr(p.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=1))
+    monkeypatch.setattr(p, "execute_suite", lambda *a, **kw: SimpleNamespace(returncode=1))
     with pytest.raises(ValueError):
         p.run(cwd, state)
     assert all(path.name == "run.lock" or path.name.startswith("pending-")
@@ -76,12 +77,12 @@ def test_failed_suite_does_not_publish(runner, monkeypatch):
 
 def test_source_change_during_suite_does_not_publish(runner, monkeypatch):
     cwd, state, identity, _ = runner
-    original = p.subprocess.run
+    original = p.execute_suite
     def changed(*a, **kw):
         result = original(*a, **kw)
         identity["commit"] = "c" * 40
         return result
-    monkeypatch.setattr(p.subprocess, "run", changed)
+    monkeypatch.setattr(p, "execute_suite", changed)
     with pytest.raises(ValueError):
         p.run(cwd, state)
 
@@ -164,3 +165,19 @@ def test_nonpassing_junit_rejected(tmp_path, attributes):
     report.write_text(f"<testsuites><testsuite {attributes}/></testsuites>")
     with pytest.raises(ValueError):
         p.junit(report)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group cleanup")
+def test_suite_timeout_kills_only_owned_group_including_child(tmp_path):
+    pidfile = tmp_path / "child.pid"
+    script = ("import subprocess,sys,time; from pathlib import Path; "
+              "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+              "Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(60)")
+    with pytest.raises(subprocess.TimeoutExpired):
+        p.execute_suite([sys.executable, "-c", script, str(pidfile)], timeout=1,
+                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL)
+    child_pid = int(pidfile.read_text())
+    status = Path(f"/proc/{child_pid}/stat")
+    # A briefly unreaped orphan zombie cannot execute or consume test resources.
+    assert not status.exists() or status.read_text().rsplit(")", 1)[1].split()[0] == "Z"
