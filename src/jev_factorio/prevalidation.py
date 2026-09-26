@@ -19,7 +19,8 @@ import xml.etree.ElementTree as ET
 
 MAX_TTL = 3600
 COMMAND = ["-m", "pytest", "tests/"]
-ENVIRONMENT = ("PATH", "HOME", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL")
+ENVIRONMENT = ("PATH", "HOME", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL",
+               "CHROMIUM_PATH", "PLAYWRIGHT_BROWSERS_PATH")
 
 
 def environment_values() -> dict:
@@ -39,14 +40,17 @@ def canonical(value: dict) -> bytes:
 
 
 def fingerprint(cwd: Path) -> dict:
+    deadline = time.monotonic() + 300
     def git(*args):
-        return subprocess.check_output(["git", *args], cwd=cwd, text=True).strip()
+        return subprocess.check_output(["git", *args], cwd=cwd, text=True, timeout=30).strip()
     if git("status", "--porcelain", "--untracked-files=all"):
         raise ValueError("Prevalidation requires a clean checkout")
     packages = []
     for distribution in importlib.metadata.distributions():
         files = []
         for entry in distribution.files or []:
+            if time.monotonic() > deadline:
+                raise TimeoutError("Runtime fingerprint exceeded five minutes")
             path = Path(distribution.locate_file(entry))
             if path.is_file() and path.suffix not in {".pyc", ".pyo"}:
                 metadata = path.stat()
@@ -123,7 +127,7 @@ def _run(cwd: Path, cache: Path, ttl: int) -> str:
     temporary.mkdir(mode=0o700)
     environment.update(PYTHONPATH=str(cwd / "src"), TMPDIR=str(temporary), TEMP=str(temporary), TMP=str(temporary))
     imported = subprocess.check_output([sys.executable, "-c",
-        "import jev_factorio; print(jev_factorio.__file__)"], cwd=cwd, env=environment, text=True).strip()
+        "import jev_factorio; print(jev_factorio.__file__)"], cwd=cwd, env=environment, text=True, timeout=30).strip()
     if Path(imported).resolve() != (cwd / "src/jev_factorio/__init__.py").resolve():
         raise ValueError("Tests would import a different source checkout")
     report, log = output / "junit.xml", output / "pytest.log"
