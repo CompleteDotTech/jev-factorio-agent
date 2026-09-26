@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import time
+from copy import deepcopy
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from uuid import uuid4
@@ -58,12 +59,20 @@ class ProviderCircuit:
         self.state = {"schema": 1, "identity": self.identity, "phase": "healthy",
                       "category": None, "attempts": 0, "next_probe_at": 0,
                       "incident_id": None, "first_failure_at": None,
-                      "last_recovery_at": None, "previous_incident": None}
+                      "last_recovery_at": None, "previous_incident": None,
+                      "budget_category": None, "budget_limit": None,
+                      "in_flight": None}
         if path is not None:
             stored = read_json(path)
             if stored is not None:
                 self._validate(stored)
                 self.state = stored
+                # Schema-1 sidecars created before request reservations remain
+                # readable. Their persisted failure category seeds the budget.
+                self.state.setdefault("in_flight", None)
+                self.state.setdefault("budget_category", self.state.get("category"))
+                self.state.setdefault("budget_limit", self._limit(self.state["category"])
+                                      if self.state.get("category") else None)
 
     def __getattr__(self, name):
         return getattr(self.client, name)
@@ -75,27 +84,86 @@ class ProviderCircuit:
                 or type(value.get("next_probe_at")) not in (int, float)
                 or not math.isfinite(value["next_probe_at"])
                 or value.get("category") not in {None, "application_schema", "service_network",
-                    "authentication_authorization", "account_quota", "rate_limit"}):
+                    "authentication_authorization", "account_quota", "rate_limit", "unknown_outcome"}
+                or value.get("budget_category") not in {None, "application_schema", "service_network",
+                    "authentication_authorization", "account_quota", "rate_limit", "unknown_outcome"}
+                or (value.get("budget_limit") is not None
+                    and (type(value["budget_limit"]) is not int or value["budget_limit"] < 1))):
             raise SafetyStateError("Provider circuit identity or schema differs")
+        flight = value.get("in_flight")
+        if flight is not None and (
+                not isinstance(flight, dict)
+                or not isinstance(flight.get("request_id"), str)
+                or len(flight["request_id"]) != 36
+                or any(c not in "0123456789abcdef-" for c in flight["request_id"])
+                or type(flight.get("started_at")) not in (int, float)
+                or not math.isfinite(flight["started_at"])
+                or type(flight.get("healthy_start")) is not bool):
+            raise SafetyStateError("Provider in-flight reservation is malformed")
 
     def _save(self):
         if self.path is not None:
             atomic_json(self.path, self.state)
 
+    def _reconcile_in_flight(self, now):
+        """Turn a stale reservation into a bounded unknown outcome, never a guessed status."""
+        flight = self.state.get("in_flight")
+        if flight is None:
+            return False
+        reservation = deepcopy(self.state)
+        if flight["healthy_start"]:
+            # No incident existed before this request. Conservatively charge one
+            # unknown request, but do not claim a known provider failure/recovery.
+            self.state.update(incident_id=str(uuid4()),
+                              first_failure_at=flight["started_at"], attempts=1,
+                              category="unknown_outcome", budget_category="unknown_outcome",
+                              budget_limit=1, phase="exhausted",
+                              next_probe_at=now + self._delay("unknown_outcome", 1))
+        else:
+            # The attempt was durably charged before sending. Keep the incident's
+            # known budget category even though this particular result is unknown.
+            budget = self.state.get("budget_category") or self.state.get("category")
+            limit = self.state.get("budget_limit") or self._limit(budget)
+            self.state.update(category="unknown_outcome", budget_category=budget,
+                              budget_limit=limit,
+                              phase="exhausted" if self.state["attempts"] >= limit else "cooldown")
+        self.state["in_flight"] = None
+        # If persistence fails, retain the reservation in memory too; no next call
+        # may pass the recovery gate based on an unpersisted reconciliation.
+        try:
+            self._save()
+        except BaseException:
+            self.state = reservation
+            raise
+        return True
+
     def evaluate(self, state: dict, questions: dict) -> dict:
         self.client.last_usage = self.client.last_model = None
         now = self.clock()
+        if self._reconcile_in_flight(now):
+            raise ProviderBlocked(self.state, called=False)
         self._authorization()
         if self.state["phase"] == "exhausted" or now < self.state["next_probe_at"]:
             raise ProviderBlocked(self.state, called=False)
-        # Reserve this probe durably before the HTTP call. A process crash cannot
-        # reset the attempt budget or immediately repeat a denied request.
-        if self.state["phase"] != "healthy":
+        healthy_start = self.state["phase"] == "healthy"
+        if not healthy_start:
+            # Charge unhealthy probes before HTTP. The original incident budget
+            # remains stable even if a later result has another category.
             self.state["attempts"] += 1
-            maximum = self._limit(self.state["category"])
+            budget = self.state.get("budget_category") or self.state.get("category")
+            maximum = self.state.get("budget_limit") or self._limit(budget)
             self.state["phase"] = "exhausted" if self.state["attempts"] >= maximum else "cooldown"
-            self.state["next_probe_at"] = now + self._delay(self.state["category"], self.state["attempts"])
+            self.state["budget_category"] = budget
+            self.state["budget_limit"] = maximum
+            self.state["next_probe_at"] = now + self._delay(budget, self.state["attempts"])
+        self.state["in_flight"] = {"request_id": str(uuid4()), "started_at": now,
+                                   "healthy_start": healthy_start}
+        reservation = deepcopy(self.state)
+        try:
             self._save()
+        except BaseException:
+            self.state = reservation
+            raise
         try:
             answers = self.client.evaluate(state, questions)
             from .judgments import InvalidJudgment, validate_answers
@@ -107,10 +175,20 @@ class ProviderCircuit:
             kind = category(error)
             if kind is None:
                 raise
-            if self.state["phase"] == "healthy":
-                self.state.update(incident_id=str(uuid4()), first_failure_at=now, attempts=1)
-            attempts = self.state["attempts"]
-            delay = self._delay(kind, attempts)
+            if healthy_start:
+                attempts = 1
+                budget_limit = self._limit(kind)
+                budget_category = kind
+                self.state.update(incident_id=str(uuid4()), first_failure_at=now,
+                                  attempts=attempts, budget_category=budget_category,
+                                  budget_limit=budget_limit)
+            else:
+                attempts = self.state["attempts"]
+                budget_category = self.state.get("budget_category") or kind
+                budget_limit = min(self.state.get("budget_limit") or self._limit(budget_category),
+                                   self._limit(kind))
+                self.state.update(budget_category=budget_category, budget_limit=budget_limit)
+            delay = self._delay(budget_category, attempts)
             response = error.response if isinstance(error, requests.HTTPError) else None
             if response is not None:
                 try:
@@ -123,17 +201,30 @@ class ProviderCircuit:
                         delay = max(delay, min(3600, max(0, retry_at - now)))
                     except (ValueError, TypeError, OverflowError):
                         pass
-            self.state.update(category=kind, phase="exhausted" if attempts >= self._limit(kind) else "cooldown",
-                              next_probe_at=now + delay)
+            self.state.update(category=kind,
+                              phase="exhausted" if attempts >= budget_limit else "cooldown",
+                              next_probe_at=now + delay, in_flight=None)
             self.client.last_usage = self.client.last_model = None
-            self._save()
+            try:
+                self._save()
+            except BaseException:
+                self.state = reservation
+                raise
             raise ProviderBlocked(self.state, called=True) from None
-        if self.state["phase"] != "healthy":
+        if not healthy_start:
             self.state.update(previous_incident={key: self.state[key] for key in
                               ("incident_id", "category", "attempts", "first_failure_at")},
                               phase="healthy", category=None, attempts=0, next_probe_at=0,
-                              last_recovery_at=now, incident_id=None, first_failure_at=None)
+                              last_recovery_at=now, incident_id=None, first_failure_at=None,
+                              budget_category=None, budget_limit=None, in_flight=None)
+        else:
+            # An ordinary healthy success is not recovery telemetry.
+            self.state["in_flight"] = None
+        try:
             self._save()
+        except BaseException:
+            self.state = reservation
+            raise
         return answers
 
     def _authorization(self):
@@ -158,12 +249,13 @@ class ProviderCircuit:
         if existing is None:
             atomic_json(history_path, history)
         self.state = {**self.state, "phase": "cooldown", "attempts": 0,
-                      "next_probe_at": 0, "authorization_id": request_id}
+                      "next_probe_at": 0, "authorization_id": request_id,
+                      "budget_category": None, "budget_limit": None, "in_flight": None}
         self._save()
 
     @staticmethod
     def _limit(kind):
-        return 1 if kind == "application_schema" else 3 if kind in {
+        return 1 if kind in {"application_schema", "unknown_outcome"} else 3 if kind in {
             "authentication_authorization", "account_quota"} else 8
 
     @staticmethod

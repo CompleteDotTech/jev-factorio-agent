@@ -108,3 +108,24 @@ Exit 2 means deliberately blocked; `RestartPreventExitStatus=2` must prevent the
 Rollback triggers include wrong session/character/deadline, unverifiable receipt, duplicate effect, broken trace/checkpoint durability, schema mismatch, failed service identity/publication gate, or lost stream/audio invariants. Keep maintenance displayed. Do not automatically restart an older revision across an active/ambiguous action. First reach or evidence a safe boundary, confirm old-version checkpoint compatibility (including new safety sidecars), then restore only the reviewed source/environment and authorized deployment pointer while preserving current gameplay state. If rollback would destroy or reinterpret ownership evidence, stop and escalate instead.
 
 Finish with exact merged/deployed SHA, actual hosted checks and independent review, measured downtime/detection/recovery/blocked durations, and fresh action/OBS evidence. None of those production results is supplied by this offline package.
+
+## Integration review hardening
+
+The integration review added shared operator locking and pointer binding around
+maintenance stop/release, including refusal to release an unresolved stop.
+Mining approaches now retain the actual native entity, actor, surface, position,
+and a single-use token across detours; harvesting cannot silently mine a
+replacement resource at the same coordinate. Dashboard event storage is checked
+both before live attachment and during runtime admission.
+
+Every provider request now persists an in-flight reservation before dispatch,
+including the first request while healthy. A restart with an unresolved first
+request records an exhausted `unknown_outcome` incident, not an invented HTTP
+status. Unresolved retries retain their charged attempt and original budget;
+later error categories cannot widen that budget. Result-write failures preserve
+the reservation, and ordinary successful calls do not report a recovery.
+
+When running checkpointed tests inside a container with a small tmpfs, set
+TMPDIR to a test-only directory on a filesystem with at least the configured
+storage reserve. Do not lower the production reserve merely to make fixtures
+advance. Production's world and campaign do not participate in these tests.

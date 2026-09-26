@@ -1,5 +1,6 @@
 """Actual Lua execution with synthetic engine callbacks, not a native Factorio pilot."""
 from test_fair_actions import fair_runtime
+import pytest
 
 
 def test_both_detour_legs_are_checked_before_any_walking(fair_runtime):
@@ -109,3 +110,36 @@ def test_python_wait_distinguishes_pre_walk_rejection_from_partial_movement():
         with pytest.raises(RuntimeError) as error:
             fair.wait()
         assert (type(error.value) is NativePathNotFound) is (not started)
+
+@pytest.mark.parametrize("change", ["replacement", "surface", "actor", "position", "invalid"])
+def test_mining_approach_identity_survives_walk_without_retargeting(fair_runtime, change):
+    fair_runtime.globals().change = change
+    fair_runtime.execute("""
+        local observed = storage.fair.mine_approach(resource.position, "coal")
+        local old = resource
+        storage.fair.begin_move{x=1,y=0}
+        storage.fair.stop()
+        if change == "replacement" then
+            resource = {valid=true,minable=true,name="coal",surface={index=1},
+                        position={x=2,y=0}}
+        elseif change == "surface" then surface.index=2
+        elseif change == "actor" then character.unit_number=10
+        elseif change == "position" then resource.position.x=2.1
+        elseif change == "invalid" then old.valid=false end
+        local ok = pcall(storage.fair.begin_mine, {x=2,y=0}, "coal", 1, observed.identity)
+        assert(not ok)
+        assert(not player.mining_state.mining and quantities.coal==0)
+    """)
+
+
+def test_mining_approach_identity_is_single_use_after_walk(fair_runtime):
+    fair_runtime.execute("""
+        local observed = storage.fair.mine_approach(resource.position, "coal")
+        storage.fair.begin_move{x=1,y=0}
+        storage.fair.stop()
+        storage.fair.begin_mine({x=2,y=0}, "coal", 1, observed.identity)
+        assert(player.mining_state.mining)
+        storage.fair.stop()
+        assert(not pcall(storage.fair.begin_mine, {x=2,y=0}, "coal", 1, observed.identity))
+        assert(not player.mining_state.mining)
+    """)

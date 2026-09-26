@@ -197,7 +197,16 @@ end
 fair.mine_approach = function(position, item)
     local player = fair.actor()
     local entity = mining_entity(player, position, item)
-    if player.can_reach_entity(entity) then return {reachable = true} end
+    -- Resource entities may not have unit numbers. Retain the actual LuaEntity
+    -- across the entire (possibly multi-leg) walk instead of resolving a
+    -- replacement at the same coordinate as permission to mine it.
+    fair.mining_token = (fair.mining_token or 0) + 1
+    fair.mining_target = {token = fair.mining_token, entity = entity, item = item,
+        actor = player.character.unit_number, surface = player.surface.index,
+        position = {x = entity.position.x, y = entity.position.y}}
+    if player.can_reach_entity(entity) then
+        return {reachable = true, identity = fair.mining_token}
+    end
     local horizontal = player.position.x - entity.position.x
     local vertical = player.position.y - entity.position.y
     local distance = math.sqrt(horizontal * horizontal + vertical * vertical)
@@ -208,13 +217,24 @@ fair.mine_approach = function(position, item)
     }
     local approach = player.surface.find_non_colliding_position("character", target, 2, 0.25)
     assert(approach, "No collision-free mining approach")
-    return {reachable = false, position = approach}
+    return {reachable = false, position = approach, identity = fair.mining_token}
 end
 
-fair.begin_mine = function(position, item, quantity)
+fair.begin_mine = function(position, item, quantity, expected_identity)
     local player = fair.actor()
     fair.stop()
     local entity = mining_entity(player, position, item)
+    if expected_identity ~= nil then
+        local observed = fair.mining_target
+        assert(observed and observed.token == expected_identity and observed.entity.valid
+            and observed.entity == entity and observed.item == item
+            and observed.actor == player.character.unit_number
+            and observed.surface == player.surface.index
+            and entity.surface.index == observed.surface
+            and entity.position.x == observed.position.x and entity.position.y == observed.position.y,
+            "Mining target identity changed during approach")
+        fair.mining_target = nil
+    end
     assert(player.can_reach_entity(entity), "Mining target is outside normal reach")
     player.update_selected_entity(entity.position)
     assert(player.selected == entity, "Mining target is obscured by another entity")

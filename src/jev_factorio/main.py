@@ -263,6 +263,8 @@ def cli() -> None:
                     output_roots.append(Path(args.log_file).parent)
                 if run_dir:
                     output_roots.append(run_dir)
+                if args.dashboard_events:
+                    output_roots.append(Path(args.dashboard_events).parent)
                 if not storage_ready(output_roots):
                     p.error("Storage reserve unavailable; live backend was not attached")
             backend = make_backend(args.backend, resume=args.resume, adopt_session=args.adopt_session)
@@ -276,6 +278,8 @@ def cli() -> None:
         if writer is not None:
             from .dashboard import attach
             attach(loop, writer)
+            if getattr(loop, "_safety", None) is not None:
+                loop._safety.outputs = (*loop._safety.outputs, Path(args.dashboard_events).parent)
         if research is not None:
             memory = getattr(loop, "memory", None)
             research.emit("controller_initialized", {

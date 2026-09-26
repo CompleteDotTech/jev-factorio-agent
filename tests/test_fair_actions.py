@@ -37,6 +37,7 @@ def fair_runtime():
         }
         quantities = {coal = 0, pipe = 4}
         surface = {
+            index = 1,
             request_path = function(parameters)
                 requested_path = parameters
                 return 17
@@ -584,7 +585,7 @@ def test_harvest_reacquires_live_target_after_a_partial_native_yield(monkeypatch
         if function == "next_mine_target":
             return {"position": next(targets)}
         if function == "mine_approach":
-            return {"reachable": reachable, "position": arguments[0]}
+            return {"reachable": reachable, "position": arguments[0], "identity": 71}
         if function == "begin_mine":
             return {}
         raise AssertionError(function)
@@ -598,10 +599,10 @@ def test_harvest_reacquires_live_target_after_a_partial_native_yield(monkeypatch
     assert fair.harvest("wood", Position(x=-999, y=-999), 2) == 2
     assert calls == [
         ("mine_approach", ({"x": -999.0, "y": -999.0}, "wood")),
-        ("begin_mine", ({"x": -999.0, "y": -999.0}, "wood", 2)),
+        ("begin_mine", ({"x": -999.0, "y": -999.0}, "wood", 2, 71)),
         ("next_mine_target", ("wood", 64)),
         ("mine_approach", ({"x": 3, "y": 4}, "wood")),
-        ("begin_mine", ({"x": 3, "y": 4}, "wood", 1)),
+        ("begin_mine", ({"x": 3, "y": 4}, "wood", 1, 71)),
     ]
     assert approaches == ([] if reachable else [
         Position(x=-999.0, y=-999.0), Position(x=3, y=4),

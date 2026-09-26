@@ -155,3 +155,86 @@ def test_controller_recovers_without_deterministic_fallback_on_denial(tmp_path, 
     clock.now += 60
     assert loop.step()["action"] != "observe"
     assert backend.actions and loop.jev.state["phase"] == "healthy"
+
+
+def test_first_request_crash_is_not_retried_after_restart(tmp_path):
+    client = Client(SystemExit("crash after dispatch")); clock = Clock()
+    path = tmp_path / "provider.json"
+    with pytest.raises(SystemExit):
+        ProviderCircuit(client, path, clock=clock).evaluate({}, QUESTIONS)
+    assert json.loads(path.read_text())["in_flight"]["healthy_start"]
+    for _ in range(4):
+        clock.now += 4000
+        with pytest.raises(ProviderBlocked) as result:
+            ProviderCircuit(client, path, clock=clock).evaluate({}, QUESTIONS)
+        assert not result.value.called
+        assert result.value.state["category"] == "unknown_outcome"
+        assert result.value.state["attempts"] == 1
+        assert result.value.state["last_recovery_at"] is None
+    assert client.calls == 1
+
+
+def test_first_reservation_write_failure_never_calls_provider(tmp_path, monkeypatch):
+    client = Client(); circuit = ProviderCircuit(client, tmp_path / "provider.json")
+    monkeypatch.setattr(circuit, "_save", lambda: (_ for _ in ()).throw(OSError("full")))
+    with pytest.raises(OSError): circuit.evaluate({}, QUESTIONS)
+    assert client.calls == 0
+
+
+@pytest.mark.parametrize("error", [None, http_error(403)])
+def test_result_write_failure_preserves_durable_reservation(tmp_path, monkeypatch, error):
+    client = Client(error); path = tmp_path / "provider.json"
+    circuit = ProviderCircuit(client, path); save = circuit._save
+    def fail_result():
+        if circuit.state["in_flight"] is None:
+            raise OSError("full")
+        save()
+    monkeypatch.setattr(circuit, "_save", fail_result)
+    with pytest.raises(OSError): circuit.evaluate({}, QUESTIONS)
+    assert circuit.state["in_flight"] == json.loads(path.read_text())["in_flight"]
+    with pytest.raises(ProviderBlocked) as result:
+        ProviderCircuit(client, path).evaluate({}, QUESTIONS)
+    assert result.value.state["category"] == "unknown_outcome"
+    assert result.value.state["budget_limit"] == 1
+    assert client.calls == 1
+
+
+def test_known_denial_retry_crash_cannot_widen_budget(tmp_path):
+    clock = Clock(); client = Client(http_error(403)); path = tmp_path / "provider.json"
+    circuit = ProviderCircuit(client, path, clock=clock)
+    with pytest.raises(ProviderBlocked): circuit.evaluate({}, QUESTIONS)
+    incident = circuit.state["incident_id"]
+    client.error = SystemExit("crash"); clock.now += 4000
+    with pytest.raises(SystemExit): circuit.evaluate({}, QUESTIONS)
+    circuit = ProviderCircuit(client, path, clock=clock)
+    with pytest.raises(ProviderBlocked): circuit.evaluate({}, QUESTIONS)
+    assert circuit.state["incident_id"] == incident
+    assert circuit.state["attempts"] == 2
+    assert circuit.state["budget_limit"] == 3
+    assert circuit.state["category"] == "unknown_outcome"
+    client.error = http_error(503); clock.now += 4000
+    with pytest.raises(ProviderBlocked): circuit.evaluate({}, QUESTIONS)
+    assert circuit.state["phase"] == "exhausted"
+    assert circuit.state["budget_limit"] == 3
+    with pytest.raises(ProviderBlocked):
+        ProviderCircuit(client, path, clock=clock).evaluate({}, QUESTIONS)
+    assert client.calls == 3
+
+
+def test_reconciliation_write_failure_restores_entire_reservation(tmp_path, monkeypatch):
+    client = Client(SystemExit("crash")); path = tmp_path / "provider.json"
+    circuit = ProviderCircuit(client, path)
+    with pytest.raises(SystemExit): circuit.evaluate({}, QUESTIONS)
+    before = deepcopy(circuit.state)
+    monkeypatch.setattr(circuit, "_save", lambda: (_ for _ in ()).throw(OSError("full")))
+    with pytest.raises(OSError): circuit.evaluate({}, QUESTIONS)
+    assert circuit.state == before == json.loads(path.read_text())
+    assert client.calls == 1
+
+
+def test_healthy_success_clears_reservation_without_recovery_telemetry(tmp_path):
+    circuit = ProviderCircuit(Client(), tmp_path / "provider.json")
+    assert circuit.evaluate({}, QUESTIONS)
+    stored = json.loads(circuit.path.read_text())
+    assert stored["phase"] == "healthy" and stored["in_flight"] is None
+    assert stored["last_recovery_at"] is None and stored["previous_incident"] is None

@@ -216,3 +216,38 @@ def test_low_inodes_are_storage_pressure(monkeypatch, tmp_path):
     monkeypatch.setattr("jev_factorio.operational_safety.storage_sample", lambda p:
         {"free_bytes": 10**12, "total_bytes": 10**13, "free_inodes": 0, "total_inodes": 100})
     assert not storage_ready([tmp_path])
+
+def test_dashboard_filesystem_is_checked_before_live_attachment(tmp_path, monkeypatch):
+    import sys
+    from jev_factorio import main, operational_safety
+    dashboard = tmp_path / "separate-volume" / "events.jsonl"
+    seen = []
+    def ready(paths, **kwargs):
+        seen.append(tuple(paths))
+        return dashboard.parent not in paths
+    monkeypatch.setattr(operational_safety, "storage_ready", ready)
+    monkeypatch.setattr(main, "make_backend", lambda *a, **k: pytest.fail("Attached before storage guard"))
+    monkeypatch.setattr(sys, "argv", ["jev-factorio", "--controller", "hierarchical",
+        "--backend", "fle", "--policy", "deterministic", "--tick-seconds", "1", "--target", "bootstrap_mining",
+        "--checkpoint", str(tmp_path / "checkpoint.json"), "--dashboard-events", str(dashboard)])
+    with pytest.raises(SystemExit) as stopped:
+        main.cli()
+    assert stopped.value.code == 2
+    assert seen and dashboard.parent in seen[-1]
+
+
+def test_dashboard_filesystem_remains_in_runtime_admission(tmp_path, monkeypatch):
+    import sys
+    from jev_factorio import main, operational_safety
+    dashboard = tmp_path / "separate-volume" / "events.jsonl"
+    seen = []
+    def ready(paths, **kwargs):
+        seen.append(tuple(paths))
+        return True
+    monkeypatch.setattr(operational_safety, "storage_ready", ready)
+    monkeypatch.setattr(sys, "argv", ["jev-factorio", "--controller", "hierarchical",
+        "--backend", "mock", "--mock-model", "--target", "bootstrap_mining",
+        "--steps", "1", "--tick-seconds", "0",
+        "--checkpoint", str(tmp_path / "checkpoint.json"), "--dashboard-events", str(dashboard)])
+    main.cli()
+    assert seen and all(dashboard.parent in paths for paths in seen)
