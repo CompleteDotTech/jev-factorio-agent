@@ -649,3 +649,116 @@ def test_stale_offer_for_existing_producer_keeps_ordinary_work():
     assert loop.memory.capital_investment is None
     with pytest.raises(ValueError, match='Cannot start capital commitment'):
         capital_controller.commit(loop, stale, state)
+
+
+def research_catalog():
+    data, state = scenario()
+    state.researched = list(state.researched or []) + ['unlock-test']
+    data.technologies['unlock-test'] = {'effects': [{'type': 'unlock-recipe', 'recipe': MACHINE}]}
+    data.recipes[MACHINE]['enabled'] = False
+    spec = deepcopy(offer(data, state).materials[capital.MARKER]['spec'])
+    return data, state, spec
+
+
+def legacy_spec(data, spec):
+    value = deepcopy(spec)
+    value['schema'] = 1
+    value['catalog_sha256'] = capital.catalog_digest(data, value['recipe'], value['machine'], schema=1)
+    value['key'] = capital.key_for(value)
+    return value
+
+
+def test_research_unlock_refresh_preserves_structural_spec_and_capabilities():
+    data, state, spec = research_catalog()
+    assert spec['schema'] == 2
+    before = deepcopy(spec)
+    data.recipes[MACHINE]['enabled'] = True
+    capital.validate_spec(spec, data, state.researched)
+    assert spec == before
+    data.recipes[MACHINE]['enabled'] = False
+    with pytest.raises(ValueError, match='capability changed'):
+        capital.validate_spec(spec, data, [])
+
+
+def test_legacy_research_refresh_keeps_exact_checkpoint_identity():
+    data, state, spec = research_catalog()
+    saved = legacy_spec(data, spec)
+    before = deepcopy(saved)
+    data.recipes[MACHINE]['enabled'] = True
+    graph_before = deepcopy(data.recipes)
+    capital.validate_spec(saved, data, state.researched)
+    assert saved == before and data.recipes == graph_before
+    with pytest.raises(ValueError, match='capability changed'):
+        capital.validate_spec(saved, data, [])  # No observed research authorizes reconstruction.
+
+
+@pytest.mark.parametrize('schema', [1, 2])
+@pytest.mark.parametrize('change', ['ingredients', 'energy', 'hidden', 'machine_speed', 'hand_categories', 'version'])
+def test_research_compatibility_never_ignores_structural_change(schema, change):
+    data, state, spec = research_catalog()
+    if schema == 1:
+        spec = legacy_spec(data, spec)
+    data.recipes[MACHINE]['enabled'] = True
+    if change == 'ingredients':
+        data.recipes[MACHINE]['ingredients'][0]['amount'] += 1
+    elif change == 'energy':
+        data.recipes[MACHINE]['energy'] += 1
+    elif change == 'hidden':
+        data.recipes[MACHINE]['hidden'] = True
+    elif change == 'machine_speed':
+        data.machines[MACHINE]['speed'] += 1
+    elif change == 'hand_categories':
+        data.hand_categories['crafting'] = False
+    else:
+        data = replace(data, version='2.0.99')
+    with pytest.raises(ValueError, match='capability changed'):
+        capital.validate_spec(spec, data, state.researched)
+
+
+def test_legacy_reconstruction_budget_fails_closed_without_mutation():
+    data, state, spec = research_catalog()
+    for index in range(8):
+        name = f'dependency-{index}'
+        data.recipes[name] = recipe(name, {})
+        data.recipes[name]['enabled'] = True
+        data.recipes[MACHINE]['ingredients'].append({'name': name, 'amount': 1, 'type': 'item'})
+        data.technologies['unlock-test']['effects'].append({'type': 'unlock-recipe', 'recipe': name})
+    saved = legacy_spec(data, spec)
+    capital.validate_spec(saved, data, state.researched)  # Exact legacy hashes remain valid.
+    data.recipes[MACHINE]['enabled'] = True
+    before = deepcopy(data.recipes)
+    with pytest.raises(ValueError, match='capability changed'):
+        capital.validate_spec(saved, data, state.researched)
+    assert data.recipes == before
+
+
+def test_legacy_expiry_blocks_semantic_reinvestment_without_rewriting_budget():
+    data, state, spec = research_catalog()
+    old = legacy_spec(data, spec)
+    plan = offer(data, state)
+    plan.materials[capital.MARKER]['spec'] = old
+    plan = replace(plan, id=old['key'] + ':kit:test')
+    loop = make_loop(Backend(data, state))
+    capital_controller.commit(loop, plan, state)
+    original = deepcopy(loop.memory.capital_investment)
+    data.recipes[MACHINE]['enabled'] = True
+    capital.validate_spec(old, data, state.researched)
+    state.tick = original['deadline_tick']
+    loop.memory.last_tick = state.tick
+    capital_controller.frontier(loop, state)
+    assert loop.memory.capital_investment is None
+    failures = deepcopy(loop.memory.failures)
+    new = deepcopy(spec)
+    assert new['key'] != old['key'] and failures[old['key']] == 2
+    assert not capital_controller._available(loop, new, state)
+    assert loop.memory.failures == failures
+    assert old == original['spec']
+
+
+def test_semantic_failure_blocks_legacy_alias_too():
+    data, state, spec = research_catalog()
+    old = legacy_spec(data, spec)
+    loop = make_loop(Backend(data, state))
+    loop.memory.failures[spec['key']] = 2
+    data.recipes[MACHINE]['enabled'] = True
+    assert not capital_controller._available(loop, old, state)

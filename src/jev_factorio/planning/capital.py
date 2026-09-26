@@ -32,7 +32,7 @@ def _digest(value):
                                     allow_nan=False).encode()).hexdigest()
 
 
-def catalog_digest(catalog, recipe, machine):
+def _catalog_graph(catalog, recipe, machine):
     # Hash the bounded relevant graph, not the entire catalog on every probe.
     graph, queue = {}, [catalog.recipes[recipe], catalog.recipes[machine]]
     while queue:
@@ -49,9 +49,53 @@ def catalog_digest(catalog, recipe, machine):
                 queue.append(catalog.recipe_for(entry['name']))
             except ValueError:
                 continue
-    return _digest({'version': catalog.version, 'recipes': graph,
-                    'machine': catalog.machines[machine], 'recipe': recipe,
-                    'hand_categories': catalog.hand_categories})
+    return {'version': catalog.version, 'recipes': graph,
+            'machine': catalog.machines[machine], 'recipe': recipe,
+            'hand_categories': catalog.hand_categories}
+
+
+def catalog_digest(catalog, recipe, machine, *, schema=2):
+    graph = _catalog_graph(catalog, recipe, machine)
+    if schema == 2:
+        graph['recipes'] = {name: {key: value for key, value in row.items() if key != 'enabled'}
+                            for name, row in graph['recipes'].items()}
+    elif schema != 1:
+        raise ValueError('Unsupported capital catalog schema')
+    return _digest(graph)
+
+
+def _legacy_digests(catalog, graph, researched):
+    # Reconstruct only research-driven false -> true bits. All other fields stay
+    # exact. The caller must fail closed if the bounded search is unavailable.
+    unlocked = set(researched)
+    names = sorted(name for name, row in graph['recipes'].items()
+                   if row.get('enabled') is True and set(catalog.unlocks(name)) & unlocked)
+    if len(names) > 8:
+        return None
+    graph = deepcopy(graph)
+    digests = set()
+    for mask in range(1 << len(names)):
+        for index, name in enumerate(names):
+            graph['recipes'][name]['enabled'] = not bool(mask & (1 << index))
+        digests.add(_digest(graph))
+    return digests
+
+
+def _legacy_catalog_matches(catalog, spec, researched):
+    graph = _catalog_graph(catalog, spec['recipe'], spec['machine'])
+    if _digest(graph) == spec['catalog_sha256']:
+        return True
+    return spec['catalog_sha256'] in (_legacy_digests(catalog, graph, researched) or set())
+
+
+def failure_keys(catalog, spec, researched):
+    """Retain exhausted legacy investment budgets without rewriting any key."""
+    graph = _catalog_graph(catalog, spec['recipe'], spec['machine'])
+    digests = _legacy_digests(catalog, graph, researched)
+    if digests is None:
+        return None
+    digests.add(catalog_digest(catalog, spec['recipe'], spec['machine']))
+    return {key_for({**spec, 'catalog_sha256': digest}) for digest in digests}
 
 
 def key_for(spec):
@@ -62,7 +106,7 @@ def key_for(spec):
 def validate_spec(spec, catalog=None, researched=None):
     if not isinstance(spec, dict) or set(spec) != SPEC_FIELDS:
         raise ValueError('Invalid capital investment specification')
-    if (type(spec['schema']) is not int or spec['schema'] != 1
+    if (type(spec['schema']) is not int or spec['schema'] not in {1, 2}
             or any(not isinstance(spec[k], str) or not 0 < len(spec[k]) <= 128
                    for k in ('key', 'item', 'recipe', 'role', 'machine', 'catalog_sha256'))
             or len(spec['catalog_sha256']) != 64
@@ -82,7 +126,8 @@ def validate_spec(spec, catalog=None, researched=None):
                 or not machine.get('categories', {}).get(recipe['category'])
                 or not catalog.enabled(recipe, researched or [])
                 or not catalog.enabled(catalog.recipes.get(spec['machine'], {}), researched or [])
-                or catalog_digest(catalog, spec['recipe'], spec['machine']) != spec['catalog_sha256']):
+                or not (_legacy_catalog_matches(catalog, spec, researched or []) if spec['schema'] == 1
+                        else catalog_digest(catalog, spec['recipe'], spec['machine']) == spec['catalog_sha256'])):
             raise ValueError('Capital investment catalog or capability changed')
 
 
@@ -106,7 +151,7 @@ def proposal(planner, recipe, name, cost, work, amount):
             or not solid_recipe(recipe)):
         return None
     item = recipe['products'][0]['name']
-    spec = {'schema': 1, 'item': item, 'recipe': recipe['name'], 'role': 'recipe:' + recipe['name'],
+    spec = {'schema': 2, 'item': item, 'recipe': recipe['name'], 'role': 'recipe:' + recipe['name'],
             'machine': name, 'catalog_sha256': catalog_digest(planner.catalog, recipe['name'], name),
             'workload': math.ceil(work), 'investment_ticks': math.ceil(cost),
             'queue_ticks': math.floor(work / recipe['products'][0]['amount'] * recipe['energy'] * 60),
