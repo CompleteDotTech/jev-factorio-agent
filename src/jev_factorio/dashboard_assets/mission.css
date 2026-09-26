@@ -27,3 +27,9 @@ body.broadcast .mission-panel{display:none}
 @media(min-width:1500px){
 body.studio:not(.broadcast) .right-column>.panel{flex-shrink:0}
 }
+.mission-summary{display:block;font-size:11px;color:#ddd7c1;margin-top:6px}
+/* Stream layout: one-line readiness so the control circuit and verification stay on screen. */
+body.studio:not(.broadcast) .mission-panel{padding:10px 12px}
+body.studio:not(.broadcast) .mission-panel h2{font-size:14px;margin:6px 0 2px}
+body.studio:not(.broadcast) .mission-panel :is(#launch-sample,.mission-gates,details,.mission-boundary){display:none}
+body.studio:not(.broadcast) .mission-freshness{margin:4px 0 0}

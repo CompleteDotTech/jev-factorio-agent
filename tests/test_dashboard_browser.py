@@ -636,11 +636,12 @@ def test_mission_layout_studio_mobile_xss_and_release_unknown(live):
     stage=page.locator('#game-stage').bounding_box()
     assert stage['x']==pytest.approx(277) and stage['y']==pytest.approx(111)
     assert stage['width']==pytest.approx(1342)
-    page.locator('#mission-panel summary').first.click()
+    # Studio keeps readiness to one line; detail stays rendered for Evidence and non-studio layouts.
+    playwright.expect(page.locator('#launch-summary')).to_contain_text('launch gates observed')
+    playwright.expect(page.locator('#mission-panel details').first).to_be_hidden()
     playwright.expect(page.locator('#mission-features')).to_contain_text('Disabled (recorded)')
     assert page.locator('#mission-production img').count()==0
     assert page.evaluate('window.BAD') is None
-    page.locator('#mission-panel summary').nth(1).click()
     playwright.expect(page.locator('#mission-release')).to_contain_text('Not supplied by gameplay')
     playwright.expect(page.locator('#mission-release')).to_contain_text('No acceptance report connected')
     page.screenshot(path='/tmp/mission-control-studio-test.png',full_page=True)
@@ -684,4 +685,17 @@ def test_legacy_stream_view_is_plain_and_progressive(live):
     playwright.expect(page.locator("#thinking-status")).to_have_text("Checking whether the last action worked")
     assert result["newSlots"] == ["logistic science pack: 11 (newly unlocked)"]
     playwright.expect(page.locator("#inventory .slot.no-icon").first).to_be_visible()
+    assert not errors
+
+
+def test_studio_readiness_is_compact_and_right_column_fits(live):
+    page, writer, url, errors = live
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    page.goto(url + "/?studio=1")
+    seed(writer)
+    playwright.expect(page.locator("#launch-summary")).to_be_visible()
+    playwright.expect(page.locator("#launch-gates")).to_be_hidden()
+    for selector in (".workflow-panel", ".verification"):
+        box = page.locator(selector).bounding_box()
+        assert box and box["y"] + box["height"] <= 1080, selector
     assert not errors
