@@ -498,6 +498,38 @@ def test_code_verification_requires_origin_and_checks_configured_fork(
     assert ([supervisor.config.python, '-m', 'pytest', 'tests/'] in seen) is accepted
 
 
+@pytest.mark.parametrize("reference,cache_exit,accepted", [
+    ("d" * 64, 0, True), ("d" * 64, 1, False), (None, 0, False),
+    ("--help", 0, False), ("g" * 64, 0, False), ("", 0, False),
+])
+def test_explicit_prevalidation_replaces_only_full_suite(supervisor, monkeypatch, reference, cache_exit, accepted):
+    commit = "a" * 40
+    pull = {"state": "MERGED", "mergeCommit": {"oid": commit}, "headRefOid": "c" * 40,
+            "reviews": [{"author": {"login": "reviewer"}, "state": "APPROVED",
+                         "commit": {"oid": "c" * 40}}],
+            "statusCheckRollup": [{"conclusion": "SUCCESS"}]}
+    seen = []
+    def capture(command):
+        seen.append(command)
+        if command == ["git", "rev-parse", "HEAD"]: return 0, commit
+        if command == ["git", "status", "--porcelain"]: return 0, ""
+        if command == ["git", "remote"]: return 0, "origin"
+        if command[:2] == ["git", "ls-remote"]: return 0, commit + "\trefs/heads/main"
+        if command[:3] == ["gh", "pr", "view"]: return 0, json.dumps(pull)
+        if command[1:4] == ["-m", "jev_factorio.prevalidation", "check"]:
+            assert command[-1] == reference
+            assert command[-3] == str(supervisor.config.state_dir)
+            return cache_exit, ""
+        pytest.fail(f"Unexpected command: {command}")
+    monkeypatch.setattr(supervisor, "capture", capture)
+    assert supervisor.verify_code({"commit": commit, "pr_url": "https://github.com/o/r/pull/1",
+                                   "prevalidation": reference}) is accepted
+    assert any(c[:3] == ["gh", "pr", "view"] for c in seen)
+    assert not any("pytest" in c for c in seen)
+    if accepted:
+        assert seen[-2:] == [["git", "status", "--porcelain"], ["git", "rev-parse", "HEAD"]]
+
+
 def test_accepted_repair_resumes_without_failure_backoff(supervisor, monkeypatch):
     # This test isolates accepted-repair scheduling after a positive source gate.
     monkeypatch.setattr(supervisor, "recovery_class", lambda reason: "source_defect")

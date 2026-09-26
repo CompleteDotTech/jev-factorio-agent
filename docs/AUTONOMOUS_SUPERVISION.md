@@ -99,7 +99,11 @@ distinguish source findings and mock tests from native observation evidence.
   containing `head`, `verdict: "approved"`, `reviewer`, and nonempty
   `source_evidence`. Its reviewer ID must differ from the result's `repair_agent`.
   This permits an independent Codex review without bypassing branch rules.
-  It also reruns `python -m pytest tests/`. Missing checks or reviews block restart.
+  It also reruns `python -m pytest tests/` unless an explicit `prevalidation`
+  artifact ID verifies a fresh same-host full-suite run for this exact merged
+  commit and runtime. An invalid requested artifact blocks acceptance instead
+  of silently running the suite during maintenance. See
+  [deployment prevalidation](DEPLOYMENT_PREVALIDATION.md). Missing checks or reviews block restart.
   The worktree must be clean before and after tests, with HEAD still equal to the
   verified merge commit.
 

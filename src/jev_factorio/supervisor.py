@@ -716,7 +716,17 @@ Only report repaired when every acceptance requirement is verified.
             or check.get("state") == "SUCCESS" for check in checks
         ):
             return False
-        code, _ = self.capture([self.config.python, "-m", "pytest", "tests/"])
+        if "prevalidation" in result:
+            # Run with the configured interpreter: the verifier must have the
+            # same runtime/dependencies as the pre-maintenance full suite.
+            reference = result["prevalidation"]
+            if (not isinstance(reference, str) or len(reference) != 64
+                    or any(character not in "0123456789abcdef" for character in reference)):
+                return False
+            code, _ = self.capture([self.config.python, "-m", "jev_factorio.prevalidation", "check",
+                                    "--state-dir", str(self.config.state_dir), "--artifact-id", reference])
+        else:
+            code, _ = self.capture([self.config.python, "-m", "pytest", "tests/"])
         if code != 0:
             return False
         status_code, worktree = self.capture(["git", "status", "--porcelain"])
