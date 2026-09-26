@@ -147,7 +147,7 @@ def test_fallback_retains_maximum_route_length(position):
     assert placements == []
 
 
-def test_failed_pole_route_does_not_use_pipe_fallback(position):
+def test_failed_pole_route_uses_its_own_bounded_fallback(position):
     fair = object.__new__(FairActions)
     queries = []
     fair._connection_cells = lambda *args: queries.append(args) or (set(), set())
@@ -156,4 +156,7 @@ def test_failed_pole_route_does_not_use_pipe_fallback(position):
         fair.connect(position(**START), position(**END),
                      SimpleNamespace(value=("small-electric-pole",)), "electricity")
     assert error.value.code == "no_connection_route"
-    assert len(queries) == 2
+    assert len(queries) == 4
+    assert all(sum((right-left+1)*(bottom-top+1)
+                   for left, right, top, bottom in rectangles) <= 16_384
+               for _, _, rectangles in queries)
