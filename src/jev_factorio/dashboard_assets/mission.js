@@ -40,6 +40,8 @@ window.MissionControl = (() => {
         node("small", str(gate.detail, "Not captured")));
       return item;
     }));
+    const observed = gates.filter(gate => obj(gate).state === "observed").length;
+    set("launch-summary", gates.length ? `${observed} of ${Math.min(gates.length, 7)} launch gates observed` : "Launch gates not captured by this feed");
     const research = obj(mission.research);
     const progress = typeof research.progress === "number" && research.progress >= 0 && research.progress <= 1
       ? `${(research.progress * 100).toFixed(1)}% of current technology` : "Unknown";
