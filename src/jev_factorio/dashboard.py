@@ -29,6 +29,7 @@ from . import dashboard_mission
 SCHEMA = "jev.dashboard.v1"
 MAX_LINE = 262144
 ASSETS = Path(__file__).with_name("dashboard_assets")
+ICON_NAME = re.compile(r"/icons/([a-z0-9][a-z0-9-]{0,63})\.png")
 SECRET_KEY = re.compile(r"password|secret|authorization|api.?key|access.?token|refresh.?token", re.I)
 URL = re.compile(r"(?:https?|wss?)://[^\s\"<>]+", re.I)
 CREDENTIAL = re.compile(r"(?:Bearer\s+\S+|\b(?:sk|ts|pk)-[\w-]{12,})", re.I)
@@ -547,8 +548,9 @@ class DashboardServer(ThreadingHTTPServer):
         connection.settimeout(5)
         return connection, address
 
-    def __init__(self, port: int, monitor: Monitor):
+    def __init__(self, port: int, monitor: Monitor, icon_dir: Path | None = None):
         self.monitor = monitor
+        self.icon_dir = icon_dir
         self.clients = threading.BoundedSemaphore(8)
         super().__init__(("127.0.0.1", port), DashboardHandler)
 
@@ -593,11 +595,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.wfile.write(raw)
         elif path == "/api/events":
             self._events()
+        elif path.startswith("/icons/"):
+            self._icon(path)
         else:
             names = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"),
                      "/styles.css": ("styles.css", "text/css"),
                      "/mission.js": ("mission.js", "text/javascript"),
                      "/mission.css": ("mission.css", "text/css"),
+                     "/explain.js": ("explain.js", "text/javascript"),
                      "/factory-steel.png": ("factory-steel.png", "image/png")}
             if path not in names:
                 self._headers(404, "text/plain", 0)
@@ -606,6 +611,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
             raw = (ASSETS / name).read_bytes()
             self._headers(200, content_type + ("; charset=utf-8" if content_type.startswith("text/") else ""), len(raw))
             self.wfile.write(raw)
+
+    def _icon(self, path: str) -> None:
+        """Serve one item icon from the operator's local game install, if configured."""
+        match = ICON_NAME.fullmatch(path)
+        folder = self.server.icon_dir
+        candidate = folder / f"{match.group(1)}.png" if match and folder else None
+        if candidate is None or candidate.is_symlink() or not candidate.is_file():
+            self._headers(404, "text/plain", 0)
+            return
+        raw = candidate.read_bytes()
+        self._headers(200, "image/png", len(raw))
+        self.wfile.write(raw)
 
     def _events(self) -> None:
         if not self.server.clients.acquire(blocking=False):
@@ -634,14 +651,18 @@ def cli() -> None:
     source.add_argument("--log-file", type=Path, help="Existing legacy JSONL; completed-decision detail only")
     parser.add_argument("--supervisor-state", type=Path, help="Optional existing supervisor.json (read-only)")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--icon-dir", type=Path,
+                        help="Optional Factorio data/base/graphics/icons directory for item icons (read-only)")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
     path = args.events or args.log_file
     if path.exists() and not path.is_file():
         parser.error("Telemetry source must be a regular file")
+    if args.icon_dir is not None and not args.icon_dir.is_dir():
+        parser.error("--icon-dir must be an existing directory")
     monitor = Monitor(path, legacy=args.log_file is not None, supervisor=args.supervisor_state)
-    server = DashboardServer(args.port, monitor)
+    server = DashboardServer(args.port, monitor, args.icon_dir)
     follower = threading.Thread(target=monitor.follow, daemon=True)
     follower.start()
     print(f"JEV dashboard: http://127.0.0.1:{server.server_port} (read-only; Ctrl+C stops only the viewer)", flush=True)
