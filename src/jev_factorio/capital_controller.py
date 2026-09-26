@@ -19,8 +19,9 @@ def enabled(loop):
 
 
 def _available(loop, spec, snapshot):
-    return (spec['role'] not in snapshot.factory.get('entities', {})
-            and loop.memory.failures.get(spec['key'], 0) < 2)
+    keys = capital.failure_keys(loop.catalog, spec, snapshot.researched or [])
+    return (keys is not None and spec['role'] not in snapshot.factory.get('entities', {})
+            and all(loop.memory.failures.get(key, 0) < 2 for key in keys))
 
 
 def commit(loop, plan, snapshot):
