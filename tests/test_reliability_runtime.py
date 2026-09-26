@@ -19,6 +19,22 @@ from test_background_work import ReceiptBackend as CraftBackend, controller as c
 from test_attempts import prepared_native_transfer_checkpoint
 
 
+def test_maximum_maintenance_timeout_survives_advancing_clock(tmp_path):
+    from jev_factorio.operational_safety import maintenance_request
+    checkpoint = tmp_path / 'checkpoint.json'
+    atomic_json(checkpoint, {'session_id': 'same-session'})
+    now = [1790417240.0]
+    def advancing_clock():
+        result = now[0]
+        now[0] += 0.000001
+        return result
+    created = request_maintenance(checkpoint, timeout=3600, clock=advancing_clock)
+    # Exercise the reader that previously rejected a writer-created request.
+    accepted = maintenance_request(checkpoint, 'same-session')
+    assert accepted == created
+    assert accepted['deadline'] - accepted['requested_at'] == 3600
+
+
 class DeferredBackend(MockBackend):
     def __init__(self, mining=False):
         super().__init__()
