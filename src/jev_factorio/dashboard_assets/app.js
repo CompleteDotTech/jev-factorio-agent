@@ -80,9 +80,39 @@ STAGES.forEach(([title, subtitle, description], index) => {
   $("workflow").append(node);
 });
 
+const MILESTONE_STATES = new Set(["done", "next", "pending"]);
+
+function renderMilestones(rows, v) {
+  const tree = $("goals");
+  tree.classList.add("milestones");
+  tree.replaceChildren(...rows.slice(0, 16).map((row) => {
+    row = object(row);
+    const state = MILESTONE_STATES.has(row.state) ? row.state : "pending";
+    const node = el("div", `goal-node${state === "done" ? " done" : state === "next" ? " current" : ""}`);
+    node.dataset.milestone = text(row.key, "unknown");
+    const active = row.kind === "goal" && state !== "done" && row.key === v.goal;
+    const detail = state === "done"
+      ? row.kind === "research"
+        ? typeof row.tick === "number" ? `Researched · seen tick ${row.tick}` : "Researched"
+        : `Verified · tick ${text(row.tick)}`
+      : active ? row.key === v.target ? "Active target" : "Active prerequisite"
+      : state === "next" ? "Next milestone" : "Not yet";
+    node.append(el("strong", "", text(row.title, text(row.key))), el("small", "", detail));
+    return node;
+  }));
+  const done = rows.filter((row) => object(row).state === "done").length;
+  $("goals-count").textContent = `${done} / ${rows.length}`;
+}
+
 function renderGoals(v) {
   const completed = object(v.completed_goals);
   const target = typeof v.target === "string" ? v.target : "rocket_launch";
+  if (target === "rocket_launch" && Array.isArray(v.milestones) && v.milestones.length) {
+    renderMilestones(v.milestones, v);
+    return;
+  }
+  $("goals").classList.remove("milestones");
+  $("goals-count").textContent = "GOAL TREE";
   const path = target === "bootstrap_mining" ? ["stockpile_fuel", target] : ["stockpile_fuel", "bootstrap_mining", target];
   const nodes = path.map((goal) => {
     const done = Object.hasOwn(completed, goal);

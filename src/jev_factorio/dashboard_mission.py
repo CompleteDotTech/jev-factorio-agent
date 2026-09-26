@@ -10,6 +10,24 @@ from itertools import islice
 
 PAYLOADS = ('raw-fish', 'satellite')
 SILO = 'recipe:rocket-part'
+# Objective ladder toward a first launch. The controller's goal graph jumps from
+# bootstrap_mining straight to rocket_launch, so the base-game research between
+# them is shown as display milestones. They are not goals or plan authority.
+# Goal rows keep the controller's own ids as titles.
+MILESTONES = (
+    ('goal', 'stockpile_fuel', 'stockpile_fuel'),
+    ('goal', 'bootstrap_mining', 'bootstrap_mining'),
+    ('research', 'steam-power', 'Steam power'),
+    ('research', 'automation-science-pack', 'Automation science'),
+    ('research', 'logistic-science-pack', 'Logistic science'),
+    ('research', 'oil-processing', 'Oil processing'),
+    ('research', 'chemical-science-pack', 'Chemical science'),
+    ('research', 'production-science-pack', 'Production science'),
+    ('research', 'utility-science-pack', 'Utility science'),
+    ('research', 'rocket-silo', 'Rocket silo'),
+    ('goal', 'rocket_launch', 'rocket_launch'),
+)
+RESEARCH_MILESTONES = frozenset(key for kind, key, _ in MILESTONES if kind == 'research')
 
 
 def mapping(value):
@@ -30,6 +48,25 @@ def flag(value):
 
 def gate(key, title, state='unknown', detail='Not captured'):
     return {'key': key, 'title': title, 'state': state, 'detail': detail}
+
+
+def milestones(completed_goals, research_seen) -> list[dict]:
+    """Goals keep their verified tick; research keeps the first tick it was observed.
+
+    Research seen with no tick (``None``) was already done when observation began.
+    The first unreached milestone is only "next": nothing here claims it is in progress.
+    """
+    goals, research = mapping(completed_goals), mapping(research_seen)
+    rows, found_next = [], False
+    for kind, key, title in MILESTONES:
+        tick = (goals if kind == 'goal' else research).get(key)
+        done = integer(tick) or (kind == 'research' and key in research and tick is None)
+        state = 'done' if done else 'pending'
+        if state == 'pending' and not found_next:
+            state, found_next = 'next', True
+        rows.append({'key': key, 'kind': kind, 'title': title, 'state': state,
+                     'tick': tick if state == 'done' and integer(tick) else None})
+    return rows
 
 
 def launch_summary(state: dict) -> dict:

@@ -699,3 +699,27 @@ def test_studio_readiness_is_compact_and_right_column_fits(live):
         box = page.locator(selector).bounding_box()
         assert box and box["y"] + box["height"] <= 1080, selector
     assert not errors
+
+
+def test_studio_objective_milestones_are_compact_and_fit(live):
+    page, writer, url, errors = live
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    page.goto(url + "/?studio=1")
+    seed(writer)
+    writer.emit("observation", 2, state={"session_id": "mock:browser-test", "world_kind": "mock", "tick": 400,
+                "researched": ["steam-power", "automation-science-pack"]})
+    writer.emit("observation", 2, state={"session_id": "mock:browser-test", "world_kind": "mock", "tick": 500,
+                "researched": ["steam-power", "automation-science-pack", "logistic-science-pack"]})
+    writer.emit("goals", 3, goal="rocket_launch", target="rocket_launch",
+                completed_goals={"stockpile_fuel": 100, "bootstrap_mining": 200}, status="running")
+    playwright.expect(page.locator("#goals-count")).to_have_text("5 / 11")
+    playwright.expect(page.locator("#goals .goal-node")).to_have_count(11)
+    playwright.expect(page.locator('[data-milestone="steam-power"]')).to_contain_text("Researched")
+    playwright.expect(page.locator('[data-milestone="logistic-science-pack"]')).to_contain_text("seen tick 500")
+    playwright.expect(page.locator(".goal-node.current")).to_contain_text("Oil processing")
+    playwright.expect(page.locator('[data-milestone="rocket_launch"]')).to_contain_text("Active target")
+    for node in page.locator("#goals .goal-node").all():
+        assert node.bounding_box()["height"] < 24
+    thinking = page.locator(".thinking")
+    assert thinking.evaluate("node => node.scrollHeight <= node.clientHeight")
+    assert not errors
