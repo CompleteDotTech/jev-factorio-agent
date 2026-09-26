@@ -210,7 +210,7 @@ def request(server, path, headers=None, method="GET"):
     return status, result, response_headers
 
 
-@pytest.mark.parametrize("path", ["/", "/app.js", "/styles.css", "/factory-steel.png", "/api/snapshot"])
+@pytest.mark.parametrize("path", ["/", "/app.js", "/explain.js", "/styles.css", "/factory-steel.png", "/api/snapshot"])
 def test_http_assets_and_security_headers(server, path):
     status, raw, headers = request(server, path)
     assert status == 200 and raw
@@ -225,6 +225,33 @@ def test_http_assets_and_security_headers(server, path):
 @pytest.mark.parametrize("path", ["/.env", "/../main.py", "/%2e%2e/main.py", "/api/execute", "/api/repair"])
 def test_no_file_browsing_or_control_routes(server, path):
     assert request(server, path)[0] == 404
+
+
+def test_icons_absent_without_icon_dir(server):
+    assert request(server, "/icons/iron-plate.png")[0] == 404
+
+
+def test_icons_served_only_by_validated_name(tmp_path):
+    PNG = bytes.fromhex("89504e470d0a1a0a")
+    icons = tmp_path / "icons"
+    icons.mkdir()
+    (icons / "iron-plate.png").write_bytes(PNG + b"plate")
+    (tmp_path / "secret.png").write_bytes(PNG + b"secret")
+    (icons / "linked.png").symlink_to(tmp_path / "secret.png")
+    path = tmp_path / "events.jsonl"
+    write(path, event(policy="hybrid"))
+    monitor = Monitor(path)
+    server = DashboardServer(0, monitor, icons)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, raw, headers = request(server, "/icons/iron-plate.png")
+        assert status == 200 and raw.endswith(b"plate") and headers["Content-Type"] == "image/png"
+        for path in ("/icons/../secret.png", "/icons/%2e%2e/secret.png", "/icons/linked.png",
+                     "/icons/Iron-Plate.png", "/icons/iron-plate.png.bak", "/icons/"):
+            assert request(server, path)[0] == 404, path
+    finally:
+        monitor.stop.set(); server.shutdown(); server.server_close(); thread.join(timeout=3)
 
 
 @pytest.mark.parametrize("headers", [{"Host": "attacker.test"}, {"Origin": "https://attacker.test"},
@@ -247,7 +274,7 @@ def test_sse_initial_snapshot_and_reconnect(server):
 
 
 def test_no_runtime_dependencies_or_remote_frontend_assets():
-    for name in ("index.html", "styles.css", "app.js", "factory-steel.png"):
+    for name in ("index.html", "styles.css", "app.js", "explain.js", "factory-steel.png"):
         assert (ASSETS / name).is_file()
     js = (ASSETS / "app.js").read_text()
     assert ".innerHTML" not in js and "eval(" not in js

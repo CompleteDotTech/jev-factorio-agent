@@ -13,15 +13,16 @@ const el = (tag, className, content) => {
   if (content !== undefined) node.textContent = text(content);
   return node;
 };
+// [title, viewer subtitle, inspector description]
 const STAGES = [
-  ["Campaign supervision", "SUP / deadline & process state", "A separately supplied supervisor.json reports campaign state. A running dashboard is not evidence of a supervisor lock."],
-  ["Hierarchical controller", "CTRL / observe → commit", "Existing validated observations and controller state publications. Opening this viewer never creates an observation or game action."],
-  ["Goal dependencies & bootstrap", "GOAL_TREE / verified prerequisites", "stockpile_fuel → bootstrap_mining → target. Completion is read from the controller's verified goal predicates, never inferred from a score."],
-  ["Factory dependency planner", "FACTORY / bounded prerequisites", "The deterministic compiler prepares bounded executable prerequisites. Candidate detail is available from the actual model request or committed plan; unobserved alternatives stay unknown."],
-  ["JEV candidate judgment", "JEV / request → scores → gates", "Observed question batches, provider answers, duration and the controller's final selection. Raw provider answers are not accepted decisions. Utility is not confidence."],
-  ["Native action execution", "NATIVE / dispatch & return", "An existing backend call is in progress or has returned. Return acknowledgment alone does not prove the expected game effect."],
-  ["Pending-action verification", "VERIFY / observed postcondition", "Prepared and ambiguous actions remain pending until the original controller verifies their effects. This viewer cannot clear, replay, or reconcile them."],
-  ["Automatic Codex repair", "REPAIR / supervisor-only", "Repair state is read from the matching supervisor. The dashboard has no repair, approval, merge, restart, or game-control endpoints."]
+  ["Supervisor", "Keeps the run on schedule","A separately supplied supervisor.json reports campaign state. A running dashboard is not evidence of a supervisor lock."],
+  ["Controller", "Reads the game, commits steps", "Existing validated observations and controller state publications. Opening this viewer never creates an observation or game action."],
+  ["Goals", "Fuel → mining → rocket", "stockpile_fuel → bootstrap_mining → target. Completion is read from the controller's verified goal predicates, never inferred from a score."],
+  ["Planner", "Works out what to build next", "The deterministic compiler prepares bounded executable prerequisites. Candidate detail is available from the actual model request or committed plan; unobserved alternatives stay unknown."],
+  ["JEV decides", "Scores the options, picks one", "Observed question batches, provider answers, duration and the controller's final selection. Raw provider answers are not accepted decisions. Utility is not confidence."],
+  ["Act", "Sends the action to the game", "An existing backend call is in progress or has returned. Return acknowledgment alone does not prove the expected game effect."],
+  ["Verify", "Checks the game really changed", "Prepared and ambiguous actions remain pending until the original controller verifies their effects. This viewer cannot clear, replay, or reconcile them."],
+  ["Repair", "Codex fixes a stuck run", "Repair state is read from the matching supervisor. The dashboard has no repair, approval, merge, restart, or game-control endpoints."]
 ];
 
 let userNotice = "";
@@ -114,8 +115,9 @@ function renderCandidates(v) {
     const actions = array(displayed.events).filter((event) => event.action).slice(-5).reverse();
     $("recorded-actions").replaceChildren(el("p", "evidence-caption", "Recorded actions · not a live execution phase"), ...actions.map((event) => {
       const row = el("div", "recorded-action");
-      row.append(el("span", "mono", `tick ${text(event.tick)}`), el("strong", "", event.action),
-        el("span", "", text(event.outcome, event.verified === true ? "Postcondition verified" : "Effect not verified in this record")));
+      row.append(el("span", "mono", `tick ${text(event.tick)}`), el("strong", "", acting(event.action)),
+        el("span", "", event.outcome ? Explain.event(event).text : event.verified === true ? "Postcondition verified" : "Effect not verified in this record"));
+      row.title = text(event.outcome, "");
       return row;
     }));
   }
@@ -159,11 +161,21 @@ function renderLog(data) {
   const filter = $("event-filter").value;
   const events = array(data.events);
   const selected = events.filter((event) => filter === "all" || String(event.stage) === filter).slice(-120).reverse();
+  const legacy = data.source?.mode === "legacy";
   const rows = selected.map((event) => {
+    if (legacy) {
+      const said = Explain.event(event);
+      const row = el("div", `event-row plain ${said.state}`);
+      const line = el("span", "event-kind");
+      if (said.item) line.append(icon(said.item));
+      line.append(document.createTextNode(said.text));
+      row.append(el("span", "event-time", `tick ${text(event.tick)}`), el("span", "event-state", {done: "✓", pending: "…", wait: "·"}[said.state]), line);
+      row.title = text(event.outcome, "");
+      return row;
+    }
     const kind = text(event.kind, "unknown");
     const row = el("div", `event-row${kind.endsWith("failed") ? " failed" : ""}`);
     const date = new Date(Number(event.time) * 1000);
-    const legacy = data.source?.mode === "legacy";
     const timestamp = legacy ? `tick ${text(event.tick)}` : event.time == null || Number.isNaN(date.getTime()) ? "—" : date.toLocaleTimeString([], {hour12: false});
     const outcome = text(event.outcome, event.verified === true ? "postcondition verified" : "effect not verified in this record");
     row.append(el("span", "event-time", timestamp), el("span", "event-stage", legacy ? "RECORDED" : `0${event.stage} / ${["", "SUP", "CONTROLLER", "GOALS", "PLANNER", "JEV", "NATIVE", "VERIFY", "REPAIR"][event.stage] || "UNKNOWN"}`), el("span", "event-kind", legacy ? `${text(event.action, "Decision")} · ${outcome}` : kind.replaceAll("_", " ") + (event.action ? ` · ${text(event.action)}` : "")), el("span", "event-duration", typeof event.duration_ms === "number" ? `${number(event.duration_ms, 1)} ms` : ""));
@@ -175,6 +187,60 @@ function renderLog(data) {
   set("event-count", `${events.length} recent events`);
 }
 
+// Item icons come from the local game install via /icons; without it the name is shown.
+function icon(name) {
+  const image = el("img", "item-icon");
+  image.alt = "";
+  image.src = `/icons/${Explain.item(name) || "unknown"}.png`;
+  image.addEventListener("error", () => { image.hidden = true; image.parentElement?.classList.add("no-icon"); }, {once: true});
+  return image;
+}
+
+let knownTechs = null;
+const newItems = new Map();
+function renderInventory(state) {
+  const inventory = object(state.inventory);
+  const researched = array(state.researched);
+  if (!Object.keys(inventory).length && !researched.length) {
+    const empty = el("div", "slot empty-slot"); empty.append(el("span", "slot-name", "Inventory"), el("strong", "", "Awaiting native state"));
+    $("inventory").replaceChildren(empty);
+    return;
+  }
+  const {items, byTech} = Explain.unlocked(researched);
+  const now = performance.now();
+  if (Array.isArray(state.researched)) {
+    // Only research that completes while the page is open is announced as newly unlocked.
+    if (knownTechs) for (const tech of researched) if (!knownTechs.has(tech)) for (const name of byTech[tech] || []) newItems.set(name, now + 90000);
+    knownTechs = new Set(researched);
+  }
+  const held = Object.keys(inventory).filter((name) => Explain.item(name) && typeof inventory[name] === "number" && inventory[name] > 0);
+  let slots = [...items, ...held.filter((name) => !items.includes(name))];
+  const capacity = Math.max(6, Math.floor(($("inventory").clientWidth || 1340) / 64));
+  while (slots.length > capacity) {
+    const spare = slots.findLastIndex((name) => !held.includes(name));
+    slots.splice(spare >= 0 ? spare : slots.length - 1, 1);
+  }
+  $("inventory").replaceChildren(...slots.map((name) => {
+    const count = typeof inventory[name] === "number" ? inventory[name] : 0;
+    const fresh = (newItems.get(name) || 0) > now;
+    const slot = el("div", `slot${count ? "" : " zero"}${fresh ? " new" : ""}`);
+    slot.title = `${Explain.words(name)}: ${count}${fresh ? " (newly unlocked)" : ""}`;
+    slot.append(icon(name), el("span", "slot-name", Explain.words(name)), el("strong", "", short(count)));
+    return slot;
+  }));
+}
+
+const ACTING = {factory_insert: "loading items", factory_extract: "collecting items", factory_gather: "gathering",
+  factory_craft_job: "crafting", factory_place: "building", factory_connect: "connecting", factory_research: "starting research"};
+function acting(action) { return ACTING[action] || (typeof action === "string" ? Explain.words(action) : "last action"); }
+
+// The most recent recorded workflow boundary, for legacy logs without live stage events.
+function lastStage(v) {
+  if (Object.keys(object(v.pending)).length || v.action === "observe" || v.action === "verify") return 7;
+  if (typeof v.action === "string" && v.action) return 6;
+  return v.model_call === true ? 5 : 0;
+}
+
 function snapshotKey(data) {
   return JSON.stringify([data.view, data.events, data.source, data.supervisor]);
 }
@@ -182,6 +248,7 @@ function snapshotKey(data) {
 function render(data) {
   displayed = data;
   renderedKey = snapshotKey(data);
+  document.body.classList.toggle("legacy-feed", data.source?.mode === "legacy");
   const v = object(data.view);
   const state = object(v.state);
   const supervision = object(data.supervisor);
@@ -197,11 +264,18 @@ function render(data) {
   set("source-mode", frozen ? "DISPLAY FROZEN" : data.source?.mode === "legacy" ? "LEGACY / COMPLETED DECISIONS" : "READ-ONLY / EVENT FEED");
   MissionControl.render(data, inspect);
   renderGoals(v);
-  const observed = [["Character position", Array.isArray(state.player_position) ? state.player_position.join(", ") : "—"], ["Drill status", text(state.drill_status, "Unknown") || "Unknown"], ["Drill fuel", text(state.drill_fuel)], ["Ore collected", text(state.iron_ore_collected)], ["Output connected", state.drill_output_connected === true ? "Observed" : state.drill_output_connected === false ? "No" : "Unknown"]];
-  $("observations").replaceChildren(...observed.map(([key, value]) => { const row = el("div"); row.append(el("dt", "", key), el("dd", "", value)); return row; }));
-  const inventory = object(state.inventory);
-  const items = Object.entries(inventory).slice(0, 7);
-  $("inventory").replaceChildren(...(items.length ? items : [["INVENTORY", null]]).map(([key, value]) => { const item = el("div"); item.append(el("span", "", key.replaceAll("-", " ")), el("strong", "", value === null ? "Awaiting state" : short(value))); return item; }));
+  const position = array(state.player_position);
+  const chest = state.drill_output_connected;
+  const observed = [
+    ["Player at", position.length === 2 && position.every((n) => typeof n === "number") ? `x ${Math.round(position[0])}, y ${Math.round(position[1])}` : "—"],
+    ["Starter drill", "drill_status" in state ?Explain.drill(state.drill_status) : "—", "The first burner mining drill JEV placed"],
+    ["Drill fuel", typeof state.drill_fuel === "number" ? `${state.drill_fuel} coal` : "—"],
+    ["Drill output chest", chest === true ? "In place" : chest === false ? "None yet" : "—", "A chest under the drill catches its ore"],
+    ["Ore in that chest", chest === false ? "n/a" : text(state.iron_ore_collected)],
+    ["Research done", Array.isArray(state.researched) ? `${state.researched.length} techs` : "—"],
+  ];
+  $("observations").replaceChildren(...observed.map(([key, value, hint]) => { const row = el("div"); const term = el("dt", "", key); if (hint) term.title = hint; row.append(term, el("dd", "", value)); return row; }));
+  renderInventory(state);
   const latency = el("span", "", " ms"); $("latency").replaceChildren(document.createTextNode(number(v.model_ms, 0)), latency);
   const usage = object(v.usage || object(v.response).usage);
   set("tokens", short(usage.total_tokens ?? (typeof usage.input_tokens === "number" && typeof usage.output_tokens === "number" ? usage.input_tokens + usage.output_tokens : null)));
@@ -211,12 +285,16 @@ function render(data) {
     const active = index === 0 ? Boolean(sup.phase) : index === 7 ? sup.repair_required === true || sup.phase === "repair" : data.source?.mode !== "legacy" && v.stage === index + 1 && v.lifecycle !== "returned" && v.lifecycle !== "error";
     node.classList.toggle("active", active);
     node.classList.toggle("seen", array(v.seen).includes(index + 1));
+    node.classList.toggle("last", data.source?.mode === "legacy" && lastStage(v) === index + 1);
   });
   const pending = object(v.pending);
   const hasPending = Object.keys(pending).length > 0;
-  set("verification-status", hasPending ? `Pending · ${text(pending.action, "action")}` : v.verified === true ? "Postcondition verified by controller" : "No verified effect in this record");
-  set("verification-detail", hasPending ? `Dispatch: ${text(pending.dispatch)}. Waiting for observed effects; no replay is authorized by this viewer.` : text(v.outcome, "Returned ≠ verified. Only the controller's observed postcondition advances a step."));
-  set("pending-polls", `POLL COUNT ${text(pending.polls)}`);
+  set("verification-status", hasPending ? `Pending: ${acting(pending.action)}` : v.verified === true ? "Confirmed by the game" : "Nothing to confirm right now");
+  set("verification-detail", hasPending ? (pending.dispatch === "ambiguous" ? "The game didn't acknowledge the action cleanly. JEV watches for its effect before changing anything else." : "Sent to the game. JEV watches for its effect before moving on.") : v.verified === true ? Explain.event(v).text : "Returned ≠ verified. Only an observed change in the game advances a step.");
+  const tick = typeof state.tick === "number" ? state.tick : v.tick;
+  const waited = hasPending && typeof pending.started_tick === "number" && typeof tick === "number" ? Math.max(0, Math.round((tick - pending.started_tick) / 60)) : null;
+  $("pending-check").classList.toggle("active", hasPending);
+  set("pending-polls", hasPending ? `Checking${waited === null ? "" : ` · ${waited}s`}${typeof pending.polls === "number" ? ` · ${pending.polls} ${pending.polls === 1 ? "look" : "looks"}` : ""}` : "No check in progress");
   $("verified-icon").textContent = v.verified === true && !hasPending ? "✓" : "◇";
   $("verified-icon").classList.toggle("good", v.verified === true && !hasPending);
   set("repair-state", sup.phase ? text(sup.phase).toUpperCase() : supervision.available ? "SESSION MISMATCH" : "UNCONNECTED");
@@ -253,9 +331,14 @@ function refreshStatus() {
   $("connection").title = receivedAt ? `Last transport snapshot ${Math.floor(heartbeatAge)}s ago. Game records update independently of this heartbeat.` : "No transport snapshot received.";
   set("freshness", age === null ? "No recorded events" : `${data.source?.mode === "legacy" ? (v.legacy_record_timestamp ? "Recorded at" : "File modified") : "Last event"} ${age < 1 ? "just now" : Math.floor(age) + "s ago"}`);
   const thinking = active && !frozen && data.source?.mode !== "legacy" && v.model_busy === true;
-  $("signal").classList.toggle("active", thinking);
-  set("thinking-status", frozen ? "Display frozen" : thinking ? "JEV is evaluating" : ended ? "Controller invocation ended" : stale ? "Awaiting fresh evidence" : text(v.kind, "Waiting for an agent").replaceAll("_", " "));
-  set("model-detail", data.source?.mode === "legacy" ? "Completed decision only · no in-flight telemetry" : thinking ? "Provider call in flight · no tokens invented" : v.response ? "Provider response captured · inspect acceptance" : "No model response in this cycle");
+  const legacy = data.source?.mode === "legacy";
+  const recorded = legacy && (v.action || v.outcome);
+  const checking = legacy && Object.keys(object(v.pending)).length > 0;
+  $("signal").classList.toggle("active", thinking || (checking && !stale && !frozen));
+  const ago = age === null ? "" : age < 5 ? "just now" : age < 120 ? `${Math.floor(age)}s ago` : `${Math.floor(age / 60)}m ago`;
+  set("thinking-status", frozen ? "Display frozen" : thinking ? "JEV is evaluating" : recorded ? Explain.event(v).text : ended ? "Controller invocation ended" : stale ? "Awaiting fresh evidence" : text(v.kind, "Waiting for an agent").replaceAll("_", " "));
+  set("model-detail", recorded ? `${text(v.goal, "no goal").replaceAll("_", " ")} · tick ${text(object(v.state).tick, text(v.tick))}${ago ? " · " + ago : ""}${stale ? " · no newer step yet" : ""}`
+    : legacy ? "Completed decision only · no in-flight telemetry" : thinking ? "Provider call in flight · no tokens invented" : v.response ? "Provider response captured · inspect acceptance" : "No model response in this cycle");
   const supervision = object(data.supervisor);
   const cutoff = supervision.session_match ? object(supervision.state).cutoff : null;
   if (typeof cutoff === "number" && Number.isFinite(cutoff)) {

@@ -454,7 +454,7 @@ def test_recorded_evidence_ticker_and_actions_do_not_claim_live_phase(live):
     assert page.locator("#stage-7").evaluate("node => !node.classList.contains('active') && node.classList.contains('seen')")
     playwright.expect(page.locator("#goals")).to_contain_text("Active target")
     playwright.expect(page.locator("#candidate-table")).to_be_hidden()
-    playwright.expect(page.locator("#recorded-actions")).to_contain_text("mine_coal")
+    playwright.expect(page.locator("#recorded-actions")).to_contain_text("mine coal")
     playwright.expect(page.locator("#event-log")).to_contain_text("tick 123")
     playwright.expect(page.locator("#event-log")).to_contain_text("Observed coal increase")
     playwright.expect(page.locator("#event-log")).not_to_contain_text("captured row")
@@ -545,7 +545,8 @@ def test_decision_metrics_observations_and_inventory(live):
     playwright.expect(page.locator("#candidates tr.selected td")).to_have_text([
         "Replenish the coal buffercoal-buffer", "1.50", "0.25", "0.10", "0.75", "0.80 / 0.90", "0.830", "COMMITTED",
     ])
-    playwright.expect(page.locator("#observations")).to_contain_text("working")
+    playwright.expect(page.locator("#observations")).to_contain_text("Working")
+    playwright.expect(page.locator("#observations")).to_contain_text("5 coal")
     playwright.expect(page.locator("#inventory")).to_contain_text("148")
     playwright.expect(page.locator(".goal-node.done")).to_contain_text("stockpile_fuel")
     playwright.expect(page.locator(".goal-node.current")).to_contain_text("bootstrap_mining")
@@ -646,4 +647,41 @@ def test_mission_layout_studio_mobile_xss_and_release_unknown(live):
     page.set_viewport_size({'width':390,'height':844})
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     assert page.locator('#mission-panel').bounding_box()['width']>200
+    assert not errors
+
+
+def test_legacy_stream_view_is_plain_and_progressive(live):
+    page, writer, url, errors = live
+    page.goto(url)
+    seed(writer)
+    playwright.expect(page.locator("#inventory")).to_contain_text("148")
+    result = page.evaluate("""() => {
+        events.close();
+        const snapshot = JSON.parse(JSON.stringify(latest));
+        snapshot.source.mode = "legacy";
+        const state = {tick: 1988600, inventory: {"iron-plate": 55, "logistic-science-pack": 11},
+          researched: ["automation"], drill_status: "waiting_for_space_in_destination", drill_fuel: 5,
+          drill_output_connected: false, iron_ore_collected: 0, player_position: [34.4, 63.8]};
+        Object.assign(snapshot.view, {request: null, plan: null, state, action: "observe", verified: false,
+          outcome: "Waiting for the in-flight postcondition",
+          pending: {started_tick: 1986778, polls: 3, action: "factory_insert", dispatch: "ambiguous"}});
+        snapshot.events = [{action: "factory_insert", tick: 1756859, verified: true,
+          outcome: "Transferred 5 coal (1756859:factory_insert:input:147:drill:coal)"}];
+        latest = snapshot; render(snapshot); refreshStatus();
+        const before = document.querySelectorAll("#inventory .slot").length;
+        state.researched = ["automation", "logistic-science-pack"];
+        render(JSON.parse(JSON.stringify(snapshot)));
+        return {before, newSlots: [...document.querySelectorAll("#inventory .slot.new")].map((n) => n.title)};
+    }""")
+    playwright.expect(page.locator("#event-log")).to_contain_text("Loaded 5 coal into a mining drill")
+    playwright.expect(page.locator("#event-log")).not_to_contain_text("1756859:factory_insert")
+    playwright.expect(page.locator("#observations")).to_contain_text("Blocked: output full")
+    playwright.expect(page.locator("#observations")).to_contain_text("None yet")
+    playwright.expect(page.locator("#verification-status")).to_have_text("Pending: loading items")
+    playwright.expect(page.locator("#pending-polls")).to_have_text("Checking · 30s · 3 looks")
+    playwright.expect(page.locator("#pending-check")).to_have_class("pending-check active")
+    playwright.expect(page.locator("#stage-7")).to_have_class("workflow-node last")
+    playwright.expect(page.locator("#thinking-status")).to_have_text("Checking whether the last action worked")
+    assert result["newSlots"] == ["logistic science pack: 11 (newly unlocked)"]
+    playwright.expect(page.locator("#inventory .slot.no-icon").first).to_be_visible()
     assert not errors
