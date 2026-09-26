@@ -39,6 +39,9 @@ fingerprints must match before and after the suite. The child receives only
 OS/path/locale essentials plus an explicit candidate source path and private
 temporary directory; provider/RCON variables are not inherited. Import origin
 is checked before tests to reject an editable installation from another tree.
+Third-party editable dependencies are rejected because their metadata may not
+cover changing source outside the installation; the harness itself may be
+editable because its tested import origin and exact Git tree are checked.
 
 This is operational evidence within the existing trusted same-UID operator
 model, not protection against an owner who can rewrite code and supervisor

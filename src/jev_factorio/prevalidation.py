@@ -48,6 +48,12 @@ def fingerprint(cwd: Path) -> dict:
         raise ValueError("Prevalidation requires a clean checkout")
     packages = []
     for distribution in importlib.metadata.distributions():
+        direct = getattr(distribution, "read_text", lambda _: None)("direct_url.json")
+        if direct:
+            editable = json.loads(direct).get("dir_info", {}).get("editable", False)
+            name = distribution.metadata["Name"].lower().replace("_", "-")
+            if editable and name != "jev-factorio":
+                raise ValueError("Editable dependencies cannot produce reusable evidence")
         files = []
         for entry in distribution.files or []:
             if time.monotonic() > deadline:

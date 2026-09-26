@@ -138,6 +138,10 @@ def test_fingerprint_tracks_dependency_content_environment_and_clean_source(tmp_
                                    files=[Path("dependency.py")], locate_file=lambda _: dependency)
     monkeypatch.setattr(p.importlib.metadata, "distributions", lambda: [distribution])
     initial = p.fingerprint(cwd)
+    distribution.read_text = lambda _: '{"dir_info":{"editable":true}}'
+    with pytest.raises(ValueError, match="Editable"):
+        p.fingerprint(cwd)
+    distribution.read_text = lambda _: None
     dependency.write_text("second")
     assert p.fingerprint(cwd)["dependencies"] != initial["dependencies"]
     monkeypatch.setenv("LANG", "test-locale")
