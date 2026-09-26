@@ -498,7 +498,10 @@ def test_code_verification_requires_origin_and_checks_configured_fork(
     assert ([supervisor.config.python, '-m', 'pytest', 'tests/'] in seen) is accepted
 
 
-@pytest.mark.parametrize("reference,cache_exit,accepted", [("d" * 64, 0, True), ("d" * 64, 1, False), (None, 0, False)])
+@pytest.mark.parametrize("reference,cache_exit,accepted", [
+    ("d" * 64, 0, True), ("d" * 64, 1, False), (None, 0, False),
+    ("--help", 0, False), ("g" * 64, 0, False), ("", 0, False),
+])
 def test_explicit_prevalidation_replaces_only_full_suite(supervisor, monkeypatch, reference, cache_exit, accepted):
     commit = "a" * 40
     pull = {"state": "MERGED", "mergeCommit": {"oid": commit}, "headRefOid": "c" * 40,

@@ -720,7 +720,8 @@ Only report repaired when every acceptance requirement is verified.
             # Run with the configured interpreter: the verifier must have the
             # same runtime/dependencies as the pre-maintenance full suite.
             reference = result["prevalidation"]
-            if not isinstance(reference, str):
+            if (not isinstance(reference, str) or len(reference) != 64
+                    or any(character not in "0123456789abcdef" for character in reference)):
                 return False
             code, _ = self.capture([self.config.python, "-m", "jev_factorio.prevalidation", "check",
                                     "--state-dir", str(self.config.state_dir), "--artifact-id", reference])
