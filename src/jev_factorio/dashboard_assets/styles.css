@@ -71,8 +71,8 @@ small{display:block;font-size:11px;color:var(--muted)}
 .goal-node small{font-size:10px;margin-top:3px}
 .goal-tree.milestones .goal-node{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding-block:4px}
 .goal-tree.milestones .goal-node:before{top:9px}
-.goal-tree.milestones .goal-node strong{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.goal-tree.milestones .goal-node small{margin-top:0;white-space:nowrap;color:#9b9680}
+.goal-tree.milestones .goal-node strong{flex:none;white-space:nowrap}
+.goal-tree.milestones .goal-node small{min-width:0;margin-top:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#9b9680}
 .goal-tree.milestones .goal-node.current small{color:var(--cyan)}
 .observations{margin:0}
 .observations div{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #414237;gap:8px;font-size:11px}
