@@ -184,4 +184,8 @@ def test_suite_timeout_kills_only_owned_group_including_child(tmp_path):
     child_pid = int(pidfile.read_text())
     status = Path(f"/proc/{child_pid}/stat")
     # A briefly unreaped orphan zombie cannot execute or consume test resources.
-    assert not status.exists() or status.read_text().rsplit(")", 1)[1].split()[0] == "Z"
+    try:
+        state = status.read_text().rsplit(")", 1)[1].split()[0]
+    except FileNotFoundError:
+        return  # The orphan was already reaped; avoid an exists/read race.
+    assert state == "Z"
