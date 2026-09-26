@@ -324,3 +324,59 @@ def test_validation_diagnostic_rejects_unknown_source_and_keeps_first_fault(tmp_
     loop._observe()
     assert loop._record_extras()['input_validation_failure'] == original
     assert loop._execution_barrier(backend.state)
+
+
+def test_route_kit_bootstraps_shared_gear_dependency_from_owned_output():
+    state = game()
+    state.inventory.pop('burner-inserter')
+    state.factory['entities']['out:chest']['output'] = {'iron-plate': 50}
+    data = native_catalog()
+    data.recipes['iron-gear-wheel'] = recipe('iron-gear-wheel', {'iron-plate': 2})
+    data.recipes['burner-inserter'] = recipe('burner-inserter', {'iron-gear-wheel': 1, 'iron-plate': 1})
+    data.recipes['automation-science-pack'] = recipe('automation-science-pack', {'iron-gear-wheel': 1})
+    planner = InputRoutePlanner(data, state, 'rocket_launch')
+    plan = planner._need('automation-science-pack', 20)
+    assert plan.steps[0].action == 'factory_extract'
+    assert plan.steps[0].parameters['role'] == 'out:chest'
+    assert not planner._acquiring_route
+
+
+@pytest.mark.parametrize('nested', [False, True])
+def test_route_kit_still_rejects_real_recipe_cycles_and_restores_guard(nested):
+    data = native_catalog()
+    data.recipes['burner-inserter'] = recipe('burner-inserter', {'iron-gear-wheel': 1})
+    data.recipes['iron-gear-wheel'] = recipe('iron-gear-wheel', {'burner-inserter': 1})
+    state = game()
+    state.inventory.pop('burner-inserter')
+    planner = InputRoutePlanner(data, state, 'rocket_launch')
+    planner._acquiring_route = nested
+    with pytest.raises(ValueError, match='Cyclic production dependency'):
+        planner._acquire('burner-inserter', 1, ('item:automation-science-pack',))
+    assert planner._acquiring_route is nested
+
+
+def test_route_kit_retains_shared_expansion_budget():
+    state = game()
+    state.inventory.pop('burner-inserter')
+    planner = InputRoutePlanner(native_catalog(), state, 'rocket_launch')
+    planner.expansions = planner.max_expansions
+    with pytest.raises(ValueError, match='expansion budget'):
+        planner._acquire('burner-inserter', 1, ())
+    assert not planner._acquiring_route
+
+
+def test_route_kit_suppresses_optional_capital_and_restores_flags(monkeypatch):
+    state = game()
+    state.inventory.pop('burner-inserter')
+    state.factory['entities']['out:chest']['output'] = {'iron-plate': 50}
+    data = native_catalog()
+    data.recipes['iron-gear-wheel'] = recipe('iron-gear-wheel', {'iron-plate': 2})
+    data.recipes['burner-inserter'] = recipe('burner-inserter', {'iron-gear-wheel': 1})
+    planner = InputRoutePlanner(data, state, 'rocket_launch')
+    monkeypatch.setattr(planner, '_investment_machine', lambda recipe: pytest.fail('Kit must not propose nested capital'))
+    monkeypatch.setattr(planner, '_workload', lambda *args: 1000)
+    plan = planner._acquire('burner-inserter', 1, ('item:iron-gear-wheel',))
+    assert plan.steps[0].action == 'factory_extract'
+    assert plan.steps[0].parameters['role'] == 'out:chest'
+    assert 'capital_investment' not in (plan.materials or {})
+    assert not planner._acquiring_route and not planner._economic_acquiring
