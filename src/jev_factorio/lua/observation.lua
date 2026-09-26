@@ -24,8 +24,14 @@ campaign.observation_snapshot = function(generation)
     for _, item in ipairs({"wood", "coal", "iron-ore", "copper-ore", "stone"}) do
         local entry = cache[item]
         local entity = entry and player.surface.find_entity(entry.value.name, entry.value.position)
+        local selectable = false
+        if entity and entity.valid then
+            player.update_selected_entity(entity.position)
+            selectable = player.selected == entity
+        end
         if entry and game.tick >= entry.tick and game.tick - entry.tick <= 1800
             and entity and entity.valid and entity.minable
+            and selectable
             and (entity.type ~= "resource" or entity.amount > 0)
             and (not entry.value.unit_number or entity.unit_number == entry.value.unit_number) then
             targets[item] = entry.value

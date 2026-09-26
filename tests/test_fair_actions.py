@@ -130,7 +130,7 @@ def test_inventory_inspection_removes_unsafe_gui_callback(fair_runtime, fails):
     """)
 
 
-def test_generated_terrain_discovery_does_not_select_or_control_the_player(fair_runtime):
+def test_generated_terrain_discovery_probes_selection_without_starting_controls(fair_runtime):
     fair_runtime.execute("""
         resource.position = {x = 512, y = 0}
         selection_updates = 0
@@ -144,8 +144,36 @@ def test_generated_terrain_discovery_does_not_select_or_control_the_player(fair_
         discovered = storage.fair.discover_mine_target("coal", {x = 0, y = 0}, 1024)
         assert(discovered.name == "coal")
         assert(discovered.position.x == 512 and discovered.position.y == 0)
-        assert(selection_updates == 0)
+        assert(selection_updates == 1)
         assert(storage.fair.job == nil)
+        assert(not native_player.walking_state.walking and not native_player.mining_state.mining)
+        assert(quantities.coal == 0)
+    """)
+
+
+@pytest.mark.parametrize('depleted', [False, True])
+def test_generated_discovery_skips_unusable_nearest_node_before_plan_commit(fair_runtime, depleted):
+    fair_runtime.globals().depleted = depleted
+    fair_runtime.execute("""
+        local blocked = resource
+        blocked.type = "resource"
+        blocked.amount = depleted and 0 or 50
+        local visible = {valid=true,minable=true,name="coal",surface=surface,
+                         position={x=3,y=0},type="resource",amount=50}
+        surface.index = 1
+        local chest = {valid=true,name="wooden-chest"}
+        surface.find_entities_filtered = function() return {blocked, visible} end
+        player.update_selected_entity = function(position)
+            if position == blocked.position then
+                player.selected = depleted and blocked or chest
+            else player.selected = visible end
+        end
+        local found = storage.fair.discover_mine_target("coal", {x=0,y=0}, 256)
+        assert(found.position.x == 3 and found.name == "coal")
+        assert(storage.fair.job == nil and quantities.coal == 0)
+        player.update_selected_entity = function() player.selected = chest end
+        assert(next(storage.fair.discover_mine_target("coal", {x=0,y=0}, 256)) == nil)
+        assert(storage.fair.job == nil and quantities.coal == 0)
     """)
 
 

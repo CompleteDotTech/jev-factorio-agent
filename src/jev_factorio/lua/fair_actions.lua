@@ -191,9 +191,9 @@ fair.next_mine_target = function(item, radius)
 end
 
 fair.discover_mine_target = function(item, center, radius)
-    -- Discovery is deliberately read-only.  It may inspect only terrain the
-    -- campaign already generated, but it never changes the player's cursor or
-    -- controls.  The later fair harvesting path walks to the returned entity
+    -- Discovery inspects only terrain the campaign already generated. It may
+    -- probe normal cursor selection, but never starts walking or mining. The
+    -- later fair harvesting path walks to the returned entity
     -- and independently verifies normal reach and cursor selection.
     local player = fair.actor()
     assert(type(item) == "string", "Mining item must be a string")
@@ -205,12 +205,16 @@ fair.discover_mine_target = function(item, center, radius)
     if item == "wood" then filter.type = "tree" else filter.name = item end
     local best, best_distance
     for _, entity in pairs(player.surface.find_entities_filtered(filter)) do
-        if entity.valid and entity.minable then
+        if entity.valid and entity.minable
+            and (entity.type ~= "resource" or entity.amount > 0) then
             local horizontal = entity.position.x - center.x
             local vertical = entity.position.y - center.y
             local distance = horizontal * horizontal + vertical * vertical
             if not best or distance < best_distance then
-                best, best_distance = entity, distance
+                player.update_selected_entity(entity.position)
+                if player.selected == entity then
+                    best, best_distance = entity, distance
+                end
             end
         end
     end
