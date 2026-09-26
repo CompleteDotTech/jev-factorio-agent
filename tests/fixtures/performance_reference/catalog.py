@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from types import MappingProxyType
 
 from .materials import MaterialPlan, Recipe, quantities, requirements
 
@@ -49,8 +48,7 @@ class Catalog:
     def enabled(self, recipe: dict, researched: list[str]) -> bool:
         return recipe["enabled"] or bool(set(self.unlocks(recipe["name"])) & set(researched))
 
-    @staticmethod
-    def _select_recipe(item: str, choices) -> dict:
+    def recipe_for(self, item: str) -> dict:
         alternatives = {
             "petroleum-gas": "basic-oil-processing",
             "heavy-oil": "advanced-oil-processing",
@@ -58,49 +56,17 @@ class Catalog:
             "solid-fuel": "solid-fuel-from-petroleum-gas",
         }
         preferred = alternatives.get(item, item)
+        choices = [
+            recipe for recipe in self.recipes.values() if not recipe.get("hidden")
+            and any(product["name"] == item and product.get("probability", 1) == 1
+                    and product.get("amount", 0) > 0 for product in recipe["products"])
+        ]
         named = [recipe for recipe in choices if recipe["name"] == preferred]
         if named:
             return named[0]
         if len(choices) != 1:
             raise ValueError(f"No unambiguous deterministic native recipe for {item}")
         return choices[0]
-
-    def recipe_for(self, item: str) -> dict:
-        choices = [
-            recipe for recipe in self.recipes.values() if not recipe.get("hidden")
-            and any(product["name"] == item and product.get("probability", 1) == 1
-                    and product.get("amount", 0) > 0 for product in recipe["products"])
-        ]
-        return self._select_recipe(item, choices)
-
-    def _decision_indexes(self):
-        """Read-only lookup structures for ONE synchronous material expansion.
-
-        Catalog's public dictionaries remain compatible with existing callers.
-        Never retain these indexes across calls: catalog/research updates and
-        caller edits must be visible on the very next decision. Recipe values
-        are not a cached affordability, placement, or world-state decision.
-        """
-        by_product, unlocked_by = {}, {}
-        for name, technology in self.technologies.items():
-            recipes = {effect.get("recipe") for effect in technology["effects"]
-                       if effect.get("type") == "unlock-recipe"
-                       and isinstance(effect.get("recipe"), str)}
-            for recipe in recipes:
-                unlocked_by.setdefault(recipe, []).append(name)
-        for recipe in self.recipes.values():
-            if recipe.get("hidden"):
-                continue
-            # The old any(...) admitted each recipe ONCE, even if a product
-            # appeared twice. Preserve insertion order and disabled alternatives.
-            products = dict.fromkeys(product["name"] for product in recipe["products"]
-                                     if product.get("probability", 1) == 1
-                                     and product.get("amount", 0) > 0)
-            for item in products:
-                by_product.setdefault(item, []).append(recipe)
-        return (MappingProxyType({item: tuple(rows) for item, rows in by_product.items()}),
-                MappingProxyType({name: tuple(sorted(rows))
-                                  for name, rows in unlocked_by.items()}))
 
     def material_plan(self, item: str, amount: int, inventory: dict,
                       researched: list[str]) -> MaterialPlan:
@@ -110,13 +76,8 @@ class Catalog:
                          researched: list[str]) -> MaterialPlan:
         """Expand several tasks against one shared stock ledger."""
         recipes, selected = [], {}
-        by_product, unlocked_by = self._decision_indexes()
-        researched_now = frozenset(researched)
-        selections = {}
         for recipe in self.recipes.values():
-            enabled = recipe["enabled"] or any(
-                name in researched_now for name in unlocked_by.get(recipe["name"], ()))
-            if (not enabled or recipe.get("hidden")
+            if (not self.enabled(recipe, researched) or recipe.get("hidden")
                     or not recipe["products"]
                     or "barrel" in recipe["name"]
                     or any(product.get("probability", 1) != 1
@@ -128,12 +89,8 @@ class Catalog:
                 {entry["name"]: entry["amount"] for entry in recipe["products"]},
             ))
             for product in recipe["products"]:
-                item = product["name"]
-                if item not in selections:
-                    try:
-                        selections[item] = self._select_recipe(item, by_product.get(item, ()))["name"]
-                    except ValueError:
-                        selections[item] = None
-                if selections[item] is not None:
-                    selected[item] = selections[item]
+                try:
+                    selected[product["name"]] = self.recipe_for(product["name"])["name"]
+                except ValueError:
+                    pass
         return requirements(demand, inventory, recipes, selected=selected)

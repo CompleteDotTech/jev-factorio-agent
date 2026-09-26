@@ -55,14 +55,6 @@ def requirements(demand: dict[str, float], inventory: dict[str, float],
     if len({r.id for r in recipes}) != len(recipes):
         raise ValueError("Duplicate recipe IDs")
     selected = selected or {}
-    # Invocation-local: a caller may change recipes, enabled flags, inventory,
-    # reservations, or selections before the next expansion. No global memo.
-    by_product = {}
-    for recipe in recipes:
-        if recipe.enabled:
-            for item in recipe.products:
-                by_product.setdefault(item, []).append(recipe)
-    by_product = {item: tuple(choices) for item, choices in by_product.items()}
     result = MaterialPlan()
     expansions = 0
 
@@ -78,7 +70,7 @@ def requirements(demand: dict[str, float], inventory: dict[str, float],
             raise ValueError("Material expansion budget exceeded")
         if item in path:
             raise ValueError(f"Cyclic production dependency: {' -> '.join((*path, item))}")
-        choices = by_product.get(item, ())
+        choices = [r for r in recipes if r.enabled and item in r.products]
         if item in selected:
             choices = [r for r in choices if r.id == selected[item]]
             if not choices:
