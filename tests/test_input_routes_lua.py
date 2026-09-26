@@ -183,3 +183,57 @@ def test_empty_ore_survey_skips_layout_probes_and_can_recover_after_resurvey(tmp
         local row=storage.campaign.observe().input_routes.sources["recipe:iron-plate"]
         assert(row and #row.steps<=66 and probes>0 and placements==0)
     ''', tmp_path)
+
+@pytest.mark.parametrize('change,reason', [
+    ('drill.drop_position=nil', 'drill_drop_position_missing'),
+    ('drill.drop_position={x=first.position.x+1,y=first.position.y}', 'drill_drop_tile_mismatch'),
+    ('drill.drop_position={x=0/0,y=first.position.y}', 'drill_drop_tile_mismatch'),
+    ('drill.drop_position={x=math.huge,y=first.position.y}', 'drill_drop_tile_mismatch'),
+    ('drill.drop_target=source', 'drill_drop_target_mismatch'),
+    ('cell.parts.inserter.entity.pickup_target=nil', 'inserter_pickup_target_mismatch'),
+    ('first.belt_neighbours.outputs={}', 'belt_neighbours_mismatch:1'),
+])
+def test_drill_delivery_rejects_invalid_evidence(change, reason, tmp_path):
+    execute('local cell=build_all();local drill=cell.parts.drill.entity;'
+            'local first=cell.parts["belt:1"].entity;drill.drop_target=nil;'
+            + change + ';local proof=storage.input_routes.inspect("recipe:iron-plate");'
+            'assert(proof.geometry_valid and not proof.topology_valid);'
+            f'assert(proof.reason=="{reason}");'
+            'game.tick=game.tick+121;campaign.observe();assert(cell.fault and not cell.flow)', tmp_path)
+
+
+def test_nil_drill_target_accepts_native_drop_tile_but_requires_flow(tmp_path):
+    execute('''local cell=build_all();local drill=cell.parts.drill.entity
+        local first=cell.parts["belt:1"].entity
+        drill.drop_target=nil
+        drill.drop_position={x=first.position.x,y=first.position.y+0.203125}
+        game.tick=game.tick+180
+        local row=campaign.observe().input_routes.sources["recipe:iron-plate"]
+        assert(row.topology and not cell.fault and not cell.flow)
+        pulse();pulse();assert(not cell.flow);pulse();assert(cell.flow)
+    ''', tmp_path)
+
+
+def test_inspection_preserves_latched_fault_and_flow_counters(tmp_path):
+    execute('''local cell=build_all();cell.parts.drill.entity.drop_target=nil
+        cell.fault="input_topology_changed"
+        local previous=cell.previous;local mined=cell.mined;local placements_before=placements
+        local proof=storage.input_routes.inspect("recipe:iron-plate")
+        assert(proof.geometry_valid and proof.topology_valid and proof.reason=="valid")
+        assert(proof.fault==cell.fault and proof.layout==cell.layout and proof.source_unit==cell.source_unit)
+        assert(cell.fault=="input_topology_changed" and cell.previous==previous and cell.mined==mined)
+        assert(not cell.flow and placements==placements_before)
+        local observed=campaign.observe()
+        assert(observed.input_routes.sources["recipe:iron-plate"].state=="fault")
+        assert(observed.input_routes.diagnostics["recipe:iron-plate"].fault==cell.fault)
+        assert(observed.input_routes.diagnostics["recipe:iron-plate"].topology_reason=="valid")
+    ''', tmp_path)
+
+
+def test_inspection_rejects_changed_owned_identity(tmp_path):
+    execute('''local cell=build_all()
+        cell.parts["belt:1"].entity.unit_number=999999
+        local proof=storage.input_routes.inspect("recipe:iron-plate")
+        assert(not proof.geometry_valid and not proof.topology_valid)
+        assert(proof.reason=="input_identity_changed" and not cell.fault)
+    ''', tmp_path)

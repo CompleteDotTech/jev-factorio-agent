@@ -309,10 +309,20 @@ campaign.build_input_route=function(p)
     rcon.print(helpers.table_to_json({unit_number=entity.unit_number}))
 end
 local function topology(cell)
-    if next_step(cell) then return false end
+    if next_step(cell) then return false,"incomplete_route" end
     local drill,arm=cell.parts.drill.entity,cell.parts.inserter.entity
-    if drill.drop_target~=cell.parts["belt:1"].entity or arm.drop_target~=cell.entity
-        or arm.pickup_target~=cell.parts["belt:"..cell.belt_count].entity then return false end
+    local first=cell.parts["belt:1"].entity
+    -- Mining drills can deliver to belts without exposing a drop_target.
+    -- Require the actual native drop tile, not an inferred direction/offset.
+    local drop=drill.drop_position
+    if not drop then return false,"drill_drop_position_missing" end
+    drop=point(drop)
+    if type(drop.x)~="number" or type(drop.y)~="number"
+        or drop.x~=drop.x or drop.y~=drop.y or math.abs(drop.x)==math.huge or math.abs(drop.y)==math.huge
+        or not same(center(drop),first.position) then return false,"drill_drop_tile_mismatch" end
+    if drill.drop_target and drill.drop_target~=first then return false,"drill_drop_target_mismatch" end
+    if arm.drop_target~=cell.entity then return false,"inserter_drop_target_mismatch" end
+    if arm.pickup_target~=cell.parts["belt:"..cell.belt_count].entity then return false,"inserter_pickup_target_mismatch" end
     for n=1,cell.belt_count do
         local belt=cell.parts["belt:"..n].entity
         local neighbours=belt.belt_neighbours
@@ -320,9 +330,23 @@ local function topology(cell)
         local expected_out=n<cell.belt_count and cell.parts["belt:"..(n+1)].entity or nil
         if #neighbours.inputs~=(expected_in and 1 or 0) or #neighbours.outputs~=(expected_out and 1 or 0)
             or (expected_in and neighbours.inputs[1]~=expected_in)
-            or (expected_out and neighbours.outputs[1]~=expected_out) then return false end
+            or (expected_out and neighbours.outputs[1]~=expected_out) then return false,"belt_neighbours_mismatch:"..n end
     end
     return true
+end
+-- Read-only recovery evidence: never clear a fault or advance flow samples.
+r.inspect=function(source)
+    local cell=r.cells[source]
+    local result={source=source,session_id=storage.jev_session_id,tick=game.tick,
+        geometry_valid=false,topology_valid=false}
+    if not cell then result.reason="owned_route_missing";return result end
+    result.layout=cell.layout;result.source_unit=cell.source_unit;result.fault=cell.fault
+    if not pcall(geometry,cell) then result.reason="input_identity_changed";return result end
+    result.geometry_valid=true
+    local ok,linked,reason=pcall(topology,cell)
+    result.topology_valid=ok and linked==true
+    result.reason=not ok and "topology_evidence_invalid" or (reason or "valid")
+    return result
 end
 local function sample(cell)
     local source,out=geometry(cell)
@@ -438,6 +462,10 @@ r.observer=function()
         elseif saved and (saved.source_unit~=source.unit_number or saved.output_layout~=out.layout
                 or not saved.source_position or not same(saved.source_position,source.position)) then
             reason="stale_source_evidence"
+        end
+        if r.cells[role] then
+            local inspected=r.inspect(role)
+            detail.fault=inspected.fault;detail.topology_reason=inspected.reason
         end
         detail.reason=reason;detail.fallback="batched_manual_supply"
         detail.max_belts=max_belts;detail.survey_radius=40;detail.observed_tick=game.tick

@@ -115,6 +115,7 @@ def runtime(request):
             end
             route=storage.input_routes.cells[growth]
             route.parts.drill.entity.drop_target=route.parts["belt:1"].entity
+            route.parts.drill.entity.drop_position=route.parts["belt:1"].entity.position
             route.parts.drill.entity.mining_target=site.resource
             route.parts.inserter.entity.pickup_target=route.parts["belt:"..route.belt_count].entity
             route.parts.inserter.entity.drop_target=new
