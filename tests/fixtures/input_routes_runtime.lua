@@ -115,6 +115,7 @@ function connect()
     if not cell or not cell.parts.drill then return end
     local drill,arm=cell.parts.drill.entity,cell.parts.inserter.entity
     drill.drop_target=cell.parts["belt:1"].entity
+    drill.drop_position=drill.drop_target.position
     drill.mining_target=resources[1]
     arm.pickup_target=cell.parts["belt:"..cell.belt_count].entity;arm.drop_target=source
     for n=1,cell.belt_count do
