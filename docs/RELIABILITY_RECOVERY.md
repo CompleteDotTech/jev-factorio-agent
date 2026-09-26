@@ -129,3 +129,7 @@ When running checkpointed tests inside a container with a small tmpfs, set
 TMPDIR to a test-only directory on a filesystem with at least the configured
 storage reserve. Do not lower the production reserve merely to make fixtures
 advance. Production's world and campaign do not participate in these tests.
+Archive integration tests use a writable second filesystem (`/dev/shm`, or
+`/tmp` when the container intentionally mounts shared memory read-only). They
+skip with an explicit prerequisite reason if neither is writable and distinct;
+they never relax container mount permissions or the different-filesystem guard.

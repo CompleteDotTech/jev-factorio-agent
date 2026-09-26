@@ -1,5 +1,6 @@
 """Read-only inventory and explicit finite retention tested on temporary files."""
 import hashlib
+import errno
 import os
 from pathlib import Path
 import tempfile
@@ -19,11 +20,19 @@ def manifest(root, path):
 
 @pytest.fixture
 def distinct_archive(tmp_path):
-    directory = Path("/dev/shm")
-    if not directory.is_dir() or directory.stat().st_dev == tmp_path.stat().st_dev:
-        pytest.skip("A second local filesystem is needed for archive durability integration")
-    with tempfile.TemporaryDirectory(prefix="jev-retention-test-", dir=directory) as path:
-        yield Path(path)
+    for directory in (Path("/dev/shm"), Path("/tmp")):
+        if not directory.is_dir() or directory.stat().st_dev == tmp_path.stat().st_dev:
+            continue
+        try:
+            temporary = tempfile.TemporaryDirectory(prefix="jev-retention-test-", dir=directory)
+        except OSError as error:
+            if error.errno in {errno.EROFS, errno.EACCES, errno.EPERM}:
+                continue
+            raise
+        with temporary as path:
+            yield Path(path)
+        return
+    pytest.skip("A writable second local filesystem is needed for archive durability integration")
 
 
 def test_actual_distinct_filesystem_copy_then_authorized_prune(tmp_path, distinct_archive):
