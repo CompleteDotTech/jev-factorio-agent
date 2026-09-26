@@ -368,7 +368,7 @@ def test_undepleted_ore_uses_one_native_mining_start_for_a_batch(position_module
     def call(name, *arguments):
         calls.append((name, arguments))
         if name == "mine_approach":
-            return {"reachable": True}
+            return {"reachable": True, "identity": 71}
         return {}
 
     fair.call = call
@@ -376,7 +376,7 @@ def test_undepleted_ore_uses_one_native_mining_start_for_a_batch(position_module
     fair.move_to = lambda *_: pytest.fail("Reachable ore must not request movement")
     assert fair.harvest("iron-ore", SimpleNamespace(x=1, y=2), 20) == 20
     assert [name for name, _ in calls] == ["mine_approach", "begin_mine"]
-    assert calls[-1][1][-1] == 20
+    assert calls[-1][1][-2:] == (20, 71)
     assert fair.metrics["mining_starts"] == 1
     assert fair.metrics["mined_items"] == 20
 

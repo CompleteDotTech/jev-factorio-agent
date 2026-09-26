@@ -297,33 +297,29 @@ def test_wrong_session_rejected(supervisor):
         supervisor.checkpoint()
 
 
-def test_failed_repairs_back_off_until_original_cutoff(supervisor, monkeypatch):
+def test_unclassified_operational_stop_never_enters_source_repair(supervisor, monkeypatch):
     calls = []
     monkeypatch.setattr(supervisor, "watch_game", lambda: "blocked")
     monkeypatch.setattr(supervisor, "repair", lambda reason: calls.append(supervisor.clock()) or False)
-    assert supervisor.run() == 0
-    assert 1 < len(calls) < 10
-    assert calls[1] - calls[0] == 2
-    assert supervisor.state["phase"] == "cutoff"
-    assert supervisor.clock() == supervisor.state["cutoff"]
+    cutoff = supervisor.state["cutoff"]
+    assert supervisor.run() == 2
+    assert calls == []
+    assert supervisor.state["phase"] == "blocked"
+    assert supervisor.clock() < cutoff == supervisor.state["cutoff"]
 
 
-def test_game_stopped_before_repair(supervisor, monkeypatch):
+def test_uncertain_game_stopped_before_escalation_not_source_repair(supervisor, monkeypatch):
     process = FakeProcess()
 
     def game():
         supervisor.process = process
         return "uncertain"
 
-    def repair(reason):
-        assert process.reaped
-        assert supervisor.process is None
-        supervisor.stop_requested = True
-        return False
-
     monkeypatch.setattr(supervisor, "watch_game", game)
-    monkeypatch.setattr(supervisor, "repair", repair)
-    assert supervisor.run() == 0
+    monkeypatch.setattr(supervisor, "repair", lambda reason: pytest.fail("uncertain is not a code defect"))
+    assert supervisor.run() == 2
+    assert process.reaped and supervisor.process is None
+    assert supervisor.state["operational_incident"]["failure_class"] == "uncertain_outcome"
 
 
 def test_config_rejects_string_command(supervisor):
@@ -414,13 +410,9 @@ def test_resume_with_repair_gate_never_starts_game(supervisor, monkeypatch):
     supervisor.begin_repair("blocked")
     monkeypatch.setattr(supervisor, "watch_game", lambda: pytest.fail("repair gate bypassed"))
 
-    def repair(reason):
-        assert reason == "blocked"
-        supervisor.stop_requested = True
-        return False
-
-    monkeypatch.setattr(supervisor, "repair", repair)
-    assert supervisor.run() == 0
+    monkeypatch.setattr(supervisor, "repair", lambda reason: pytest.fail("unclassified legacy gate must escalate"))
+    assert supervisor.run() == 2
+    assert supervisor.state["repair_required"] is True
 
 
 def test_code_verification_rejects_dirty_worktree(supervisor, monkeypatch):
@@ -507,6 +499,8 @@ def test_code_verification_requires_origin_and_checks_configured_fork(
 
 
 def test_accepted_repair_resumes_without_failure_backoff(supervisor, monkeypatch):
+    # This test isolates accepted-repair scheduling after a positive source gate.
+    monkeypatch.setattr(supervisor, "recovery_class", lambda reason: "source_defect")
     starts = []
     def watch():
         starts.append(supervisor.clock())

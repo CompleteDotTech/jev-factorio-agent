@@ -52,24 +52,19 @@ def test_transient_provider_failure_respects_policy(monkeypatch, error, policy):
     assert decision["model_called"] is True
     assert decision["answers"] == {}
     assert decision["utilities"] == {}
-    assert decision["reason"].startswith("Transient provider failure:")
+    assert decision["reason"].startswith("Provider access blocked:")
     assert "secret" not in decision["reason"]
-    if policy == "hybrid":
-        assert decision["source"] == "deterministic-fallback"
-        assert decision["plan_id"] is not None
-        assert backend.actions
-    else:
-        assert decision["source"] == "observe"
-        assert decision["plan_id"] is None
-        assert record["action"] == "observe"
-        assert backend.actions == []
-        assert not loop.terminal
-        loop.step()
-        assert loop.terminal
-        assert loop.memory.status == "blocked"
-        loop.step()
-        assert len(calls) == 2
-        assert backend.actions == []
+    assert decision["source"] == "observe"
+    assert decision["plan_id"] is None
+    assert record["action"] == "observe"
+    assert backend.actions == []
+    assert not loop.terminal
+    # Cooldown is operational, not two exhausted gameplay-selection attempts.
+    again = loop.step()
+    assert not loop.terminal and loop.memory.status == "running"
+    assert loop.memory.stalled_decisions == 0 and loop.memory.failures == {}
+    assert again["model_call"] is False and len(calls) == 1
+    assert backend.actions == []
 
 
 @pytest.mark.parametrize("error", [
@@ -78,7 +73,7 @@ def test_transient_provider_failure_respects_policy(monkeypatch, error, policy):
     RuntimeError("programmer error"), TypeError("programmer error"),
 ])
 @pytest.mark.parametrize("policy", ["jev", "hybrid"])
-def test_permanent_and_programmer_errors_propagate(monkeypatch, error, policy):
+def test_denials_block_and_programmer_errors_propagate(monkeypatch, error, policy):
     def fail(*args, **kwargs):
         raise error
 
@@ -86,9 +81,16 @@ def test_permanent_and_programmer_errors_propagate(monkeypatch, error, policy):
     backend = CountingBackend()
     loop = HierarchicalLoop(backend, jev=JevClient(api_key="test-only"), policy=policy,
                             target="bootstrap_mining", tick_seconds=0)
-    with pytest.raises(type(error)) as caught:
-        loop.step()
-    assert caught.value is error
+    if isinstance(error, requests.HTTPError):
+        record = loop.step()
+        assert record["action"] == "observe"
+        assert record["decision"]["diagnostics"]["outcome"] == "provider_blocked"
+        assert loop.memory.status == "running" and loop.memory.stalled_decisions == 0
+        assert not loop.terminal
+    else:
+        with pytest.raises(type(error)) as caught:
+            loop.step()
+        assert caught.value is error
     assert backend.actions == []
 
 

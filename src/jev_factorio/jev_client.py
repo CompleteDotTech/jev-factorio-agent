@@ -11,11 +11,14 @@ import os
 
 import requests
 
+from .provider_health import ProviderPayloadError
+
 API_URL = "https://api.typesafe.ai/v1/systemone"
 GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/systemone"  # confirm path against Gateway docs
 
 
 class JevClient:
+    uses_http_provider = True
     answer_quantum = 0.01
 
     def __init__(self, api_key: str | None = None, base_url: str = API_URL,
@@ -35,7 +38,12 @@ class JevClient:
             timeout=10,
         )
         resp.raise_for_status()
-        body = resp.json()
+        try:
+            body = resp.json()
+            if not isinstance(body, dict) or not isinstance(body.get("answers"), dict):
+                raise ProviderPayloadError("Invalid provider response envelope")
+        except (ValueError, TypeError) as error:
+            raise ProviderPayloadError("Invalid provider response envelope") from error
         self.last_usage = body.get("usage")
         self.last_model = body.get("model")
         return body["answers"]
@@ -95,6 +103,8 @@ class CloudflareJevClient:
           https://developers.cloudflare.com/ai-gateway/features/unified-billing/
     """
 
+    uses_http_provider = True
+
     def __init__(self, account_id: str, api_token: str,
                  model: str = "typesafe/jev"):
         self.account_id = account_id
@@ -114,10 +124,15 @@ class CloudflareJevClient:
             timeout=10,
         )
         resp.raise_for_status()
-        body = resp.json()
-        if not body.get("success"):
-            raise RuntimeError(f"Cloudflare AI error: {body.get('errors')}")
-        result = body["result"]
+        try:
+            body = resp.json()
+            if not isinstance(body, dict) or body.get("success") is not True:
+                raise ProviderPayloadError("Provider rejected application request")
+            result = body.get("result")
+            if not isinstance(result, dict) or not isinstance(result.get("answers"), dict):
+                raise ProviderPayloadError("Invalid provider response envelope")
+        except (ValueError, TypeError) as error:
+            raise ProviderPayloadError("Invalid provider response envelope") from error
         self.last_usage = result.get("usage")
         self.last_model = result.get("model")
         return result["answers"]

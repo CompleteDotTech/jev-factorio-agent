@@ -15,6 +15,8 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 from .causal_trace import CausalTrace, traced_step
+from .operational_safety import MaintenanceAdmissionClosed, StoragePressure
+from .provider_health import ProviderCircuit
 from .backends.errors import ConnectionPreflightRejected
 from .research_log import EventSink, ResearchLogError, validate_output_paths
 from .judgments import Decision, select_plan
@@ -84,6 +86,14 @@ class HierarchicalLoop(AgentLoop):
         self._attempt_clock: tuple[str, float] | None = None
         self._phases: list[dict] = []
         self._persistence_failed = False
+        from .operational_safety import RuntimeSafety
+        self._safety = RuntimeSafety(self.checkpoint, outputs=(
+            self.log_file.parent if self.log_file else None,
+            getattr(research_log, "run_dir", None))) if self.checkpoint else None
+        if jev is not None and getattr(jev, "uses_http_provider", False):
+            self.jev = ProviderCircuit(jev, self._safety.directory / "provider.json"
+                                      if self._safety else None)
+            jev = self.jev
         from .performance import PerformanceCounters
         from .planning.capacity_evidence import CapacityHistory
         self._performance = PerformanceCounters()
@@ -91,6 +101,8 @@ class HierarchicalLoop(AgentLoop):
         self.catalog = None
         self._trace = CausalTrace(research_log, "hierarchical", jev, provenance=self.provenance)
         self._trace.metrics = self._performance if self.factory_scheduling == "ready-work" else None
+        self._trace.admission_check = (
+            lambda: self._safety.before_dispatch(self.memory.session_id)) if self._safety else None
         if target in {"rocket_launch", "iron_smelting", "steam_power", "automation_science"} \
                 and hasattr(backend, "enable_factory"):
             self.catalog = backend.enable_factory()
@@ -101,6 +113,9 @@ class HierarchicalLoop(AgentLoop):
         return self.memory is not None and self.memory.status in {"completed", "blocked", "uncertain"}
 
     def _diagnostic_trace(self, event: dict) -> None:
+        if self._trace._failed:
+            self._persistence_failed = True
+            return  # Preserve the original recording error and prepared checkpoint.
         validate_phase(event)
         self._phases.append(deepcopy(event))
         self._phases = self._phases[-64:]
@@ -236,6 +251,11 @@ class HierarchicalLoop(AgentLoop):
     def _record(self, before: GameSnapshot, action: str, outcome: str,
                 after: GameSnapshot | None = None, verified: bool = False) -> dict:
         self._save()
+        if self._safety is not None:
+            self._safety.publish(
+                self.memory, after or before, process_id=self._process_id,
+                provenance=self.provenance, provider=self.jev.state if isinstance(self.jev, ProviderCircuit) else None,
+                verified=verified)
         decision = self._decision
         record = {
             **self.provenance,
@@ -547,6 +567,8 @@ class HierarchicalLoop(AgentLoop):
                 )
         except ResearchLogError:
             raise
+        except (MaintenanceAdmissionClosed, StoragePressure):
+            return self._record(snapshot, "observe", "Retained transfer admission closed", snapshot)
         except Exception as error:
             self.memory.pending["dispatch"] = "ambiguous"
             self.memory.event("recovery_dispatch_error", error_type=error_code(error),
@@ -646,7 +668,8 @@ class HierarchicalLoop(AgentLoop):
             self.memory.status = "running"
             self._fail_plan(reason)
             return self._record(snapshot, "reconcile", reason)
-        if self._prepared_transfer_never_entered_rpc(plan, step, snapshot):
+        if (not (self._safety and self._safety.maintenance(self.memory, snapshot))
+                and self._prepared_transfer_never_entered_rpc(plan, step, snapshot)):
             return self._dispatch_retained_transfer(plan, step, snapshot)
         if self._absent_ambiguous_placement(plan, step, snapshot):
             name = step.parameters["name"]
@@ -818,6 +841,10 @@ class HierarchicalLoop(AgentLoop):
         # Resolve in-flight work before processing model requests or goal changes.
         if self.memory.pending:
             return self._verify_pending(snapshot)
+        if self._safety:
+            held = self._safety.admission(self.memory, snapshot)
+            if held:
+                return self._record(snapshot, "observe", held)
         self._refresh_goals(snapshot)
         if self.terminal:
             return self._record(snapshot, "observe", self.memory.reason, verified=True)
@@ -866,7 +893,9 @@ class HierarchicalLoop(AgentLoop):
                 self._planning_diagnostics["ranked_plan_ids"] = [p.id for p in plans]
                 self._planning_diagnostics["candidate_evidence"] = deepcopy(
                     self._selection_support["candidate_evidence"])
-            singleton = bool(self._selection_support and len(plans) == 1 and self.policy == "hybrid")
+            provider_ready = not isinstance(self.jev, ProviderCircuit) or self.jev.state["phase"] == "healthy"
+            singleton = bool(self._selection_support and len(plans) == 1
+                             and self.policy == "hybrid" and provider_ready)
             if self.policy == "deterministic" or singleton:
                 with phase("selection", self._diagnostic_trace):
                     chosen = self._fallback_plan(plans)
@@ -898,6 +927,11 @@ class HierarchicalLoop(AgentLoop):
                 except ValueError as error:
                     self._decision = Decision(None, "observe", str(error), state=state,
                                               diagnostics={"schema": 1, "outcome": "request_rejected"})
+                if self._decision.diagnostics.get("outcome") == "provider_blocked":
+                    # Operational denial is neither model abstention nor planning
+                    # failure. No hybrid fallback and no consumed gameplay budget.
+                    self._trace_decision()
+                    return self._record(snapshot, "observe", self._decision.reason)
                 chosen = next((p for p in plans if p.id == self._decision.plan_id), None)
                 if chosen is None and self.policy == "hybrid":
                     chosen = self._fallback_plan(plans)
@@ -928,6 +962,10 @@ class HierarchicalLoop(AgentLoop):
         fresh = self._observe("pre_dispatch_observe")
         if self._execution_barrier(fresh):
             return self._record(snapshot, "observe", self.memory.reason, fresh)
+        if self._safety:
+            held = self._safety.admission(self.memory, fresh)
+            if held:
+                return self._record(snapshot, "observe", held, fresh)
         plan = Plan.from_dict(self.memory.active_plan)
         index = self._trace.call(
             "plan_progress", lambda: plan.next_step(fresh, self.memory.step_index),
@@ -983,6 +1021,17 @@ class HierarchicalLoop(AgentLoop):
             # A failed recorder is not an ambiguous backend return and must not
             # be swallowed by the normal dispatch-error handling.
             raise
+        except (MaintenanceAdmissionClosed, StoragePressure) as error:
+            # Only these exact local guard contracts prove operation() was never
+            # entered. Retain the plan/reservations, record the rejected attempt,
+            # and never treat this as a gameplay failure or clear an unknown effect.
+            reason = ("maintenance_preflight_rejected" if isinstance(error, MaintenanceAdmissionClosed)
+                      else "storage_preflight_rejected")
+            self.memory.event(reason, attempt_id=self.memory.attempt["id"], tick=fresh.tick)
+            self._finish_attempt(fresh, reason)
+            self.memory.pending = None
+            self._trace.clear_pending()
+            return self._record(snapshot, "observe", reason, fresh)
         except Exception as error:
             if step.action == "factory_connect" and type(error) is ConnectionPreflightRejected:
                 # Only this explicit backend contract proves the connection

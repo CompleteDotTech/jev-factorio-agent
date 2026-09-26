@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Callable
 
 from .provenance import CONTEXT_ENV, append_audit, digest_json, identifier, source_revision
+from .operational_safety import SafetyStateError, read_json, safety_dir
+from .recovery_policy import classify, current_exit, repair_quota_exhausted
 
 
 def atomic_json(path: Path, value: dict) -> None:
@@ -64,8 +66,11 @@ class SupervisorConfig:
     consolidated_observations: bool = False
     lead_time_supply: bool = False
     coverage_margin_lookahead: bool = False
+    max_repair_attempts: int = 3
 
     def validate(self) -> None:
+        if type(self.max_repair_attempts) is not int or not 1 <= self.max_repair_attempts <= 10:
+            raise ValueError("max_repair_attempts must be an integer in [1, 10]")
         for name in ("campaign_diagnostics", "profile_observations", "consolidated_observations",
                      "lead_time_supply", "coverage_margin_lookahead"):
             if type(getattr(self, name)) is not bool:
@@ -404,7 +409,7 @@ class Supervisor:
         finally:
             if prompt:
                 input_stream.close()
-        self.save(phase=phase, process={"pid": self.process.pid,
+        self.save(phase=phase, execution_id=execution_id, process={"pid": self.process.pid,
                                       "identity": self.process_identity(self.process.pid)})
         self.event("process_started", phase=phase, pid=self.process.pid,
                    execution_id=execution_id, code_revision=self.state.get("code_revision"))
@@ -484,10 +489,63 @@ class Supervisor:
                 self.save(last_valid_checkpoint=checkpoint)
             if self.process.poll() is not None:
                 return f"process_exit: {self.process.returncode}"
+            health = self.runtime_health()
+            if health is not None:
+                self.save(runtime_health=health)
+                # Maintenance/provider/storage states are observable holds, not
+                # code-repair requests. Ordinary bounded pending waits are also
+                # exempt from a naive unchanged-checkpoint watchdog.
+                if health["phase"] in {"provider_blocked", "storage_pressure", "quiescing",
+                                      "quiescent", "quiescence_timeout"}:
+                    last_change = self.clock()
+                elif (checkpoint.get("pending") or checkpoint.get("background_job")):
+                    last_change = self.clock()
             if self.clock() - last_change >= self.config.hang_seconds:
                 return "checkpoint_heartbeat_timeout"
             self.pause(self.config.poll_seconds)
         return "cutoff" if not self.stop_requested else "stopped"
+
+    def runtime_health(self) -> dict | None:
+        try:
+            value = read_json(safety_dir(self.config.checkpoint) / "health.json")
+        except (OSError, SafetyStateError):
+            return None
+        if (value is None or not self.state.get("execution_id")
+                or value.get("execution_id") != self.state["execution_id"]
+                or value.get("session_id") != self.config.session_id
+                or value.get("pid") != (self.state.get("process") or {}).get("pid")
+                or value.get("phase") not in {"healthy", "provider_blocked", "storage_pressure",
+                                             "quiescing", "quiescent", "quiescence_timeout"}
+                or type(value.get("at")) not in (int, float)
+                or not 0 <= self.clock() - value["at"] <= max(15, self.config.poll_seconds * 3)):
+            return None
+        return value
+
+    def recovery_class(self, reason: str) -> str:
+        try:
+            checkpoint = self.checkpoint()
+        except (OSError, ValueError):
+            checkpoint = self.state.get("last_valid_checkpoint", {})
+        try:
+            evidence = current_exit(self.config.checkpoint, session_id=self.config.session_id,
+                                    execution_id=self.state.get("execution_id"))
+        except (OSError, SafetyStateError):
+            evidence = None
+        return classify(reason, checkpoint, evidence)
+
+    def block_recovery(self, reason: str, failure_class: str) -> int:
+        existing = self.state.get("operational_incident") or {}
+        self.transition("recovery_blocked", {
+            "phase": "blocked", "operational_incident": {
+                "incident_id": existing.get("incident_id", str(uuid4())),
+                "failure_class": failure_class,
+                "detected_at": existing.get("detected_at", self.clock()),
+                "blocked_at": self.clock(), "cutoff": self.state["cutoff"],
+                "pending_preserved": True,
+            },
+        }, reason=reason, failure_class=failure_class,
+            recovery_path="operator_reconciliation", intervention_type="operational_recovery")
+        return 2
 
     def repair_prompt(self, reason: str, result: Path) -> str:
         return f"""Repair the stopped autonomous Factorio campaign in {self.config.cwd}.
@@ -771,11 +829,20 @@ Only report repaired when every acceptance requirement is verified.
         if self.stop_requested:
             return False
         incident = self.state["incident"]
+        if self.state.get("repair_account_blocked"):
+            return False
+        incident_attempts = (self.state.get("incident_repair_attempts", 0)
+                             if self.state.get("repair_budget_incident_id") == incident["incident_id"] else 0)
+        if incident_attempts >= self.config.max_repair_attempts:
+            self.block_recovery(reason, "source_defect")
+            return False
         previous, source_before = incident["checkpoint"], incident["source"]
         attempt = self.state["attempt"] + 1
         attempt_source_before = self.snapshot_revision()
         if not self.transition("repair_started", {
             "attempt": attempt, "repair_attempt_open": True,
+            "repair_budget_incident_id": incident["incident_id"],
+            "incident_repair_attempts": incident_attempts + 1,
             "attempt_incident_id": incident["incident_id"],
             "attempt_source_before": attempt_source_before,
         }, attempt=attempt, actor_type="repair_agent", source_before=attempt_source_before):
@@ -783,6 +850,9 @@ Only report repaired when every acceptance requirement is verified.
         result = self.config.state_dir / f"repair-{attempt}.json"
         prompt = self.config.state_dir / f"repair-{attempt}.txt"
         prompt.write_text(self.repair_prompt(reason, result))
+        repair_log = self.config.state_dir / "repair.log"
+        repair_offset = repair_log.stat().st_size if repair_log.exists() else 0
+        repair_started_at = self.clock()
         self.launch(self.config.repair_command, "repair", prompt)
         if self.process is None:
             return False
@@ -799,7 +869,11 @@ Only report repaired when every acceptance requirement is verified.
                 report = {}
         except (OSError, ValueError):
             raw_result, report = b"", {}
-        accepted = returncode == 0 and self.validate_repair(result, previous, source_before)
+        quota_blocked = repair_quota_exhausted(repair_log, repair_offset)
+        validation_started_at = self.clock()
+        accepted = (not quota_blocked and returncode == 0
+                    and self.validate_repair(result, previous, source_before))
+        validation_seconds = self.clock() - validation_started_at
         # Evidence fingerprints must refer to the artifact that was validated,
         # not a replacement written during Git/test verification.
         if accepted:
@@ -824,6 +898,8 @@ Only report repaired when every acceptance requirement is verified.
                                     actor_type="repair_agent", intervention_type=intervention):
             return False
         updates = {"repair_attempt_open": False}
+        if quota_blocked:
+            updates.update(repair_account_blocked=True, phase="blocked")
         if accepted:
             updates.update(repair_required=False, incident=None,
                            last_valid_checkpoint=self.checkpoint(), phase="ready")
@@ -832,6 +908,9 @@ Only report repaired when every acceptance requirement is verified.
             declared_kind=declared, intervention_type=intervention, actor_type="repair_agent",
             source_before=attempt_source_before, source_after=revision,
             result_file=result.name, result_sha256=hashlib.sha256(raw_result).hexdigest() if raw_result else None,
+            validation_seconds=validation_seconds,
+            repair_seconds=self.clock() - repair_started_at,
+            repair_account_blocked=quota_blocked,
             correlation_complete=all(key in report for key in ("run_id", "incident_id", "attempt")))
         return accepted and durable
 
@@ -848,6 +927,8 @@ Only report repaired when every acceptance requirement is verified.
             if manual_intervention is not None:
                 self.record_manual_intervention(manual_intervention)
                 return 1 if self.stop_requested else 0
+            if self.state.get("phase") == "blocked" or self.state.get("repair_account_blocked"):
+                return 2
             failures = 0
             try:
                 while self.remaining() > 0 and not self.stop_requested:
@@ -866,6 +947,9 @@ Only report repaired when every acceptance requirement is verified.
                         return 1 if self.audit_failed else 0
                     if reason in {"cutoff", "stopped"}:
                         break
+                    failure_class = self.recovery_class(reason)
+                    if failure_class != "source_defect":
+                        return self.block_recovery(reason, failure_class)
                     self.begin_repair(reason)
                     accepted = False
                     while self.remaining() > 0 and not self.stop_requested and not accepted:
@@ -876,6 +960,11 @@ Only report repaired when every acceptance requirement is verified.
                         finally:
                             self.stop_process()
                             self.close_interrupted_attempt()
+                        if self.state.get("repair_account_blocked"):
+                            return self.block_recovery(reason, "account_quota_blocked")
+                        if (not accepted and self.state.get("incident_repair_attempts", 0)
+                                >= self.config.max_repair_attempts):
+                            return self.block_recovery(reason, "source_defect")
                         failures = 0 if accepted else min(failures + 1, 6)
                         if not accepted:
                             self.pause(min(900, self.config.backoff_seconds * 2 ** failures))
@@ -909,6 +998,7 @@ def cli() -> None:
     parser.add_argument("--duration-hours", type=float, default=12)
     parser.add_argument("--hang-seconds", type=float, default=600)
     parser.add_argument("--repair-seconds", type=float, default=1800)
+    parser.add_argument("--max-repair-attempts", type=int, default=3)
     parser.add_argument("--poll-seconds", type=float, default=5)
     parser.add_argument("--backoff-seconds", type=float, default=30)
     parser.add_argument("--tick-seconds", type=float, default=1)

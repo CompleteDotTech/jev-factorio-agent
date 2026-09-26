@@ -204,7 +204,7 @@ class FleBackend:
     def _observe_legacy(self) -> GameSnapshot:
         from fle.env import Prototype
 
-        self._fair.call("observe")
+        native_controls = self._fair.call("observe")
         tools = self._tools
         raw = self._instance.rcon_client.send_command(
             "/sc local agent = storage.agent_characters[1]; "
@@ -250,7 +250,9 @@ class FleBackend:
             drill_output_connected=bool(output_chests),
             iron_ore_collected=collected,
         )
-        return self._factory.observe(snapshot) if self._factory else snapshot
+        snapshot = self._factory.observe(snapshot) if self._factory else snapshot
+        snapshot._native_controls = native_controls
+        return snapshot
 
     def act(self, action: str) -> str:
         from fle.env import Direction, Prototype

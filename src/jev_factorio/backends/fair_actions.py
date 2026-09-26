@@ -50,8 +50,14 @@ class FairActions:
                 if state["status"] == "completed":
                     return state
                 if state["status"] == "failed":
-                    if state.get("error") == "Native pathfinder could not find a route":
-                        raise NativePathNotFound(state["error"])
+                    if (state.get("error") == "Native pathfinder could not find a route"
+                            or state.get("movement_started") is False and state.get("failure_code") in {
+                                "destruction_required", "no_safe_path", "pathfinder_busy",
+                                "path_deadline", "blocked_route_cooldown"}):
+                        # This proves only this walk did not start. It is NOT
+                        # permission to clear a compound gather/transfer that
+                        # may already have had effects in earlier phases.
+                        raise NativePathNotFound("No safe native path before movement")
                     raise RuntimeError(state.get("error", "Native controls failed"))
                 time.sleep(0.1)
             raise TimeoutError("Native action exceeded its bounded observation window")
@@ -159,10 +165,11 @@ class FairActions:
                 if not isinstance(target, dict):
                     raise RuntimeError("No mineable resource observed near the walking actor")
             approach = self.call("mine_approach", target, resource)
+            identity = approach["identity"]
             if not approach["reachable"]:
                 self.move_to(Position(**approach["position"]))
             self._note("mining_starts")
-            self.call("begin_mine", target, resource, quantity - gained)
+            self.call("begin_mine", target, resource, quantity - gained, identity)
             try:
                 result = self.wait()
             except RuntimeError:

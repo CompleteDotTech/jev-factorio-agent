@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+import errno
 from dataclasses import asdict
 from copy import deepcopy
 from functools import wraps
@@ -11,6 +12,11 @@ from uuid import uuid4
 import requests
 
 from .research_log import EventSink, ResearchLogError, safe_payload
+
+class TraceStorageError(ResearchLogError):
+    failure_class = "storage_pressure"
+    native_effect_possible = False
+
 
 T = TypeVar("T")
 
@@ -58,6 +64,7 @@ def traced_step(method):
 class CausalTrace:
     def __init__(self, sink: EventSink | None, controller: str, client=None, *, provenance=None):
         self.metrics = None
+        self.admission_check = None
         self.sink, self.controller = sink, controller
         self.enabled = sink is not None
         self.trace_id = uuid4().hex if self.enabled else None
@@ -102,8 +109,10 @@ class CausalTrace:
                         **payload}
             # Even a custom sink must not retain or mutate live controller data.
             self.sink.emit(event_type, safe_payload(envelope, self._secrets))
-        except Exception:
+        except Exception as error:
             self._failed = True
+            if isinstance(error, OSError) and error.errno in {errno.ENOSPC, errno.EDQUOT}:
+                raise TraceStorageError("Causal storage exhausted; retain pending ownership") from None
             raise ResearchLogError("Causal event persistence failed") from None
 
     def error(self, event_type: str, error: BaseException, **details) -> None:
@@ -177,6 +186,8 @@ class CausalTrace:
     def dispatch(self, operation: Callable[[], T], action: str, *, parameters=None,
                  plan_id=None, step_index=None, pending=None, checkpointed=False,
                  role="plan", attempt_id=None) -> T:
+        if self.admission_check is not None and role != "mock_clock_advance":
+            self.admission_check()
         if not self.enabled:
             return operation()
         action_id = self.identity("action")
@@ -193,8 +204,12 @@ class CausalTrace:
             self._pending_action_id = action_id
             if attempt_id is not None:
                 self._attempt_actions[attempt_id] = action_id
-        return self.call("action_returned", operation, details=facts,
-                         result=lambda outcome: {"outcome": outcome})
+        try:
+            return self.call("action_returned", operation, details=facts,
+                             result=lambda outcome: {"outcome": outcome})
+        except TraceStorageError as error:
+            error.native_effect_possible = True
+            raise
 
     def verify(self, step, snapshot, *, plan_id: str, index: int,
                pending: dict, phase: str, attempt_id=None) -> bool:

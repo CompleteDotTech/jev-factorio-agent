@@ -344,6 +344,7 @@ def test_restart_closes_interrupted_attempt_without_accepting_it(supervisor, mon
 
 @pytest.mark.parametrize("failure", ["prompt", "launch"])
 def test_retry_closes_every_failed_attempt(supervisor, monkeypatch, failure):
+    monkeypatch.setattr(supervisor, "recovery_class", lambda reason: "source_defect")
     revision(supervisor, monkeypatch)
     supervisor.begin_repair("blocked")
     if failure == "prompt":
@@ -357,10 +358,10 @@ def test_retry_closes_every_failed_attempt(supervisor, monkeypatch, failure):
         def launch(*args, **kwargs):
             raise ValueError("launch unavailable")
         monkeypatch.setattr(supervisor, "launch", launch)
-    assert supervisor.run() == 0
+    assert supervisor.run() == 2
     started = [row for row in events(supervisor) if row["event"] == "repair_started"]
     closed = [row for row in events(supervisor) if row["event"] == "repair_interrupted"]
-    assert len(started) > 1
+    assert len(started) == supervisor.config.max_repair_attempts
     assert [row["attempt"] for row in started] == [row["attempt"] for row in closed]
     assert not supervisor.state["repair_attempt_open"]
     assert supervisor.state["repair_required"]
