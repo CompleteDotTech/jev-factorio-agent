@@ -729,8 +729,10 @@ def test_unsafe_inherited_tick_is_quarantined_during_native_walking(fair_runtime
 def test_failed_path_reports_failure_without_moving(fair_runtime):
     fair_runtime.execute("""
         storage.fair.begin_move{x = 2, y = 0}
-        handlers[2]{id = 17}
+        -- A missing path now receives bounded alternate planning, never walking.
+        for _ = 1, 5 do handlers[2]{id = 17} end
         assert(storage.fair.job.status == "failed")
+        assert(storage.fair.job.path_requests <= 9)
         assert(not player.walking_state.walking)
         assert(player.position.x == 0)
     """)

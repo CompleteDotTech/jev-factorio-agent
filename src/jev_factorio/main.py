@@ -256,6 +256,15 @@ def cli() -> None:
                 loop_type = campaign_loop_type(loop_type)
                 options.update(lead_time_supply=args.lead_time_supply,
                                coverage_margin_lookahead=args.coverage_margin_lookahead)
+            if args.backend == "fle":
+                from .operational_safety import storage_ready
+                output_roots = [Path(args.checkpoint).parent]
+                if args.log_file:
+                    output_roots.append(Path(args.log_file).parent)
+                if run_dir:
+                    output_roots.append(run_dir)
+                if not storage_ready(output_roots):
+                    p.error("Storage reserve unavailable; live backend was not attached")
             backend = make_backend(args.backend, resume=args.resume, adopt_session=args.adopt_session)
             if args.backend == "fle" and args.profile_observations:
                 backend.profile_observations = True
@@ -273,10 +282,15 @@ def cli() -> None:
                 "requested_model": getattr(getattr(loop, "jev", None), "model", None),
                 "model_is_mock": bool(getattr(getattr(loop, "jev", None), "is_mock", False)),
             }, session_id=getattr(memory, "session_id", None))
-        if args.duration_hours is not None:
-            loop.run(steps=None, duration_seconds=args.duration_hours * 3600)
-        else:
-            loop.run(steps=args.steps if args.steps is not None else 8)
+        try:
+            if args.duration_hours is not None:
+                loop.run(steps=None, duration_seconds=args.duration_hours * 3600)
+            else:
+                loop.run(steps=args.steps if args.steps is not None else 8)
+        except BaseException as error:
+            from .recovery_policy import record_exit
+            record_exit(loop, error)
+            raise
         if research is not None:
             research.emit("controller_stopped", {
                 "terminal": bool(getattr(loop, "terminal", False)),

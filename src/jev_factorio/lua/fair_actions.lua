@@ -86,6 +86,76 @@ fair.bind = function()
     return {position = player.position}
 end
 
+-- Rejected exact start/goal routes are cooled down, not retried every tick.
+-- No assumed API flag can prohibit every neutral destructible obstacle: inspect
+-- every PathfinderWaypoint before assigning any walking controls.
+fair.blocked_routes = fair.blocked_routes or {}
+local function route_key(player, position)
+    return table.concat({player.surface.index or 0, player.character.unit_number,
+        player.position.x, player.position.y, position.x, position.y}, ":")
+end
+local function reject_route(job, code, reason)
+    job.failure_code = code
+    job.movement_started = job.movement_started or false
+    fair.blocked_routes[job.route_key] = game.tick + 3600
+    local count = 0
+    for key, expiry in pairs(fair.blocked_routes) do
+        if expiry <= game.tick then fair.blocked_routes[key] = nil else count = count + 1 end
+    end
+    -- Keep memory bounded even across many distinct destinations.
+    while count > 64 do
+        local oldest_key, oldest_expiry
+        for key, expiry in pairs(fair.blocked_routes) do
+            if not oldest_expiry or expiry < oldest_expiry then
+                oldest_key, oldest_expiry = key, expiry
+            end
+        end
+        fair.blocked_routes[oldest_key] = nil
+        count = count - 1
+    end
+    fair.stop(reason)
+end
+
+-- Plan both legs of at most four detours BEFORE moving. Nine native requests
+-- (one original plus two per detour) and a 600-tick planning deadline bound work.
+local function request_move_path(job, player, start, goal)
+    assert((job.path_requests or 0) < 9, "Native path request budget exhausted")
+    job.path_requests = (job.path_requests or 0) + 1
+    job.request = player.surface.request_path{
+        bounding_box = player.character.prototype.collision_box,
+        collision_mask = player.character.prototype.collision_mask,
+        start = start, goal = goal, force = player.force,
+        radius = 0.2, entity_to_ignore = player.character, can_open_gates = true,
+        pathfind_flags = {cache = false, allow_paths_through_own_entities = false,
+                          allow_destroy_friendly_entities = false}
+    }
+end
+local function next_detour(job, code)
+    local player = fair.actor()
+    local offsets = {6, -6, 12, -12}
+    job.detour_index = (job.detour_index or 0) + 1
+    if job.detour_index > #offsets or job.path_requests >= 9
+        or game.tick > job.path_deadline then
+        reject_route(job, code,
+            "No safe route within bounded detours; choose another target or clear obstacles by normal mining")
+        return
+    end
+    local dx, dy = job.goal.x - job.origin.x, job.goal.y - job.origin.y
+    local length = math.sqrt(dx * dx + dy * dy)
+    if length == 0 then
+        reject_route(job, code, "No safe zero-length route; inspect the target obstruction")
+        return
+    end
+    local center = job.blocked_waypoint or {
+        x = (job.origin.x + job.goal.x) / 2,
+        y = (job.origin.y + job.goal.y) / 2
+    }
+    job.detour_goal = {x = center.x - dy / length * offsets[job.detour_index],
+                       y = center.y + dx / length * offsets[job.detour_index]}
+    job.detour_prefix, job.path_leg = nil, 1
+    request_move_path(job, player, job.origin, job.detour_goal)
+end
+
 fair.begin_move = function(position)
     local player = fair.actor()
     fair.stop()
@@ -93,15 +163,17 @@ fair.begin_move = function(position)
     fair.job = {
         kind = "walk", status = "path_pending", lease = game.tick + 180,
         unit = character.unit_number, last_progress = game.tick,
-        last_position = player.position, goal = position
+        last_position = player.position, goal = position,
+        route_key = route_key(player, position), movement_started = false,
+        origin = {x = player.position.x, y = player.position.y},
+        path_requests = 0, path_deadline = game.tick + 600
     }
-    fair.job.request = player.surface.request_path{
-        bounding_box = character.prototype.collision_box,
-        collision_mask = character.prototype.collision_mask,
-        start = player.position, goal = position, force = player.force,
-        radius = 0.2, entity_to_ignore = character, can_open_gates = true,
-        pathfind_flags = {cache = false, allow_paths_through_own_entities = false}
-    }
+    if (fair.blocked_routes[fair.job.route_key] or 0) > game.tick then
+        fair.job.failure_code = "blocked_route_cooldown"
+        fair.stop("Known blocked route is cooling down; choose another target or clear it normally")
+        return {rejected = true, failure_code = fair.job.failure_code, movement_started = false}
+    end
+    request_move_path(fair.job, player, fair.job.origin, position)
     return {request = fair.job.request}
 end
 
@@ -235,7 +307,11 @@ fair.observe = function()
     end
     return {
         position = player.position, tick = game.tick, status = job.status or "idle",
-        error = job.error, gained = job.item and player.get_item_count(job.item) - job.baseline or 0
+        error = job.error, failure_code = job.failure_code,
+        movement_started = job.movement_started or false, path_requests = job.path_requests or 0,
+        walking = player.walking_state.walking,
+        mining = player.mining_state.mining,
+        gained = job.item and player.get_item_count(job.item) - job.baseline or 0
     }
 end
 
@@ -326,8 +402,34 @@ if previous_path ~= fair.path_handler then fair.previous_path = previous_path en
 fair.path_handler = function(event)
     local job = fair.job
     if job and job.status == "path_pending" and event.id == job.request then
-        if not event.path then fair.stop("Native pathfinder could not find a route"); return end
-        job.path, job.index, job.status = event.path, 1, "walking"
+        if not event.path or #event.path == 0 then
+            next_detour(job, event.try_again_later and "pathfinder_busy" or "no_safe_path")
+            return
+        end
+        for _, waypoint in ipairs(event.path) do
+            if waypoint.needs_destroy_to_reach then
+                job.blocked_waypoint = job.blocked_waypoint or waypoint.position
+                next_detour(job, "destruction_required")
+                return
+            end
+        end
+        if job.path_leg == 1 then
+            job.detour_prefix, job.path_leg = event.path, 2
+            request_move_path(job, fair.actor(), event.path[#event.path].position, job.goal)
+            return
+        end
+        local path = event.path
+        if job.path_leg == 2 then
+            path = job.detour_prefix
+            for _, point in ipairs(event.path) do path[#path + 1] = point end
+        end
+        local player = fair.actor()
+        if (player.position.x - job.origin.x)^2 + (player.position.y - job.origin.y)^2 > 0.0625 then
+            reject_route(job, "route_origin_changed", "Actor moved during route planning; reconcile before retry")
+            return
+        end
+        job.last_progress, job.last_position = game.tick, player.position
+        job.path, job.index, job.status = path, 1, "walking"
     elseif fair.previous_path then fair.previous_path(event) end
 end
 script.on_event(defines.events.on_script_path_request_finished, fair.path_handler)
@@ -342,6 +444,10 @@ fair.tick_handler = function(event)
     if not ok then fair.stop("Fair player/session invariant failed"); return end
     if player.character.unit_number ~= job.unit or game.tick > job.lease then
         fair.stop("Control lease expired or character changed"); return
+    end
+    if job.status == "path_pending" and game.tick > job.path_deadline then
+        reject_route(job, "path_deadline", "Native path planning exceeded its bounded deadline")
+        return
     end
     if job.status == "mining" then
         local count = player.get_item_count(job.item)
@@ -377,7 +483,11 @@ fair.tick_handler = function(event)
             + (player.position.y - job.last_position.y)^2 > 0.25 then
             job.last_progress, job.last_position = game.tick, player.position
         end
-        if game.tick - job.last_progress > 300 then fair.stop("Native walking is obstructed"); return end
+        if game.tick - job.last_progress > 300 then
+            reject_route(job, "movement_obstructed", "Native walking is obstructed; partial movement must be reconciled")
+            return
+        end
+        job.movement_started = true
         player.walking_state = {walking = true, direction = direction}
     end
 end

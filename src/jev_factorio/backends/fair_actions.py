@@ -50,8 +50,14 @@ class FairActions:
                 if state["status"] == "completed":
                     return state
                 if state["status"] == "failed":
-                    if state.get("error") == "Native pathfinder could not find a route":
-                        raise NativePathNotFound(state["error"])
+                    if (state.get("error") == "Native pathfinder could not find a route"
+                            or state.get("movement_started") is False and state.get("failure_code") in {
+                                "destruction_required", "no_safe_path", "pathfinder_busy",
+                                "path_deadline", "blocked_route_cooldown"}):
+                        # This proves only this walk did not start. It is NOT
+                        # permission to clear a compound gather/transfer that
+                        # may already have had effects in earlier phases.
+                        raise NativePathNotFound("No safe native path before movement")
                     raise RuntimeError(state.get("error", "Native controls failed"))
                 time.sleep(0.1)
             raise TimeoutError("Native action exceeded its bounded observation window")

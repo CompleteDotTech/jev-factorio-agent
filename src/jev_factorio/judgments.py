@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import requests
 
 from .skills import Plan
+from .provider_health import ProviderBlocked
 
 
 class InvalidJudgment(ValueError):
@@ -201,6 +202,11 @@ def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float 
                    "candidate_rejections": {}}
     try:
         answers = client.evaluate(context, questions)
+    except ProviderBlocked as error:
+        return Decision(None, "observe", str(error), context, questions,
+                        model_called=error.called,
+                        diagnostics={**diagnostics, "outcome": "provider_blocked",
+                                     "provider": error.state})
     except (requests.Timeout, requests.ConnectionError) as error:
         return Decision(None, "observe", f"Transient provider failure: {type(error).__name__}",
                         context, questions, model_called=True,
