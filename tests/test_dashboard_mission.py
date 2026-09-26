@@ -6,7 +6,7 @@ import time
 import pytest
 
 from jev_factorio.dashboard import EventWriter, Monitor, project_record, project_state, sanitize
-from jev_factorio.dashboard_mission import launch_summary
+from jev_factorio.dashboard_mission import MILESTONES, launch_summary, milestones
 
 
 def mission_state():
@@ -175,3 +175,60 @@ def test_incomplete_decision_record_cannot_reuse_or_rejuvenate_prior_launch_stat
         monitor.poll()
         assert monitor.view['state'] == {}
         assert monitor.view['state_observed_time'] is None
+
+
+def by_key(rows):
+    return {row['key']: row for row in rows}
+
+
+def test_milestones_mark_only_recorded_facts_and_a_single_next_step():
+    rows = milestones({'stockpile_fuel': 10, 'bootstrap_mining': 20},
+                      {'steam-power': None, 'automation-science-pack': 500})
+    assert [row['key'] for row in rows] == [key for _, key, _ in MILESTONES]
+    keyed = by_key(rows)
+    assert keyed['bootstrap_mining'] == {'key': 'bootstrap_mining', 'kind': 'goal', 'title': 'bootstrap_mining',
+                                         'state': 'done', 'tick': 20}
+    assert keyed['steam-power']['state'] == 'done' and keyed['steam-power']['tick'] is None
+    assert keyed['automation-science-pack']['tick'] == 500
+    assert [row['key'] for row in rows if row['state'] == 'next'] == ['logistic-science-pack']
+    assert keyed['rocket_launch']['state'] == 'pending'
+
+
+@pytest.mark.parametrize('goals,research', [(None, None), ('bad', []), ({'stockpile_fuel': True}, {'steam-power': 'x'}),
+                                            ({'stockpile_fuel': -1}, {'steam-power': 1.5})])
+def test_malformed_milestone_evidence_is_never_done(goals, research):
+    rows = milestones(goals, research)
+    assert not [row for row in rows if row['state'] == 'done']
+    assert rows[0]['state'] == 'next'
+
+
+def test_monitor_records_research_first_seen_without_backdating_the_tail_window(tmp_path):
+    path = tmp_path / 'events'
+    with EventWriter(path) as writer:
+        writer.emit('observation', 2, state={'tick': 900, 'researched': ['steam-power', 'electronics']})
+        writer.emit('observation', 2, state={'tick': 950, 'researched': ['steam-power', 'automation-science-pack']})
+        writer.emit('observation', 2, state={'tick': 990, 'researched': ['steam-power', 'automation-science-pack']})
+        writer.emit('goals', 3, completed_goals={'stockpile_fuel': 5}, target='rocket_launch')
+        monitor = Monitor(path); monitor.poll()
+        keyed = by_key(monitor.snapshot()['view']['milestones'])
+        # Research present when observation began has no known tick; later research does.
+        assert keyed['steam-power']['state'] == 'done' and keyed['steam-power']['tick'] is None
+        assert keyed['automation-science-pack']['tick'] == 950
+        assert keyed['stockpile_fuel']['tick'] == 5
+        assert keyed['bootstrap_mining']['state'] == 'next'
+        writer.emit('observation', 2, state={'tick': 'bad', 'researched': ['oil-processing']})
+        monitor.poll()
+        assert by_key(monitor.snapshot()['view']['milestones'])['oil-processing']['state'] != 'done'
+
+
+def test_new_run_clears_research_milestones(tmp_path):
+    first, second = tmp_path / 'first', tmp_path / 'second'
+    with EventWriter(first) as writer:
+        writer.emit('observation', 2, state={'tick': 1, 'researched': ['steam-power']})
+    with EventWriter(second) as writer:
+        writer.emit('observation', 2, state={'tick': 2, 'researched': []})
+    monitor = Monitor(first); monitor.poll()
+    assert by_key(monitor.snapshot()['view']['milestones'])['steam-power']['state'] == 'done'
+    for row in second.read_text().splitlines():
+        monitor.accept(json.loads(row))
+    assert monitor.snapshot()['view']['milestones'][2]['state'] != 'done'

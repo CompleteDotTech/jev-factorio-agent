@@ -390,6 +390,8 @@ class Monitor:
         self.last_run = None
         self.last_seq = 0
         self.rejected = 0
+        # None until the first observation; research already done then has no known tick.
+        self.research_seen: dict[str, int | None] | None = None
 
     def accept(self, event: dict) -> None:
         if (event.get("schema") != SCHEMA or not isinstance(event.get("run_id"), str)
@@ -401,7 +403,7 @@ class Monitor:
             self.rejected += 1
             return
         if event["run_id"] != self.last_run:
-            self.view, self.last_seq = {}, 0
+            self.view, self.last_seq, self.research_seen = {}, 0, None
             self.events.clear()
             self.last_run = event["run_id"]
         if event["seq"] <= self.last_seq:
@@ -456,6 +458,8 @@ class Monitor:
                          if key in RECORD_KEYS or key == "mission_record"})
         elif kind.endswith("_failed"):
             view["last_error"] = kind
+        if kind in ("observation", "decision_recorded"):
+            self._note_research(view.get("state"))
         seen = view.setdefault("seen", [])
         if event["stage"] not in seen:
             seen.append(event["stage"])
@@ -471,12 +475,28 @@ class Monitor:
                             "outcome": recorded.get("outcome"),
                             "verified": recorded.get("verified")})
 
+    def _note_research(self, state: Any) -> None:
+        """Keep the first observed tick of each milestone technology in this run.
+
+        The tail may start mid-log, so research already present in the first
+        observation is recorded without a tick rather than with a misleading one.
+        """
+        state = state if isinstance(state, dict) else {}
+        tick, researched = state.get("tick"), state.get("researched")
+        if not dashboard_mission.integer(tick) or not isinstance(researched, list):
+            return
+        first = self.research_seen is None
+        seen = self.research_seen = {} if first else self.research_seen
+        for tech in researched:
+            if isinstance(tech, str) and tech in dashboard_mission.RESEARCH_MILESTONES:
+                seen.setdefault(tech, None if first else tick)
+
     def poll(self) -> None:
         with self.lock:
             rows = self.tail.poll()
             if self.tail.reset:
                 self.events.clear()
-                self.view, self.last_run, self.last_seq = {}, None, 0
+                self.view, self.last_run, self.last_seq, self.research_seen = {}, None, 0, None
             for row in rows:
                 if self.legacy:
                     # Legacy records expose completed decisions, NOT in-flight model phases.
@@ -527,7 +547,9 @@ class Monitor:
 
     def snapshot(self) -> dict:
         with self.lock:
-            return copy.deepcopy({"version": self.version, "view": self.view, "events": list(self.events),
+            view = dict(self.view, milestones=dashboard_mission.milestones(
+                self.view.get("completed_goals"), self.research_seen))
+            return copy.deepcopy({"version": self.version, "view": view, "events": list(self.events),
                                   "source": {"mode": "legacy" if self.legacy else "events", "status": self.tail.status,
                                              "invalid": self.tail.invalid + self.rejected,
                                              "partial": bool(self.tail.pending) or self.tail.dropping},

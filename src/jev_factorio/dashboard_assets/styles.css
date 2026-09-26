@@ -69,6 +69,11 @@ small{display:block;font-size:11px;color:var(--muted)}
 .goal-node strong{font:11px var(--mono);display:block;color:#d5d0bc}
 .goal-node.current strong{color:var(--cyan)}
 .goal-node small{font-size:10px;margin-top:3px}
+.goal-tree.milestones .goal-node{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding-block:4px}
+.goal-tree.milestones .goal-node:before{top:9px}
+.goal-tree.milestones .goal-node strong{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.goal-tree.milestones .goal-node small{margin-top:0;white-space:nowrap;color:#9b9680}
+.goal-tree.milestones .goal-node.current small{color:var(--cyan)}
 .observations{margin:0}
 .observations div{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #414237;gap:8px;font-size:11px}
 .observations dt{color:var(--muted)}
@@ -256,6 +261,10 @@ to{transform:scaleY(1);opacity:1}
 .goal-node:before{top:5px;left:0}
 .goal-node strong{font-size:9px}
 .goal-node small{font-size:8px}
+.goal-tree.milestones{flex-direction:column;gap:0}
+.goal-tree.milestones .goal-node{border-left:1px solid #615f45;margin-left:7px;padding:4px 4px 4px 26px}
+.goal-tree.milestones .goal-node:last-child{border-left-color:transparent}
+.goal-tree.milestones .goal-node:before{top:9px;left:-4px}
 .metric-pair{justify-content:start;gap:45px}
 .boundary-note{margin-top:18px}
 .intro br{display:none}
@@ -285,9 +294,11 @@ body.studio:not(.broadcast) .thinking{grid-column:1;grid-row:1;min-height:0;padd
 body.studio:not(.broadcast) .thinking h1{font-size:19px;margin-top:9px}
 body.studio:not(.broadcast) .intro{display:none}
 body.studio:not(.broadcast) .model-status{min-height:54px;padding:8px;margin:12px 0}
-body.studio:not(.broadcast) .section-title{margin:14px 0 7px}
+body.studio:not(.broadcast) .section-title{margin:10px 0 5px}
 body.studio:not(.broadcast) .goal-node{padding-block:6px}
-body.studio:not(.broadcast) .observations div{padding:6px 0}
+body.studio:not(.broadcast) .goal-tree.milestones .goal-node{padding-block:1px}
+body.studio:not(.broadcast) .goal-tree.milestones .goal-node:before{top:6px}
+body.studio:not(.broadcast) .observations div{padding:4px 0}
 body.studio:not(.broadcast) .boundary-note{margin-top:14px;padding-top:10px;font-size:9px}
 body.studio:not(.broadcast) .center-column{grid-column:2;grid-row:1/3;gap:8px;min-height:0}
 body.studio:not(.broadcast) .game-panel{flex:none;background:transparent}
