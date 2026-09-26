@@ -36,13 +36,20 @@ class InputRoutePlanner(OutputBufferPlanner):
                                         "route_diagnostics": diagnostics}) for plan in plans]
 
     def _acquire(self, item, count, path):
-        self._acquiring_route = True
+        previous = self._acquiring_route
+        economic = getattr(self, "_economic_acquiring", False)
+        self._acquiring_route = self._economic_acquiring = True
         try:
             # Keep the output-buffer-aware ingredient path, not the raw serial
             # path that could try to extract from an automated furnace.
-            return super()._need(item, count, path)
+            # The kit is a separate bounded acquisition objective: it may need
+            # a material from the outer consumer's path. Route expansion stays
+            # disabled; cycles inside the kit and the shared expansion limit
+            # still apply, and owned output-buffer access remains authoritative.
+            return super()._need(item, count, ())
         finally:
-            self._acquiring_route = False
+            self._acquiring_route = previous
+            self._economic_acquiring = economic
 
     def _science_reserve(self) -> int:
         recipe = self.catalog.recipes.get("logistic-science-pack")
