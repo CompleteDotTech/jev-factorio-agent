@@ -56,8 +56,12 @@ The consolidated native read returns the campaign snapshot and the five solid
 resource targets together. It removes redundant preliminary coal/iron discovery
 passes. Water/oil and FLE inventory/entity helper reads remain fresh. Positive
 resource discovery alone is cached for at most 1,800 native ticks. Each reuse
-checks native entity validity, minability, remaining resource and available unit
-identity. Session, character, surface, exploration radius, epoch/tick regression
+checks native entity validity, minability, remaining resource, available unit
+identity and normal cursor selectability. A chest or other entity obscuring a
+previously cached node invalidates that hit before a plan is committed. Discovery
+may probe cursor selection, but never starts walking or mining; harvest still
+uses the committed first target and enforces native reach and selection.
+Session, character, surface, exploration radius, epoch/tick regression
 and attempted topology/mining operations invalidate reuse. Absence is never
 cached. External construction does not turn a still-valid resource location into
 a mutation authorization; TTL bounds discovery refresh and execution still

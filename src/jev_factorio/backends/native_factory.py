@@ -75,7 +75,7 @@ class NativeFactory:
             raise RuntimeError("Invalid bounded exploration radius")
         # ``factory_explore`` generates terrain around the campaign origin in
         # chunk units.  Discovery inspects that already-generated area only;
-        # it never moves or selects a target.  FairActions subsequently walks
+        # it only probes cursor selectability, never moving or mining. FairActions walks
         # to the selected entity and checks native reach before mining.
         discovery_radius = generated_radius * 32
         for resource in ("wood", "coal", "iron-ore", "copper-ore", "stone"):

@@ -180,17 +180,23 @@ def lua_snapshot():
         storage = {jev_session_id="native-test", campaign={}, fair={}}
         game = {tick=1}; helpers = {}; output = {}; calls=0; observed=0; radius=8; absent=false
         resources={}
-        for _,name in ipairs({"wood","coal","iron-ore","copper-ore","stone"}) do
-            resources[name]={name=name,position={x=1,y=0},valid=true,minable=true,type="resource",amount=100,unit_number=3}
+        for i,name in ipairs({"wood","coal","iron-ore","copper-ore","stone"}) do
+            resources[name]={name=name,position={x=i,y=0},valid=true,minable=true,type="resource",amount=100,unit_number=3}
         end
         player={character={unit_number=1},surface={index=1}}
         player.surface.find_entity=function(name,position) return resources[name] end
+        player.update_selected_entity=function(position)
+            player.selected=nil
+            for _,entity in pairs(resources) do
+                if entity.position == position and not entity.obscured then player.selected=entity end
+            end
+        end
         storage.fair.actor=function() return player end
         storage.fair.discover_mine_target=function(item,origin,distance)
             calls=calls+1
             if absent then return {} end
             local e=resources[item]
-            if e.amount==0 or not e.valid or not e.minable then return {} end
+            if e.amount==0 or not e.valid or not e.minable or e.obscured then return {} end
             return {name=e.name,position=e.position,unit_number=e.unit_number,surface_index=player.surface.index}
         end
         storage.campaign.observe=function()
@@ -236,3 +242,14 @@ def test_lua_no_negative_cache_and_generation_invalidation(lua_snapshot):
     assert lua.globals().calls == 10
     lua.execute('absent=false; storage.campaign.observation_snapshot(0); storage.campaign.observation_snapshot(1)')
     assert lua.globals().calls == 20
+
+
+def test_lua_new_building_obscures_cached_node_without_generation_change(lua_snapshot):
+    lua = lua_snapshot
+    lua.execute('storage.campaign.observation_snapshot(0); resources.coal.obscured=true; storage.campaign.observation_snapshot(0)')
+    assert lua.globals().calls == 6
+    assert lua.globals().captured.cache.hits == 4
+    assert lua.globals().captured.targets.coal is None
+    lua.execute('resources.coal.obscured=false; storage.campaign.observation_snapshot(0)')
+    assert lua.globals().calls == 7
+    assert lua.globals().captured.targets.coal.name == 'coal'
