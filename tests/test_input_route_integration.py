@@ -284,3 +284,43 @@ def test_cli_requires_explicit_output_buffer_flag(monkeypatch):
     with pytest.raises(SystemExit) as error:
         main.cli()
     assert error.value.code == 2
+
+
+@pytest.mark.parametrize('stage', ['route_schema', 'production_sites', 'commitment', 'live_route'])
+def test_validation_failure_is_structured_and_preserves_barrier(tmp_path, monkeypatch, stage):
+    import jev_factorio.input_controller as module
+    backend = RouteBackend()
+    loop = controller(backend, tmp_path)
+    before = deepcopy(loop.memory.pending)
+    secret = 'private-error-must-not-be-exported'
+    if stage in {'route_schema', 'production_sites'}:
+        def fail(snapshot):
+            raise ValueError(secret)
+        monkeypatch.setattr(module, 'sources' if stage == 'route_schema' else 'production_sites', fail)
+    elif stage == 'commitment':
+        loop.memory.input_commitments[SOURCE] = {'layout': 'missing', 'source_unit': 999, 'parts': {}}
+    else:
+        monkeypatch.setattr(module, 'current', lambda row, snapshot: False)
+    loop._observe()
+    details = loop._record_extras()['input_validation_failure']
+    assert details['stage'] == stage and details['exception_class'] == 'ValueError'
+    assert ('source' in details) == (stage in {'commitment', 'live_route'})
+    assert secret not in json.dumps(details)
+    assert loop.memory.status == 'uncertain' and loop._execution_barrier(backend.state)
+    assert loop.memory.pending == before and backend.calls == []
+
+
+def test_validation_diagnostic_rejects_unknown_source_and_keeps_first_fault(tmp_path, monkeypatch):
+    import jev_factorio.input_controller as module
+    backend = RouteBackend()
+    loop = controller(backend, tmp_path)
+    loop.memory.input_commitments['private-source-label'] = {'layout': 'missing', 'source_unit': 999, 'parts': {}}
+    loop._observe()
+    original = deepcopy(loop._record_extras()['input_validation_failure'])
+    assert original == {'stage': 'commitment', 'exception_class': 'ValueError'}
+    def fail(snapshot):
+        raise TypeError('private-payload')
+    monkeypatch.setattr(module, 'sources', fail)
+    loop._observe()
+    assert loop._record_extras()['input_validation_failure'] == original
+    assert loop._execution_barrier(backend.state)

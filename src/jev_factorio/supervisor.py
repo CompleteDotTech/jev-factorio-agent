@@ -565,7 +565,7 @@ Only report repaired when every acceptance requirement is verified.
             return None, ""
         deadline = min(self.clock() + self.config.repair_seconds, self.state["cutoff"])
         while self.clock() < deadline and not self.stop_requested and self.process.poll() is None:
-            self.pause(min(self.config.poll_seconds, deadline - self.clock()))
+            self.pause(min(self.config.poll_seconds, 0.25, deadline - self.clock()))
         returncode = self.process.poll()
         self.stop_process()
         with log.open("rb") as stream:
@@ -877,7 +877,8 @@ Only report repaired when every acceptance requirement is verified.
                             self.stop_process()
                             self.close_interrupted_attempt()
                         failures = 0 if accepted else min(failures + 1, 6)
-                        self.pause(min(900, self.config.backoff_seconds * 2 ** failures))
+                        if not accepted:
+                            self.pause(min(900, self.config.backoff_seconds * 2 ** failures))
                 self.save(phase="stopped" if self.stop_requested else "cutoff")
                 self.event(self.state["phase"])
                 return 1 if self.audit_failed else 0
