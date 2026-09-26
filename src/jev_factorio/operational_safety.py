@@ -178,8 +178,9 @@ def _request_maintenance(checkpoint: Path, *, timeout: float, clock) -> dict:
     path = safety_dir(checkpoint) / "maintenance.json"
     if path.exists():
         raise SafetyStateError("A maintenance request is already active; release it explicitly")
+    requested_at = clock()
     request = {"schema": 1, "request_id": str(uuid4()), "session_id": memory["session_id"],
-               "requested_at": clock(), "deadline": clock() + timeout}
+               "requested_at": requested_at, "deadline": requested_at + timeout}
     # Creation is serialized with release and the guarded stop.
     atomic_json(path, request)
     return request
