@@ -715,11 +715,14 @@ def test_studio_objective_milestones_are_compact_and_fit(live):
     playwright.expect(page.locator("#goals-count")).to_have_text("5 / 11")
     playwright.expect(page.locator("#goals .goal-node")).to_have_count(11)
     playwright.expect(page.locator('[data-milestone="steam-power"]')).to_contain_text("Researched")
-    playwright.expect(page.locator('[data-milestone="logistic-science-pack"]')).to_contain_text("seen tick 500")
+    playwright.expect(page.locator('[data-milestone="logistic-science-pack"]')).to_contain_text("Seen tick 500")
+    playwright.expect(page.locator('[data-milestone="bootstrap_mining"]')).to_contain_text("Verified tick 200")
     playwright.expect(page.locator(".goal-node.current")).to_contain_text("Oil processing")
     playwright.expect(page.locator('[data-milestone="rocket_launch"]')).to_contain_text("Active target")
     for node in page.locator("#goals .goal-node").all():
         assert node.bounding_box()["height"] < 24
+        # Names are never clipped; only the detail text may shrink if a font renders wider.
+        assert node.locator("strong").evaluate("el => el.scrollWidth <= el.clientWidth")
     thinking = page.locator(".thinking")
     assert thinking.evaluate("node => node.scrollHeight <= node.clientHeight")
     assert not errors

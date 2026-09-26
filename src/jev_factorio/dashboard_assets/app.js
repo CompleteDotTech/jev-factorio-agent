@@ -93,8 +93,8 @@ function renderMilestones(rows, v) {
     const active = row.kind === "goal" && state !== "done" && row.key === v.goal;
     const detail = state === "done"
       ? row.kind === "research"
-        ? typeof row.tick === "number" ? `Researched · seen tick ${row.tick}` : "Researched"
-        : `Verified · tick ${text(row.tick)}`
+        ? typeof row.tick === "number" ? `Seen tick ${row.tick}` : "Researched"
+        : `Verified tick ${text(row.tick)}`
       : active ? row.key === v.target ? "Active target" : "Active prerequisite"
       : state === "next" ? "Next milestone" : "Not yet";
     node.append(el("strong", "", text(row.title, text(row.key))), el("small", "", detail));
