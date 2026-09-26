@@ -275,23 +275,32 @@ class FairActions:
         ]
 
     @staticmethod
-    def _pipe_fallback_rectangles(start: dict, end: dict, *, searched: int) -> list[tuple[int, int, int, int]]:
+    def _fallback_rectangles(start: dict, end: dict, *, searched: int,
+                             margin: int) -> list[tuple[int, int, int, int]]:
         """Discover a complete detour area without exceeding the query budget.
 
-        Two narrow L corridors can each be cut even when an ordinary pipe
-        route exists between their legs. Keep native queries at 16,384 cells
-        and all discovery, including those corridors, at 65,536 cells.
+        Narrow L corridors can each be cut even when an ordinary route exists
+        around them. Keep native queries at 16,384 cells and all discovery,
+        including those corridors, at 65,536 cells.
         """
-        left = math.floor(min(start["x"], end["x"])) - 8
-        right = math.floor(max(start["x"], end["x"])) + 8
-        top = math.floor(min(start["y"], end["y"])) - 8
-        bottom = math.floor(max(start["y"], end["y"])) + 8
+        left = math.floor(min(start["x"], end["x"])) - margin
+        right = math.floor(max(start["x"], end["x"])) + margin
+        top = math.floor(min(start["y"], end["y"])) - margin
+        bottom = math.floor(max(start["y"], end["y"])) + margin
         width = right - left + 1
         if width > 16_384 or searched + width * (bottom - top + 1) > 65_536:
             return []
         rows = 16_384 // width
         return [(left, right, y, min(bottom, y + rows - 1))
                 for y in range(top, bottom + 1, rows)]
+
+    @staticmethod
+    def _pipe_fallback_rectangles(start: dict, end: dict, *, searched: int) -> list[tuple[int, int, int, int]]:
+        return FairActions._fallback_rectangles(start, end, searched=searched, margin=8)
+
+    @staticmethod
+    def _pole_fallback_rectangles(start: dict, end: dict, *, searched: int) -> list[tuple[int, int, int, int]]:
+        return FairActions._fallback_rectangles(start, end, searched=searched, margin=16)
 
     def _connection_cells(self, name: str, fluid: str,
                           rectangles: list[tuple[int, int, int, int]]) -> tuple[set, set]:
@@ -358,6 +367,7 @@ class FairActions:
             select_pole_positions,
             shortest_pipe_path,
             shortest_wire_path,
+            shortest_wire_path_between_regions,
         )
 
         name = prototype.value[0]
@@ -412,6 +422,25 @@ class FairActions:
                 )
             except ValueError as error:
                 route_error = error
+        if route is None and name == "small-electric-pole":
+            rectangles = self._pole_fallback_rectangles(start, end, searched=searched)
+            if rectangles:
+                buildable, existing = set(), set()
+                for rectangle in rectangles:
+                    chunk_buildable, chunk_existing = self._connection_cells(name, fluid, [rectangle])
+                    buildable.update(chunk_buildable)
+                    existing.update(chunk_existing)
+                candidates = buildable | existing
+                origin = (start["x"], start["y"])
+                destination = (end["x"], end["y"])
+                origins = {point for point in candidates if math.dist(point, origin) <= 3.5}
+                destinations = {point for point in candidates if math.dist(point, destination) <= 3.5}
+                try:
+                    route = shortest_wire_path_between_regions(
+                        origins, destinations, buildable, existing, max_wire_distance=6,
+                    )
+                except ValueError as error:
+                    route_error = error
         if route is None:
             raise ConnectionPreflightRejected("no_connection_route")
         if name == "small-electric-pole":

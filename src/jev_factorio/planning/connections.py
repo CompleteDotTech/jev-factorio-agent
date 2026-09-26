@@ -94,7 +94,19 @@ def shortest_wire_path(
     placement cell; the caller remains responsible for walking to and placing
     each new pole through the fair adapter.
     """
-    origin, target = _position(start), _position(end)
+    return shortest_wire_path_between_regions(
+        (start,), (end,), buildable, existing, max_wire_distance=max_wire_distance,
+    )
+
+
+def shortest_wire_path_between_regions(
+    starts: Iterable[Position],
+    ends: Iterable[Position],
+    buildable: set[Position],
+    existing: Iterable[Position] = (),
+    max_wire_distance: float = 7.5,
+) -> list[Position]:
+    """Find a wire route between verified pole cells near both native endpoints."""
     if (isinstance(max_wire_distance, bool)
             or not isinstance(max_wire_distance, Real)):
         raise ValueError("Wire distance must be a finite positive number")
@@ -107,7 +119,8 @@ def shortest_wire_path(
     passable = _cells(buildable) | _cells(existing)
     if len(passable) > MAX_CELLS:
         raise ValueError("Too many connection cells")
-    if origin not in passable or target not in passable:
+    origins, targets = _cells(starts), _cells(ends)
+    if not origins or not targets or not origins <= passable or not targets <= passable:
         raise ValueError("Connection endpoints must be passable")
     buckets: dict[tuple[int, int], list[Position]] = {}
     for point in passable:
@@ -118,13 +131,13 @@ def shortest_wire_path(
         buckets.setdefault(bucket, []).append(point)
     for values in buckets.values():
         values.sort()
-    frontier = deque([origin])
-    previous: dict[Position, Position | None] = {origin: None}
+    frontier = deque(sorted(origins))
+    previous: dict[Position, Position | None] = {origin: None for origin in origins}
     while frontier:
         current = frontier.popleft()
-        if current == target:
+        if current in targets:
             route = []
-            cursor: Position | None = target
+            cursor: Position | None = current
             while cursor is not None:
                 route.append(cursor)
                 if len(route) > MAX_PATH_LENGTH:
