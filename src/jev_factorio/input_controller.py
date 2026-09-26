@@ -16,6 +16,7 @@ class InputRouteMixin:
     def __init__(self, backend, jev=None, **options) -> None:
         self._input_fault = False
         self._input_evidence = {}
+        self._input_validation_failure = {}
         super().__init__(backend, jev, **options)
         native = getattr(backend, "_factory", None)
         if native is not None:
@@ -29,16 +30,22 @@ class InputRouteMixin:
 
     def _observe(self, stage="observe"):
         snapshot = super()._observe(stage)
+        validation_stage, validation_source = "route_schema", None
         try:
             rows = sources(snapshot)
+            validation_stage = "production_sites"
             production_sites(snapshot)  # Fail closed for stale or replaced joint-site evidence.
+            validation_stage = "commitment"
             for source, expected in self.memory.input_commitments.items():
+                validation_source = source
                 row = rows.get(source)
                 if (not row or row["state"] == "proposed" or row["layout"] != expected["layout"]
                         or row["source_unit"] != expected["source_unit"]
                         or any(row["parts"].get(part) != receipt for part, receipt in expected["parts"].items())):
                     raise ValueError("Input-route commitment disappeared or regressed")
+            validation_stage, validation_source = "live_route", None
             for source, row in rows.items():
+                validation_source = source
                 if not current(row, snapshot):
                     raise ValueError("Input-route identity or flow requires reconciliation")
                 if row["state"] != "proposed":
@@ -46,7 +53,16 @@ class InputRouteMixin:
                         "layout": row["layout"], "source_unit": row["source_unit"],
                         "parts": deepcopy(row["parts"]),
                     }
-        except (ValueError, KeyError, TypeError, AttributeError):
+        except (ValueError, KeyError, TypeError, AttributeError) as error:
+            if not self._input_validation_failure:
+                self._input_validation_failure = {
+                    "stage": validation_stage,
+                    "exception_class": next(kind.__name__ for kind in
+                        (ValueError, KeyError, TypeError, AttributeError) if isinstance(error, kind)),
+                }
+                if validation_source in {"recipe:iron-plate", "recipe:copper-plate",
+                                         "growth:iron-plate", "growth:copper-plate"}:
+                    self._input_validation_failure["source"] = validation_source
             self._input_fault = True
             self.memory.status, self.memory.reason = "uncertain", "Input-route evidence invalid; preserve pending work"
         self._input_evidence = deepcopy(snapshot.factory.get("input_routes", {}))
@@ -63,7 +79,8 @@ class InputRouteMixin:
 
     def _record_extras(self) -> dict:
         return {**super()._record_extras(), "furnace_input_belts": True,
-                "input_route_evidence": deepcopy(self._input_evidence)}
+                "input_route_evidence": deepcopy(self._input_evidence),
+                "input_validation_failure": deepcopy(self._input_validation_failure)}
 
     def _model_facts(self, snapshot) -> dict:
         facts = super()._model_facts(snapshot)

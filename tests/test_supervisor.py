@@ -504,3 +504,49 @@ def test_code_verification_requires_origin_and_checks_configured_fork(
     monkeypatch.setattr(supervisor, 'capture', capture)
     assert supervisor.verify_code({'commit': commit, 'pr_url': 'https://github.com/o/r/pull/1'}) is accepted
     assert ([supervisor.config.python, '-m', 'pytest', 'tests/'] in seen) is accepted
+
+
+def test_accepted_repair_resumes_without_failure_backoff(supervisor, monkeypatch):
+    starts = []
+    def watch():
+        starts.append(supervisor.clock())
+        return 'blocked' if len(starts) == 1 else 'completed'
+    def repair(reason):
+        supervisor.state['repair_required'] = False
+        return True
+    monkeypatch.setattr(supervisor, 'watch_game', watch)
+    monkeypatch.setattr(supervisor, 'repair', repair)
+    assert supervisor.run() == 0
+    assert len(starts) == 2 and starts[1] == starts[0]
+
+
+def test_verification_capture_polls_short_commands_without_full_poll_delay(supervisor, monkeypatch):
+    start = supervisor.clock()
+    process = FakeProcess()
+    process.poll = lambda: 0 if supervisor.clock() >= start + 0.1 else None
+    def launch(command, phase):
+        assert phase == 'verification'
+        supervisor.process = process
+        (supervisor.config.state_dir / 'verification.log').write_text('verified')
+    monkeypatch.setattr(supervisor, 'launch', launch)
+    assert supervisor.capture(['git', 'status']) == (0, 'verified')
+    assert supervisor.clock() - start == 0.25
+
+
+@pytest.mark.parametrize('stop', [False, True])
+def test_verification_fast_poll_preserves_cutoff_and_stop(supervisor, monkeypatch, stop):
+    start = supervisor.clock()
+    supervisor.state['cutoff'] = start + 0.4
+    process = FakeProcess()
+    def launch(command, phase):
+        supervisor.process = process
+        (supervisor.config.state_dir / 'verification.log').write_text('')
+    def sleep(seconds):
+        supervisor.clock.sleep(seconds)
+        if stop:
+            supervisor.stop_requested = True
+    monkeypatch.setattr(supervisor, 'launch', launch)
+    supervisor.sleep = sleep
+    assert supervisor.capture(['test']) == (None, '')
+    assert process.reaped
+    assert supervisor.clock() - start == pytest.approx(0.25 if stop else 0.4)
