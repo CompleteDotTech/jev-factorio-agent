@@ -23,6 +23,24 @@ small{display:block;font-size:11px;color:var(--muted)}
 .brand-caption{font-size:12px;letter-spacing:2.8px;font-weight:600}
 .brand-caption small{font:8px var(--mono);letter-spacing:1.4px;margin-top:7px}
 .top-context{min-width:85px;max-width:230px}
+.research-strip{display:flex;align-items:center;gap:18px;margin-right:auto;min-width:0}
+.research-strip[hidden]{display:none}
+.research-now{min-width:150px;max-width:340px;white-space:nowrap}
+.research-now .eyebrow{display:block}
+.research-now strong{font:12px var(--mono);display:inline-block;max-width:170px;margin-top:6px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;color:var(--cyan)}
+.research-bar{display:inline-block;width:70px;height:4px;background:#1b1c18;border:1px solid #4b4a3c;vertical-align:middle;margin:6px 0 0 8px}
+.research-bar i{display:block;height:100%;width:0;background:var(--cyan)}
+.research-bar[hidden]{display:none}
+.research-now small{font:10px var(--mono);margin-left:6px;color:#b9b39b;vertical-align:middle;display:inline-block;margin-top:6px}
+.research-tiers{display:flex;gap:6px;list-style:none;margin:0;padding:0}
+.research-tiers li{display:flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid #4b4a3c;border-radius:3px;background:#1d1e1ab3;font:11px var(--mono);white-space:nowrap}
+.research-tiers li.done{border-color:#5d6b3d;color:#b8c98f}
+.research-tiers li.active{border-color:var(--cyan);color:var(--cyan)}
+.research-tiers li.locked{opacity:.55}
+.research-tiers img{width:18px;height:18px;image-rendering:auto}
+.research-tiers .pack-dot{width:9px;height:9px;border-radius:2px;background:var(--pack,#8b8674);box-shadow:0 0 0 1px #0007}
+.research-path strong{font:12px var(--mono);display:block;margin-top:6px;white-space:nowrap}
+.goal-tree .goal-summary small{color:#9b9680}
 .top-context strong{font:12px var(--mono);display:block;overflow:hidden;text-overflow:ellipsis;margin-top:6px}
 .run-time strong{color:var(--amber)}
 .connection{display:grid;grid-template-columns:8px 1fr;align-items:center;gap:0 8px;min-width:150px}
@@ -209,6 +227,7 @@ to{transform:scaleY(1);opacity:1}
 .workflow-node:after{display:none}
 .topbar{padding:15px 18px;gap:18px}
 .top-context.run-time{display:none}
+.research-tiers,.research-path{display:none}
 .toolbar{padding:12px 18px}
 .game-stage{min-height:340px}
 .thinking{min-height:750px}
@@ -283,6 +302,8 @@ html.obs-scrollbars-hidden::-webkit-scrollbar,html.obs-scrollbars-hidden *::-web
 @media(min-width:1500px){
 body.studio:not(.broadcast){height:100vh;overflow:hidden;display:flex;flex-direction:column;background:transparent}
 body.studio:not(.broadcast) .topbar{height:48px;min-height:48px;padding:5px 12px;gap:24px}
+body.studio:not(.broadcast) .research-strip{gap:14px}
+body.studio:not(.broadcast) .research-now strong,body.studio:not(.broadcast) .research-path strong,body.studio:not(.broadcast) .research-now small,body.studio:not(.broadcast) .research-bar{margin-top:2px}
 body.studio:not(.broadcast) .brand-mark{font-size:30px}
 body.studio:not(.broadcast) .brand-caption small{margin-top:2px}
 body.studio:not(.broadcast) .top-context strong{margin-top:2px}

@@ -280,6 +280,9 @@ def cli() -> None:
             attach(loop, writer)
             if getattr(loop, "_safety", None) is not None:
                 loop._safety.outputs = (*loop._safety.outputs, Path(args.dashboard_events).parent)
+        if args.backend == "fle" and (args.log_file or args.dashboard_events):
+            from .research_catalog import export_sidecar
+            export_sidecar(getattr(loop, "backend", None), Path(args.log_file or args.dashboard_events).parent)
         if research is not None:
             memory = getattr(loop, "memory", None)
             research.emit("controller_initialized", {

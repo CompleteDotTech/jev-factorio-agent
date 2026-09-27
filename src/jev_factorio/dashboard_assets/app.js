@@ -85,13 +85,27 @@ const MILESTONE_STATES = new Set(["done", "next", "pending"]);
 function renderMilestones(rows, v) {
   const tree = $("goals");
   tree.classList.add("milestones");
-  tree.replaceChildren(...rows.slice(0, 16).map((row) => {
-    row = object(row);
+  // Long ladders (Space Age) fold earlier finished rows into one so the column still fits.
+  let list = rows.slice(0, 64).map(object);
+  const limit = studio ? 11 : 24;
+  let folded = 0;
+  if (list.length > limit) {
+    const pending = list.findIndex((row) => row.state !== "done");
+    folded = Math.min(Math.max(0, (pending < 0 ? list.length : pending) - 2), list.length - limit + 1);
+    if (folded > 1) list = list.slice(folded); else folded = 0;
+  }
+  const summary = [];
+  if (folded) {
+    const node = el("div", "goal-node done goal-summary");
+    node.append(el("strong", "", `✓ ${folded} earlier`), el("small", "", "Completed"));
+    summary.push(node);
+  }
+  tree.replaceChildren(...summary, ...list.slice(0, limit - summary.length).map((row) => {
     const state = MILESTONE_STATES.has(row.state) ? row.state : "pending";
     const node = el("div", `goal-node${state === "done" ? " done" : state === "next" ? " current" : ""}`);
     node.dataset.milestone = text(row.key, "unknown");
     const active = row.kind === "goal" && state !== "done" && row.key === v.goal;
-    const detail = state === "done"
+    const detail = row.start === true ? "From start" : state === "done"
       ? row.kind === "research"
         ? typeof row.tick === "number" ? `Seen tick ${row.tick}` : "Researched"
         : `Verified tick ${text(row.tick)}`
@@ -102,6 +116,79 @@ function renderMilestones(rows, v) {
   }));
   const done = rows.filter((row) => object(row).state === "done").length;
   $("goals-count").textContent = `${done} / ${rows.length}`;
+}
+
+// Science-pack colours for packs without an icon; unknown (modded) packs stay neutral.
+const PACK_COLOURS = {
+  "automation-science-pack": "#d8483f", "logistic-science-pack": "#57b847", "military-science-pack": "#8d8f93",
+  "chemical-science-pack": "#3f9fdc", "production-science-pack": "#9a5fd0", "utility-science-pack": "#e2c33d",
+  "space-science-pack": "#e8e8e8", "metallurgic-science-pack": "#e2862f", "electromagnetic-science-pack": "#d352b8",
+  "agricultural-science-pack": "#a3c93a", "cryogenic-science-pack": "#5cc6e6", "promethium-science-pack": "#6d4f86",
+};
+const TRIGGERS = {"craft-item": "Craft", "craft-fluid": "Make", "mine-entity": "Mine", "build-entity": "Build",
+  "send-item-to-orbit": "Launch", "capture-spawner": "Capture", "create-space-platform": "Create a space platform",
+  "scripted": "Scripted"};
+const words = (value) => String(value).replaceAll("-", " ").replaceAll("_", " ");
+
+function triggerText(trigger) {
+  trigger = object(trigger);
+  const verb = TRIGGERS[trigger.type] || words(text(trigger.type, "Trigger"));
+  const target = trigger.item || trigger.entity || trigger.fluid;
+  const count = typeof trigger.count === "number" && trigger.count > 1 ? `${trigger.count} × ` : "";
+  return target ? `${verb} ${count}${words(target)}` : verb;
+}
+
+function packChip(tier, state) {
+  const chip = el("li", state);
+  const pack = text(tier.pack, "unknown");
+  chip.dataset.pack = pack;
+  chip.title = `${text(tier.title, pack)}: ${text(tier.done)} of ${text(tier.total)} researched on the path`;
+  const dot = el("span", "pack-dot");
+  dot.style.setProperty("--pack", PACK_COLOURS[pack] || "#8b8674");
+  if (/^[a-z0-9][a-z0-9-]{0,63}$/.test(pack)) {
+    const icon = document.createElement("img");
+    icon.alt = "";
+    icon.src = `/icons/${pack}.png`;
+    icon.addEventListener("error", () => icon.replaceWith(dot), {once: true});
+    chip.append(icon);
+  } else chip.append(dot);
+  chip.append(el("b", "", `${text(tier.done)}/${text(tier.total)}`));
+  return chip;
+}
+
+function renderResearch(research) {
+  research = object(research);
+  const strip = $("research-strip");
+  strip.hidden = research.status !== "ok";
+  if (strip.hidden) return;
+  const current = object(research.current);
+  const trigger = current.trigger && typeof current.trigger === "object";
+  set("research-current", current.name ? text(current.title, current.name) : "Nothing queued");
+  const progress = typeof current.progress === "number" && current.progress >= 0 && current.progress <= 1 ? current.progress : null;
+  $("research-bar-track").hidden = !current.name || trigger;
+  $("research-bar").style.width = `${Math.round((progress || 0) * 100)}%`;
+  set("research-progress", !current.name ? "" : trigger ? triggerText(current.trigger) : progress === null ? "—" : `${Math.floor(progress * 100)}%`);
+  const tiers = Array.isArray(research.tiers) ? research.tiers.map(object) : [];
+  const activePack = current.pack;
+  let active = tiers.findIndex((tier) => tier.pack === activePack && tier.done < tier.total);
+  if (active < 0) active = tiers.findIndex((tier) => tier.done < tier.total);
+  // Long ladders (Space Age) collapse finished tiers and show a window around the active one.
+  let first = 0;
+  if (tiers.length > 7 && active > 1) first = Math.min(active - 1, tiers.length - 7);
+  const chips = [];
+  if (first > 0) {
+    const done = el("li", "done", `✓ ${first}`);
+    done.title = `${first} earlier science tiers`;
+    chips.push(done);
+  }
+  tiers.slice(first, first + 7).forEach((tier, offset) => {
+    const index = first + offset;
+    chips.push(packChip(tier, tier.done >= tier.total ? "done" : index === active ? "active" : index > active ? "locked" : ""));
+  });
+  if (first + 7 < tiers.length) chips.push(el("li", "locked", `+${tiers.length - first - 7}`));
+  $("research-tiers").replaceChildren(...chips);
+  set("research-goal", `TO ${text(research.goal, "GOAL").toUpperCase()}`);
+  set("research-path", `${text(research.path_done)} / ${text(research.path_total)}${typeof research.available === "number" ? ` · ${research.available} open` : ""}`);
 }
 
 function renderGoals(v) {
@@ -294,6 +381,7 @@ function render(data) {
   set("source-mode", frozen ? "DISPLAY FROZEN" : data.source?.mode === "legacy" ? "LEGACY / COMPLETED DECISIONS" : "READ-ONLY / EVENT FEED");
   MissionControl.render(data, inspect);
   renderGoals(v);
+  renderResearch(v.research);
   const position = array(state.player_position);
   const chest = state.drill_output_connected;
   const observed = [
