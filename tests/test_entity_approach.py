@@ -158,6 +158,69 @@ def test_all_candidate_no_route_failures_are_bounded_and_deduplicated(interactio
     assert len(movements) == 2
 
 
+def test_distant_blocked_interaction_uses_native_waypoint_corridor(interaction):
+    fair, lua, movements = interaction
+    lua.execute('target={x=-13,y=-6};player.position={x=38,y=72}')
+    candidates(lua, [(-5,-4)] * 16)
+    corridor_legs = []
+
+    def move(position):
+        point = (position.x, position.y)
+        movements.append(point)
+        if point == (-5, -4) and len(corridor_legs) < 4:
+            raise NativePathNotFound("No safe path before movement")
+        if point != (-5, -4):
+            corridor_legs.append(point)
+        else:
+            lua.globals().reachable = True
+
+    fair.move_to = move
+    fair.approach(SimpleNamespace(x=-13,y=-6), "chemical-plant")
+    assert len(corridor_legs) == 4
+    assert corridor_legs[0] == (50,64)
+    assert corridor_legs[-1] == (12,2)
+    assert movements[-1] == (-5,-4)
+    assert lua.globals().reach_checks == 2
+
+
+def test_uncertain_waypoint_failure_stops_before_another_leg(interaction):
+    fair, lua, movements = interaction
+    lua.execute('target={x=-13,y=-6};player.position={x=38,y=72}')
+    candidates(lua, [(-5,-4)] * 16)
+    failure = TimeoutError("Native walking result is uncertain")
+
+    def move(position):
+        point = (position.x, position.y)
+        movements.append(point)
+        if point == (-5,-4):
+            raise NativePathNotFound("No safe path before movement")
+        raise failure
+
+    fair.move_to = move
+    with pytest.raises(TimeoutError) as error:
+        fair.approach(SimpleNamespace(x=-13,y=-6), "chemical-plant")
+    assert error.value is failure
+    assert movements == [(-5,-4), (50,64)]
+
+
+def test_partial_corridor_walk_is_never_classified_as_no_movement(interaction):
+    fair, lua, movements = interaction
+    lua.execute('target={x=-13,y=-6};player.position={x=38,y=72}')
+    candidates(lua, [(-5,-4)] * 16)
+
+    def move(position):
+        point = (position.x, position.y)
+        movements.append(point)
+        if point != (50,64):
+            raise NativePathNotFound("No safe path before this leg moved")
+
+    fair.move_to = move
+    with pytest.raises(RuntimeError, match="changed position without reaching"):
+        fair.approach(SimpleNamespace(x=-13,y=-6), "chemical-plant")
+    assert movements[0] == (-5,-4)
+    assert (50,64) in movements
+
+
 def test_candidates_outside_arrival_margin_never_start_a_walk(interaction):
     fair, lua, movements = interaction
     candidates(lua, [(40,51.5)] * 16)

@@ -97,3 +97,22 @@ separate, as does the broader native acceptance in
 [#92](https://github.com/CompleteDotTech/jev-factorio-agent/issues/92).
 Private raw evidence and incident-specific operational scripts remain outside
 this public repository.
+
+## Subsequent bounded-path stop
+
+At 04:02 UTC on September 27, the same campaign stopped on an ambiguous
+five-iron-plate extraction. Native diagnostics showed that every direct
+interaction path had been rejected before movement because the route required
+destroying neutral obstacles. The transfer receipt was absent. An operational
+intervention walked the original actor through ordinary native waypoints and
+completed the exact retained transfer once. The supervisor accepted its native
+receipt and inventory conservation; the resumed controller verified the
+original pending action, then completed new steel extraction and crafting work.
+The original campaign source and cutoff were retained.
+
+The adapter now tries a bounded pair of ordinary waypoint corridors when all
+direct interaction approaches fail before movement. Each leg still uses the
+native path safety check. If any leg has moved the actor and the target remains
+unreachable, the result stays uncertain rather than being classified as a
+no-movement rejection. This source change is for future deployments; the
+ongoing campaign remains pinned to its original source.
