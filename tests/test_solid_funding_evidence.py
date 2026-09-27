@@ -348,3 +348,70 @@ def test_exhausted_existing_budget_emits_release_at_actual_clear(release_path, t
     assert len(released) == 1 and released[0]['funding'] == funding
     assert not funding_history_issues(initial, [record], asdict(loop.memory))
     assert len(backend.calls) == 1  # Only the first, already verified paid action.
+
+
+@pytest.mark.parametrize('missing', [('initial',), ('final',), ('initial', 'final')])
+def test_enabled_policy_requires_explicit_checkpoint_funding_fields(missing):
+    data = funded_evidence()
+    rows, _, initial, final = data
+    initial['solid_funding'] = final['solid_funding'] = None
+    for record in rows:
+        record['solid_funding'] = None
+    # Explicit null is a valid retained state; omission is unknown evidence.
+    assert analyze_rows(*data)['measurement_checks_passed']
+    for label in missing:
+        {'initial': initial, 'final': final}[label].pop('solid_funding')
+    assert_rejected(data)
+
+
+@pytest.mark.parametrize('retain_recommit', [True, False])
+def test_abandonment_budget_cannot_be_reused_by_same_record_recommit(retain_recommit):
+    data = funded_evidence()
+    rows, _, initial, final = data
+    original = deepcopy(initial['solid_funding'])
+    tick = rows[3]['after_state']['tick']
+    restarted = deepcopy(original)
+    restarted.update(started_tick=tick, deadline_tick=tick + solid_funding.MAX_TICKS, actions=1)
+    history = [event('solid_kit_abandoned', original, tick, reason='kit_failure_budget'),
+               event('solid_kit_committed', restarted, tick)]
+    if not retain_recommit:
+        history.append(event('solid_kit_abandoned', restarted, tick, reason='kit_failure_budget'))
+    rows[3]['history'] = history
+    for record in rows[3:]:
+        record['solid_funding'] = deepcopy(restarted) if retain_recommit else None
+        record['failure_budgets'][original['key'] + ':kit'] = 2
+    final['solid_funding'] = deepcopy(rows[-1]['solid_funding'])
+    final['failures'] = deepcopy(rows[-1]['failure_budgets'])
+    assert_rejected(data)
+
+
+@pytest.mark.parametrize('last_action', [3, 8])
+def test_one_record_cannot_claim_multiple_new_funding_commits(last_action):
+    data = funded_evidence()
+    rows, _, initial, final = data
+    history = []
+    proof = deepcopy(initial['solid_funding'])
+    for action in range(2, last_action + 1):
+        proof['actions'] = action
+        history.append(event('solid_kit_committed', proof, rows[3]['after_state']['tick']))
+    rows[3]['history'] = history
+    for record in rows[3:]:
+        record['solid_funding'] = deepcopy(proof)
+    final['solid_funding'] = deepcopy(proof)
+    assert_rejected(data)
+
+
+def test_repeated_history_commit_does_not_consume_current_record_commit_limit():
+    data = funded_evidence()
+    rows, _, initial, final = data
+    old = event('solid_kit_committed', initial['solid_funding'], initial['last_tick'])
+    initial['history'].append(deepcopy(old))
+    new = deepcopy(initial['solid_funding'])
+    new['actions'] = 2
+    history = [old, event('solid_kit_committed', new, rows[3]['after_state']['tick'])]
+    for record in rows[3:]:
+        record['history'] = deepcopy(history)
+        record['solid_funding'] = deepcopy(new)
+    final['solid_funding'] = deepcopy(new)
+    result = analyze_rows(*data)
+    assert result['measurement_checks_passed'], result['issues']

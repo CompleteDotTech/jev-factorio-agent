@@ -42,6 +42,14 @@ cannot be retroactively upgraded by assuming missing locks were null. All issues
 are fixed labels; no arbitrary exception, endpoint, path or source record is
 copied into a public report. Inputs are not mutated.
 
+Both endpoint checkpoints must explicitly contain `solid_funding` when the
+policy is enabled; an omitted field is not equivalent to a recorded null. Each
+record may introduce at most one new kit-plan commit, matching one controller
+step. Repeated entries from the retained history ring do not consume that slot.
+An abandonment establishes an exhausted project budget for later transitions
+in that record, so a same-record recommit cannot reuse the preceding record's
+unexhausted count. A valid commit followed by abandonment remains supported.
+
 ## Evidence boundary and rollout
 
 Tests exercise fabricated retained evidence and the actual Python controller with

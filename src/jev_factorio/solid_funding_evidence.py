@@ -82,6 +82,8 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                                  or _funding_events(row.get('history', [])) for row in rows)
         if not enabled:
             return []
+        if policy and any('solid_funding' not in checkpoint for checkpoint in (initial, final)):
+            issues.add('solid_funding_checkpoint_field_missing')
         if not rows:
             return ['solid_funding_records_missing']
         intents = initial.get('solid_intents', [])
@@ -114,6 +116,8 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     issues.add('solid_funding_record_invalid')
                     continue
             current_budgets = record.get('failure_budgets', {})
+            new_commits = 0
+            abandoned_keys: set[str] = set()
             for event in _funding_events(record.get('history', [])):
                 fingerprint = hashlib.sha256(_encoded(event)).digest()
                 if fingerprint in seen:
@@ -139,12 +143,19 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     issues.add('solid_funding_transition_key_mismatch')
                     continue
                 if kind == 'solid_kit_committed':
+                    # A controller step selects at most one new kit plan. Old
+                    # ring entries were skipped above and do not use this slot.
+                    new_commits += 1
+                    if new_commits > 1:
+                        issues.add('solid_funding_multiple_commits_in_record')
+                        continue
                     starting = working is None
                     prior_budget = _budget(previous_budgets, proof['key'] + ':kit')
                     if (starting and (proof['actions'] != 1 or proof['started_tick'] != event_tick)
                             or not starting and (not _same(_identity(working), _identity(proof))
                                                  or proof['actions'] != working['actions'] + 1)
                             or prior_budget is None or prior_budget >= 2
+                            or proof['key'] in abandoned_keys
                             or not _native_bound(proof, record, allow_before=True)):
                         issues.add('solid_funding_commit_not_reconciled')
                     else:
@@ -159,6 +170,9 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                         if count is None or count < 2 or not isinstance(reason, str) or not 0 < len(reason) <= 128:
                             issues.add('solid_funding_abandonment_not_reconciled')
                             continue
+                        # Later events cannot reuse the pre-record budget after
+                        # this transition established that the project is spent.
+                        abandoned_keys.add(proof['key'])
                     elif not _native_bound(proof, record, paid=True):
                         issues.add('solid_funding_paid_handoff_not_observed')
                         continue
