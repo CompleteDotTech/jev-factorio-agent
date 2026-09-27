@@ -381,6 +381,49 @@ def test_composed_ownership_prefix_cannot_be_replaced():
     assert not report._retains_prefix({'source': {'paid': False}}, {'source': {'paid': True}})
 
 
+def test_final_checkpoint_status_matches_last_record():
+    args = evidence()
+    args[0][-1]['status'] = 'completed'
+    assert 'final_checkpoint_status_mismatch' in report.analyze_rows(*args)['issues']
+
+
+@pytest.mark.parametrize('mutate', [
+    lambda rows: rows[1].update(decision=None),
+    lambda rows: rows[1]['decision'].update(model_called=False),
+    lambda rows: rows[2].update(decision={'model_called': True}),
+])
+def test_model_call_agrees_with_decision_payload(mutate):
+    args = evidence()
+    mutate(args[0])
+    assert 'decision_model_call_mismatch' in report.analyze_rows(*args)['issues']
+
+
+@pytest.mark.parametrize('boundary', ['record', 'final'])
+def test_completed_goals_cannot_disappear_or_change(boundary):
+    args = evidence()
+    args[2]['completed_goals'] = {'stockpile_fuel': 900}
+    for row in args[0]:
+        row['completed_goals'] = {'stockpile_fuel': 900}
+    args[3]['completed_goals'] = {'stockpile_fuel': 900}
+    if boundary == 'record':
+        args[0][4]['completed_goals'] = {}
+    else:
+        args[3]['completed_goals']['stockpile_fuel'] = 901
+    assert 'completed_goal_history_regressed' in report.analyze_rows(*args)['issues']
+
+
+def test_belt_drainage_without_new_sends_is_not_new_flow():
+    args = evidence()
+    for row in args[0]:
+        for label in ('state', 'after_state'):
+            for route in row[label]['factory']['solid_routes']['routes'].values():
+                route['flow']['sent'] = 100
+    value = report.analyze_rows(*args)
+    assert value['transport']['coal_consumers_with_new_flow'] == 0
+    assert value['transport']['coal_inventory_delivery_lower_bound'] == 0
+    assert 'two_distinct_fuel_consumers_not_measured' in value['issues']
+
+
 @pytest.mark.parametrize('field,value', [
     ('capacity_profile_sha256', '1'*64), ('initial_save_sha256', '1'*64),
     ('workload_sha256', '1'*64), ('experiment_sha256', '1'*64),

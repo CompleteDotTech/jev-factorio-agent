@@ -258,6 +258,7 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
     observed_progress = {}
     observed_flows, pending_routes = {}, {}
     previous_failures = _failure_counter(initial.get('failures', {}))
+    previous_goals = deepcopy(initial.get('completed_goals', {}))
     final_failures = _failure_counter(final.get('failures', {}))
     route_history, route_statistics, observed_products = {}, {}, {}
     committed = deepcopy(initial.get('solid_commitments', {}))
@@ -301,6 +302,11 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                or record.get('campaign_treatment') != trial['campaign_treatment'], 'configuration_mismatch')
         reject(record.get('requested_model') != trial['requested_model'], 'requested_model_mismatch')
         reject(type(record.get('model_call')) is not bool, 'invalid_model_call_flag')
+        decision = record.get('decision')
+        reject(decision is not None and not isinstance(decision, dict)
+               or isinstance(decision, dict) and type(decision.get('model_called')) is not bool
+               or record.get('model_call') is not (decision.get('model_called') if isinstance(decision, dict) else False),
+               'decision_model_call_mismatch')
         reject(type(record.get('status')) is not str or record.get('status') not in {'running', 'completed'}
                or record.get('solid_route_fault') is not False,
                'controller_or_route_failure')
@@ -331,6 +337,13 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
         budgets = _failure_counter(record.get('failure_budgets'))
         reject(any(budgets.get(k, -1) < v for k, v in previous_failures.items()), 'failure_history_regressed')
         previous_failures = budgets
+        goals = record.get('completed_goals')
+        if not isinstance(goals, dict) or len(goals) > 64 or any(
+                not isinstance(k, str) or not _integer(v) for k, v in goals.items()):
+            raise ValueError('Invalid completed goal history')
+        reject(any(goals.get(k) != v or k not in goals for k, v in previous_goals.items()),
+               'completed_goal_history_regressed')
+        previous_goals = deepcopy(goals)
         # Check every before/after state, not just endpoints or unique ticks.
         for label in ('state', 'after_state'):
             state = record.get(label)
@@ -573,6 +586,10 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
     reject(not model_calls or len(resolved_models) != 1, 'single_actual_jev_model_not_demonstrated')
     reject(final.get('last_tick') != last_tick, 'final_checkpoint_window_mismatch')
     reject(final_failures != previous_failures, 'final_failure_history_mismatch')
+    reject(final.get('status') != rows[-1].get('status'), 'final_checkpoint_status_mismatch')
+    reject(any(final.get('completed_goals', {}).get(k) != v
+               or k not in final.get('completed_goals', {}) for k, v in previous_goals.items()),
+           'completed_goal_history_regressed')
     last_factory = rows[-1]['after_state']['factory']
     for field, envelope in (('input_commitments', 'input_routes'),
                             ('outpost_commitments', 'mining_outposts')):
@@ -591,7 +608,8 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
     reject(set(final.get('solid_commitments', {})) != set(committed), 'final_route_checkpoint_mismatch')
     for key, current in committed.items():
         reject(final.get('solid_commitments', {}).get(key) != current, 'final_route_checkpoint_mismatch')
-    qualified = [v for v in route_statistics.values() if v['received'] > 0 and v['positive_samples'] >= 3]
+    qualified = [v for v in route_statistics.values()
+                 if v['sent'] > 0 and v['received'] > 0 and v['positive_samples'] >= 3]
     coal = [v for v in qualified if v['kind'] == 'coal' and v['item'] == 'coal']
     downstream = [v for v in qualified if v['kind'] == 'downstream' and v['recipe'] in trial['downstream_recipes']
                   and _integer(v['target_first_products']) and _integer(v['target_last_products'])
@@ -628,9 +646,9 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                     'consumed_by_declared_pack': dict(consumptions),
                     'new_declared_research_completed': goal_completed and not baseline_goal_complete},
         'transport': {'coal_consumers_with_new_flow': len({v['target_unit'] for v in coal}),
-                      'coal_inventory_delivery_lower_bound': sum(v['received'] for v in coal),
+                      'coal_inventory_delivery_lower_bound': sum(min(v['sent'], v['received']) for v in coal),
                       'downstream_routes_with_flow_and_production': len(downstream),
-                      'downstream_delivery_units': sum(v['received'] for v in downstream),
+                      'downstream_delivery_units': sum(min(v['sent'], v['received']) for v in downstream),
                       'mined_coal_provenance_verified': False,
                       'source_note': 'Stocked chests and corridor flow do not prove paid coal mining or bootstrap.'},
         'model_calls': model_calls,

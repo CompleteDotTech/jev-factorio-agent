@@ -132,7 +132,9 @@ def evidence():
             code_revision={'commit': trial['expected_commit'], 'source_sha256': trial['expected_source_sha256']},
             acceptance_configuration=deepcopy(config), recorded_at_utc=(start + timedelta(minutes=i)).isoformat(),
             tick=state['tick'], state=deepcopy(rows[-1]['after_state']) if rows else deepcopy(state),
-            after_state=deepcopy(state), status='running', pending=None, attempt=None, phases=[],
+            after_state=deepcopy(state), status='running', completed_goals={},
+            decision={'model_called': i == 1} if i == 1 else None,
+            pending=None, attempt=None, phases=[],
             action='observe', verified=True, solid_route_fault=False, failure_budgets={},
             **({'previous_iteration_timing': timing(i)} if i else {})))
         # The preceding after-state can share the tick with this before-state.

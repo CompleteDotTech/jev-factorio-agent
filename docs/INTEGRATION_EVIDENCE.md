@@ -146,7 +146,7 @@ All before/after boundaries are checked, not just first/last observations. Paid
 prefixes, native component identities and durable receipt IDs may not disappear or
 change. Pending placement phases cannot regress; a cleared pending identity must
 match its paid receipt. Final checkpoints must contain the observed commitments
-and failure history, with no unresolved action, attempt, reservation or background
+and failure history, completed-goal history, and terminal status, with no unresolved action, attempt, reservation or background
 work. A valid final checkpoint alone cannot erase a mid-window fault or reset.
 This analyzer conservatively rejects any retained initial or in-window pending
 action or ambiguous attempt. A clean final checkpoint cannot establish that
@@ -162,7 +162,9 @@ stall limit. Plate accumulation and a last-minute science burst do not suffice.
 A legitimate science delivery batch may span multiple observations.
 
 Coal corridor measurements require new positive flow at three or more observation
-boundaries into at least two distinct fuel-consumer identities. Downstream
+boundaries into at least two distinct fuel-consumer identities. Both new sends and
+new receipts are required; the conservative delivered lower bound is their minimum.
+Downstream
 measurements require new route flow plus increasing output at an allowlisted
 recipe. Old counters, an alias of one consumer, a stale route, changed flow epoch,
 rewritten receipt, replacement entity or lost paid prefix cannot establish these
