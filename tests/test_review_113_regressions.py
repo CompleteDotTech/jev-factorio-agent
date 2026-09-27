@@ -316,6 +316,7 @@ def test_failed_early_decorated_steps_report_their_missing_prefix(monkeypatch, t
     path.write_text(json.dumps({'previous_iteration_timing': row}) + '\n')
     result = analyze(path)
     assert result['counts']['iteration:unpublished_between_records'] == 1
+    assert result['counts']['iteration:unobserved_before_first_sample'] == 1
     assert 'not_proof_of_runtime_loss' in result['scopes']['missing_iteration_indices']
     assert result['iteration_timing']['complete_iterations'] == 1
 
@@ -372,3 +373,39 @@ def test_nested_session_counts_scoped_request_bytes_once(kind):
     assert ledger.io['command_calls'] == 1
     assert ledger.io['request_bytes'] == len(sent[0].encode('utf-8'))
     assert ledger.io['unknown_request_size_calls'] == 0
+
+
+def test_ordered_delegates_retain_known_bytes_and_unknown_evidence():
+    with recording() as ledger:
+        def ordered():
+            timing.native_io('native_command', lambda: 'first', request_bytes=7)
+            return timing.native_io('native_command', lambda: 'second', request_bytes=None)
+        assert timing.native_io('native_batch', ordered, request_bytes=1234) == 'second'
+    assert ledger.io['batch_calls'] == 1 and ledger.io['command_calls'] == 0
+    assert ledger.io['request_bytes'] == 7
+    assert ledger.io['unknown_request_size_calls'] == 1
+    assert timing._NATIVE_REQUEST.get() is None
+
+
+def test_request_frames_reset_between_logical_calls():
+    with recording() as ledger:
+        timing.native_io('native_command',
+            lambda: timing.native_io('native_command', lambda: 'ok', request_bytes=31),
+            request_bytes=2)
+        timing.native_io('native_command', lambda: 'ok', request_bytes=11)
+    assert ledger.io['request_bytes'] == 42
+    assert ledger.io['command_calls'] == 2
+    assert timing._NATIVE_REQUEST.get() is None
+
+
+def test_nested_batch_uses_scoped_request_content_once():
+    sent = []
+    commands = {'first': '/sc print("\u2603")', 'second': '/c return 1'}
+    client = SessionRcon(NS(send_commands=lambda value: sent.append(value) or {'first': 'ok', 'second': '1'}))
+    with recording() as ledger:
+        timing.native_io('native_batch', lambda: client.send_commands(commands),
+                         request_bytes=timing.request_size(commands))
+    assert ledger.io['batch_calls'] == len(sent) == 1
+    assert ledger.io['command_calls'] == 0
+    assert ledger.io['request_bytes'] == timing.request_size(sent[0])
+    assert ledger.io['response_bytes'] == 3

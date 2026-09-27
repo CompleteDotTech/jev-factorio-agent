@@ -36,7 +36,10 @@ The first record has no completed prior iteration. The final step/tail cannot be
 published until another record exists, and remains **unobserved**, not zero. An
 abrupt process exit loses private timing data, not authoritative action state.
 A failed step may be reported by a later record; missing record indices are
-counted rather than filled with synthetic observations. Long pauses and caller
+counted rather than filled with synthetic observations. The report separately
+shows indices before its first captured timing sample; that subset also remains
+in the existing total for unrepresented indices and is not proof of failed steps.
+Long pauses and caller
 work between steps remain part of the observed gap and must be explained when
 comparing workloads.
 
@@ -58,7 +61,10 @@ one logical batch call, **not** a packet count or an atomic game snapshot.
 Request/response counts are UTF-8 content bytes when their type and encoding are
 known, not protocol framing or compressed wire bytes. Missing size remains an
 explicit unknown count. No Lua, endpoint, response content, IDs or exception text
-enters the ledger. Delegate results and exception objects remain unchanged.
+enters the ledger. Sequential delegated requests contribute their known content
+bytes once; an unknown delegate marks that logical call's byte evidence incomplete
+without discarding known bytes from its other delegates. Delegate results and
+exception objects remain unchanged.
 
 Helpers retaining the installed `SessionRcon` can expose their actual logical
 client attempts. Other private helper handles remain measured inclusively under
