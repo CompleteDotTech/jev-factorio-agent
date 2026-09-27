@@ -134,6 +134,22 @@ fields mean its raw output must not be posted publicly without sanitization. Nei
 report certifies route-flow/recovery acceptance. Compare controlled algorithm and
 capacity arms separately; unmatched production trends must be labeled as such.
 
+## Experimental solid-route evidence analysis
+
+The separate [integration evidence analyzer](INTEGRATION_EVIDENCE.md) reads
+retained complete observations and composed checkpoint copies. It checks window,
+identity, paid-prefix, receipt, flow, science and timing consistency, and can
+compare tightly controlled baseline/treatment captures. It retains stalled
+baselines and does not infer native mining from stocked coal chests. The existing
+ore-side exporter continues to reject solid-route evidence.
+
+Use only captures produced through an established authorized experimental/native
+handoff. No production flag, immutable treatment, campaign identity or cutoff is
+changed by this command. A passing consistency result always leaves native
+acceptance and deployment authorization false. Missing provider authenticity,
+source cleanliness, native crash/recovery, capacity, haul/write metrics and
+coal-source provenance still need independent evidence.
+
 ## Rollback, publication and closure
 
 Rollback uses the exact predeclared source/config handoff and preserved compatible
