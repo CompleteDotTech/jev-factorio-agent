@@ -57,6 +57,9 @@ It does not publish native IDs, roles, endpoints, paths, model names or raw erro
 messages. The output must not already exist; it is created with mode `0600` and
 file synchronization. Review even sanitized output before publishing it. Input
 hashes identify evidence; they do not authenticate its origin.
+File-based paired reports also include a digest binding the exact bytes of all
+four captured files in each arm. The parsed-value binding remains separate, so
+formatting-only changes remain visible without changing the measured values.
 
 ## Single-arm command
 
@@ -145,6 +148,10 @@ change. Pending placement phases cannot regress; a cleared pending identity must
 match its paid receipt. Final checkpoints must contain the observed commitments
 and failure history, with no unresolved action, attempt, reservation or background
 work. A valid final checkpoint alone cannot erase a mid-window fault or reset.
+This analyzer conservatively rejects any retained initial or in-window pending
+action or ambiguous attempt. A clean final checkpoint cannot establish that
+such an operation was reconciled; retain it for native recovery review before
+using a clean measurement window. The analyzer does not perform reconciliation.
 
 Science output uses new, tick-bound receipts for every declared pack at the same
 owned lab, consumption deltas for every declared pack, and a newly completed

@@ -20,6 +20,8 @@ from types import SimpleNamespace
 
 from . import solid_routes
 from .acceptance_io import MAX_JSON, MAX_LOG, canonical, load_json, records, sha256, stable_read, write_new
+from .acceptance_boundaries import (final_successor_issues, project_history_issues,
+                                    successor_history_issues)
 from .backends.solid_routes import validate_intents
 from .campaign_progress import SCIENCE
 from .iteration_timing import NAMES, validate_timing
@@ -94,6 +96,18 @@ def _valid_mods(value):
                     for name, version in value.items()))
 
 
+def _retains_prefix(before, after):
+    """Retain paid checkpoint identities while allowing append-only construction."""
+    if isinstance(before, dict):
+        return isinstance(after, dict) and all(
+            key in after and _retains_prefix(value, after[key]) for key, value in before.items())
+    if isinstance(before, list):
+        return isinstance(after, list) and len(after) >= len(before) and all(
+            _retains_prefix(value, after[index]) for index, value in enumerate(before))
+    return (before is None or (type(before) is int and before == 0)
+            or before == '' or before == after)
+
+
 def validate_trial(trial: dict) -> None:
     if not isinstance(trial, dict) or set(trial) != TRIAL_KEYS or trial['schema'] != TRIAL_SCHEMA:
         raise ValueError('Invalid integration trial schema')
@@ -111,7 +125,11 @@ def validate_trial(trial: dict) -> None:
     if (not isinstance(configuration, dict) or set(configuration) != FLAGS | {'factory_scheduling'}
             or configuration['factory_scheduling'] != 'ready-work'
             or any(type(configuration[k]) is not bool for k in FLAGS)
-            or configuration['solid_routes'] is not True):
+            or configuration['solid_routes'] is not True
+            or configuration['furnace_input_belts'] and not configuration['furnace_output_buffers']
+            or configuration['ore_side_successors'] and (
+                not configuration['background_work'] or not configuration['furnace_input_belts']
+                or configuration['mining_outposts'])):
         raise ValueError('Explicit ready-work solid-route configuration required')
     campaign = trial['campaign_treatment']
     campaign_flags = {'lead_time_supply', 'coverage_margin_lookahead',
@@ -213,10 +231,22 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                   'mining_outposts': 'outposts_schema', 'ore_side_successors': 'successor_schema'}
     for cp in (initial, final):
         reject(cp.get('solid_intents') != trial['solid_intents']
-               or cp.get('solid_science_policy', False) is not trial['configuration']['solid_science_policy'],
+               or 'solid_science_policy' not in cp or type(cp.get('solid_science_policy')) is not bool
+               or cp['solid_science_policy'] is not trial['configuration']['solid_science_policy'],
                'checkpoint_treatment_mismatch')
         reject(any((field in cp) is not trial['configuration'][flag] for flag, field in extensions.items()),
                'checkpoint_composition_mismatch')
+    for field in ('input_commitments', 'outpost_commitments', 'successor_receipts'):
+        reject(not _retains_prefix(initial.get(field, {}), final.get(field, {})),
+               'composed_ownership_regressed')
+    for key, before in initial.get('successor_projects', {}).items():
+        after = final.get('successor_projects', {}).get(key)
+        reject(not isinstance(after, dict) or any(
+            before.get(name) != after.get(name) for name in
+            ('anchor', 'predecessor_unit', 'started_tick', 'deadline_tick'))
+            or before.get('source_unit') not in (0, after.get('source_unit'))
+            or before.get('status') == 'qualified' and after.get('status') != 'qualified',
+            'composed_ownership_regressed')
     seen, previous_identity, runtime_identity = set(), None, None
     evidence_hash = hashlib.sha256()
     previous_tick = previous_time = None
@@ -239,6 +269,7 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
     goal_completed = False
     resolved_models = set()
     model_calls = 0
+    terminal_seen = False
     last_timing_index = None
     timing_samples = defaultdict(list)
     timing_counts = Counter()
@@ -273,6 +304,11 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
         reject(type(record.get('status')) is not str or record.get('status') not in {'running', 'completed'}
                or record.get('solid_route_fault') is not False,
                'controller_or_route_failure')
+        reject(terminal_seen, 'records_after_terminal_completion')
+        terminal_seen = record.get('status') == 'completed'
+        reject(record.get('pending') is not None or record.get('attempt') is not None
+               or initial.get('pending') is not None or initial.get('attempt') is not None,
+               'pending_attempt_requires_native_reconciliation')
         reject(record.get('policy') not in {'hybrid', 'jev'}, 'actual_jev_policy_not_demonstrated')
         if index and record.get('model_call') is True:
             model_calls += 1
@@ -335,6 +371,9 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                 reject(current is None or any(current.get(k) != old[k] for k in ('layout', 'source', 'target', 'steps'))
                        or any(current.get('parts', {}).get(k) != v for k, v in old['parts'].items()), 'paid_route_ownership_regressed')
             for key, route in native_routes.items():
+                reject(index == 0 and label == 'state' and route['state'] != 'proposed'
+                       and key not in initial.get('solid_commitments', {}),
+                       'uncheckpointed_initial_solid_commitment')
                 reject((route['source']['role'], route['target']['role'], route['item'], route['target']['inventory'])
                        not in allowed_intents, 'unrequested_solid_route')
                 reject(not solid_routes.current(route, view), 'stale_or_faulted_route')
@@ -534,6 +573,21 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
     reject(not model_calls or len(resolved_models) != 1, 'single_actual_jev_model_not_demonstrated')
     reject(final.get('last_tick') != last_tick, 'final_checkpoint_window_mismatch')
     reject(final_failures != previous_failures, 'final_failure_history_mismatch')
+    last_factory = rows[-1]['after_state']['factory']
+    for field, envelope in (('input_commitments', 'input_routes'),
+                            ('outpost_commitments', 'mining_outposts')):
+        observed = last_factory.get(envelope, {}).get('sources', {})
+        for key, saved in final.get(field, {}).items():
+            reject(not isinstance(observed, dict) or key not in observed
+                   or not _retains_prefix(saved, observed[key]),
+                   'final_composed_ownership_not_observed')
+    observed_successor_sources = {
+        source for record in rows for label in ('state', 'after_state')
+        for source in record[label].get('factory', {}).get('successors', {}).get('sources', {})
+    }
+    issues.update(final_successor_issues(initial, final, rows[-1], observed_successor_sources))
+    issues.update(successor_history_issues(rows))
+    issues.update(project_history_issues(initial, rows, final))
     reject(set(final.get('solid_commitments', {})) != set(committed), 'final_route_checkpoint_mismatch')
     for key, current in committed.items():
         reject(final.get('solid_commitments', {}).get(key) != current, 'final_route_checkpoint_mismatch')
@@ -600,6 +654,7 @@ def analyze(gameplay: Path, trial_path: Path, initial_checkpoint: Path, final_ch
     final = load_json(captured['final_checkpoint'])
     result = analyze_rows(records(captured['gameplay']), trial, initial, final)
     result['inputs_sha256'] = {k: sha256(v) for k, v in captured.items()}
+    result['raw_inputs_binding_sha256'] = sha256(canonical(result['inputs_sha256']))
     return result
 
 
@@ -667,6 +722,8 @@ def compare(baseline: dict, treatment: dict, baseline_trial: dict, treatment_tri
             'treatment_evidence_sha256': treatment['evidence_sha256'],
             'baseline_input_binding_sha256': baseline['input_binding_sha256'],
             'treatment_input_binding_sha256': treatment['input_binding_sha256'],
+            'baseline_raw_inputs_binding_sha256': baseline.get('raw_inputs_binding_sha256'),
+            'treatment_raw_inputs_binding_sha256': treatment.get('raw_inputs_binding_sha256'),
             'baseline_science_per_wall_minute': rates[0], 'treatment_science_per_wall_minute': rates[1],
             'science_rate_ratio': rate_ratio, 'iteration_p95_ratio': latency_ratio,
             'causal_improvement_proven': False, 'native_acceptance': 'not_accepted',

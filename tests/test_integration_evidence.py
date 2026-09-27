@@ -249,7 +249,7 @@ def test_valid_successor_composed_checkpoint_can_be_analyzed():
         checkpoint.update(background_schema=2, background_job=None, background_attempt=None,
                           input_routes_schema=1, input_commitments={}, successor_schema=1,
                           successor_projects={}, successor_receipts={})
-    for flag in ('background_work', 'furnace_input_belts', 'ore_side_successors'):
+    for flag in ('background_work', 'furnace_output_buffers', 'furnace_input_belts', 'ore_side_successors'):
         args[1]['configuration'][flag] = True
     for record in args[0]:
         record['acceptance_configuration'] = deepcopy(args[1]['configuration'])
@@ -313,6 +313,72 @@ def test_comparison_carries_checkpoint_and_full_input_bindings():
     assert original['baseline_evidence_sha256'] == changed['baseline_evidence_sha256']
     assert original['baseline_input_binding_sha256'] != changed['baseline_input_binding_sha256']
     assert original['treatment_input_binding_sha256'] == changed['treatment_input_binding_sha256']
+
+
+@pytest.mark.parametrize('checkpoint', [2, 3])
+def test_science_policy_must_be_explicit_in_both_checkpoints(checkpoint):
+    args = evidence()
+    args[checkpoint].pop('solid_science_policy')
+    assert 'checkpoint_treatment_mismatch' in report.analyze_rows(*args)['issues']
+
+
+def test_file_pair_binds_exact_input_bytes(tmp_path):
+    baseline, treatment = paired()
+    first = files(tmp_path / 'baseline', baseline)
+    second = files(tmp_path / 'treatment', treatment)
+    original = report.compare_files(first, second)
+    trial = first['trial']
+    trial.write_bytes(json.dumps(json.loads(trial.read_bytes()), indent=2).encode() + b'\n')
+    changed = report.compare_files(first, second)
+    assert original['paired_measurement_checks_passed']
+    assert changed['paired_measurement_checks_passed']
+    assert original['baseline_input_binding_sha256'] == changed['baseline_input_binding_sha256']
+    assert original['baseline_raw_inputs_binding_sha256'] != changed['baseline_raw_inputs_binding_sha256']
+    assert original['treatment_raw_inputs_binding_sha256'] == changed['treatment_raw_inputs_binding_sha256']
+
+
+def test_record_attempt_requires_reconciliation():
+    args = evidence()
+    args[0][4]['attempt'] = {'action': 'unresolved'}
+    value = report.analyze_rows(*args)
+    assert 'pending_attempt_requires_native_reconciliation' in value['issues']
+    assert not value['measurement_checks_passed']
+
+
+def test_malformed_initial_pending_checkpoint_fails_closed():
+    args = evidence()
+    args[2]['pending'] = {'action': 'unresolved'}
+    with pytest.raises(ValueError, match='Pending action without an active plan'):
+        report.analyze_rows(*args)
+
+
+def test_completed_status_cannot_return_to_running():
+    args = evidence()
+    args[0][4]['status'] = 'completed'
+    assert 'records_after_terminal_completion' in report.analyze_rows(*args)['issues']
+
+
+def test_first_boundary_cannot_invent_paid_solid_route():
+    args = evidence()
+    args[2]['solid_commitments'].clear()
+    assert 'uncheckpointed_initial_solid_commitment' in report.analyze_rows(*args)['issues']
+
+
+@pytest.mark.parametrize('enabled', [('furnace_input_belts',),
+                                     ('background_work', 'furnace_input_belts', 'ore_side_successors')])
+def test_trial_rejects_transport_without_output_buffers(enabled):
+    args = evidence()
+    for flag in enabled:
+        args[1]['configuration'][flag] = True
+    with pytest.raises(ValueError, match='solid-route configuration'):
+        report.analyze_rows(*args)
+
+
+def test_composed_ownership_prefix_cannot_be_replaced():
+    assert report._retains_prefix({'source': {'paid': 17, 'parts': {'belt': 'receipt'}}},
+                                  {'source': {'paid': 17, 'parts': {'belt': 'receipt', 'next': 'new'}}})
+    assert not report._retains_prefix({'source': {'paid': 17}}, {'source': {'paid': 18}})
+    assert not report._retains_prefix({'source': {'paid': False}}, {'source': {'paid': True}})
 
 
 @pytest.mark.parametrize('field,value', [
