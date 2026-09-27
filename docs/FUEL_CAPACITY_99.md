@@ -13,12 +13,15 @@ and surface must match the just-observed row. Role aliases share one read,
 including an unavailable result. Other consumers remain unknown.
 
 `factory.inventory_insertable.coal` and `entity.fuel_insertable.coal` are optional
-**advisory basic-inventory hints**, not reservations or permission. A missing or
-unsupported getter remains absent, including after a prior successful read.
-Known zero is preserved. Successful malformed/noninteger/out-of-range results
-invalidate the observation. The Python wire boundary validates maps and integral
-counts before the planner sees them. No extra RCON call, FLE helper, authoritative
-checkpoint field, ownership change or cross-tick cache is introduced.
+**advisory basic-inventory hints**, not reservations or permission. The actor
+hint now comes only from a top-level `inventory_capacity` reading bound to the
+same tick and main inventory; the decoder discards nested wrapper hints and
+publishes the validated value with separate identity evidence. Missing or
+unsupported getters remain unknown, including after a prior successful read.
+A supported actor getter that fails, or a malformed/out-of-range result, rejects
+the observation. Known zero is preserved. Consumer hints remain bounded to 16
+owned native identities. No extra RCON call, FLE helper, authoritative checkpoint
+field, ownership change or cross-tick cache is introduced.
 
 This provider runs only in the already-negotiated observation-v2 path. Legacy
 observations without capacity retain bounded unknown-capacity behavior, not a
@@ -33,7 +36,10 @@ acquisition. Aliased identities with conflicting capacity fail closed. A partial
 available destination receives only the bounded quantity. Actor capacity limits
 new gathering, not use of already carried and unreserved coal. Quantities are
 replanned after each fresh observation and receipt; no failure ID or budget is
-reset. The existing native transfer capacity preflight remains authoritative.
+reset. A retained gather step is checked again against the latest known actor
+headroom before dispatch; an oversized step is rejected for replanning without
+changing a pending receipt. The existing native transfer capacity preflight
+remains authoritative. The detailed capacity evidence stays out of model facts.
 
 ## Qualification and limitations
 

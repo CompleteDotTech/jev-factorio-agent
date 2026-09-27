@@ -58,6 +58,24 @@ def _capacity(value: Any) -> dict:
     return dict(result)
 
 
+def _actor_capacity(value: Any, tick: int) -> dict | None:
+    """Accept only a fresh, explicitly identified main-inventory coal reading."""
+    if value is False:
+        return None
+    if (not isinstance(value, dict)
+            or set(value) != {'schema', 'tick', 'inventory', 'quality', 'method', 'items'}
+            or type(value['schema']) is not int or value['schema'] != 1
+            or type(value['tick']) is not int or value['tick'] != tick
+            or value['inventory'] != 'character_main' or value['quality'] != 'normal'
+            or value['method'] != 'get_insertable_count'
+            or not isinstance(value['items'], dict) or set(value['items']) != {'coal'}):
+        raise ValueError('Invalid atomic inventory capacity')
+    count = value['items']['coal']
+    if type(count) is not int or not 0 <= count <= 2**32 - 1:
+        raise ValueError('Invalid atomic inventory capacity')
+    return {**value, 'items': {'coal': count}}
+
+
 def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
     """Read and validate one v2 snapshot before exposing any of its native facts."""
     from fle.env import Position
@@ -84,6 +102,7 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
         raise ValueError('Atomic observation tick regressed')
     position = _position(result.get('position'))
     inventory = _inventory(result.get('inventory'))
+    capacity = _actor_capacity(result.get('inventory_capacity', False), tick)
     controls = result.get('controls')
     if (not isinstance(controls, dict) or type(controls.get('tick')) is not int
             or controls['tick'] != tick or _position(controls.get('position')) != position
@@ -115,8 +134,10 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
             raise ValueError('Atomic runtime identity changed')
     for key in ('entities', 'receipts'):
         factory[key] = _map(factory.get(key), key)
-    if 'inventory_insertable' in factory:
-        factory['inventory_insertable'] = _capacity(factory['inventory_insertable'])
+    # A capability wrapper cannot supply or preserve actor headroom. Only the
+    # current top-level reading above can publish it after full validation.
+    factory.pop('inventory_insertable', None)
+    factory.pop('inventory_insertable_evidence', None)
     for entity in factory['entities'].values():
         if isinstance(entity, dict) and 'fuel_insertable' in entity:
             entity['fuel_insertable'] = _capacity(entity['fuel_insertable'])
@@ -194,6 +215,13 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
         raise ValueError('Invalid atomic discovery diagnostics')
     # Validation has completed. Only now publish this observation and advisory
     # caches; malformed payloads cannot overwrite a previously coherent view.
+    if capacity is not None:
+        factory['inventory_insertable'] = dict(capacity['items'])
+        factory['inventory_insertable_evidence'] = {
+            **capacity, 'session_id': session,
+            **{key: result[key] for key in ('actor_unit', 'surface_index', 'force_index')},
+            'basis': 'native_insertable_count_estimate',
+        }
     factory['fair_resource_targets'] = targets
     factory['observation_snapshot_schema'] = 2
     factory['observation_query_bounds'] = dict(bounds)

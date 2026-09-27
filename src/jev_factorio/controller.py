@@ -335,6 +335,7 @@ class HierarchicalLoop(AgentLoop):
         facts.get("factory", {}).pop("consumed", None)
         facts.get("factory", {}).pop("observation_snapshot_schema", None)
         facts.get("factory", {}).pop("observation_query_bounds", None)
+        facts.get("factory", {}).pop("inventory_insertable_evidence", None)
         return facts
 
     def _record_extras(self) -> dict:

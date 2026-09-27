@@ -1,6 +1,5 @@
 """Read-only native capacity hints and bounded manual service, not flow proof."""
 from copy import deepcopy
-import json
 
 import pytest
 
@@ -99,7 +98,7 @@ def capacity_runtime():
 def test_lua_observation_samples_actor_and_deduplicated_owned_consumer():
     lua = capacity_runtime()
     lua.execute('''storage.campaign.observation_snapshot_v2(0)
-        assert(captured.factory.inventory_insertable.coal==3)
+        assert(captured.inventory_capacity.items.coal==3)
         assert(captured.factory.entities.burner.fuel_insertable.coal==2)
         assert(captured.factory.entities.alias.fuel_insertable.coal==2)
         assert(main_capacity_calls==1 and burner_capacity_calls==1)
@@ -110,22 +109,25 @@ def test_lua_capacity_is_fresh_and_zero_is_known_not_unknown():
     lua = capacity_runtime()
     lua.execute('''storage.campaign.observation_snapshot_v2(0)
         main_capacity=0;burner_capacity=0;game.tick=11;storage.campaign.observation_snapshot_v2(0)
-        assert(captured.factory.inventory_insertable.coal==0)
+        assert(captured.inventory_capacity.items.coal==0)
         assert(captured.factory.entities.burner.fuel_insertable.coal==0)
         assert(main_capacity_calls==2 and burner_capacity_calls==2)''')
 
 
-@pytest.mark.parametrize('change', [
-    'main_inventory.get_insertable_count=nil;burner_inventory.get_insertable_count=nil',
-    'main_inventory.get_insertable_count=function() error("unavailable private") end;burner_inventory.get_insertable_count=nil',
-])
-def test_unavailable_native_getter_remains_unknown_without_stale_hint(change):
+def test_missing_native_getter_remains_unknown_without_stale_hint():
     lua = capacity_runtime()
-    lua.execute('storage.campaign.observation_snapshot_v2(0);' + change + ';game.tick=11;storage.campaign.observation_snapshot_v2(0)')
-    value = converted(lua.globals().captured)['factory']
-    assert 'inventory_insertable' not in value
-    assert 'fuel_insertable' not in value['entities']['burner']
-    assert 'private' not in json.dumps(value)
+    lua.execute('''storage.campaign.observation_snapshot_v2(0)
+        main_inventory.get_insertable_count=nil;burner_inventory.get_insertable_count=nil
+        game.tick=11;storage.campaign.observation_snapshot_v2(0)''')
+    value = converted(lua.globals().captured)
+    assert value['inventory_capacity'] is False
+    assert 'fuel_insertable' not in value['factory']['entities']['burner']
+
+
+def test_failing_supported_actor_getter_rejects_observation():
+    lua = capacity_runtime()
+    lua.execute('''main_inventory.get_insertable_count=function() error("unavailable private") end
+        assert(not pcall(storage.campaign.observation_snapshot_v2,0));assert(captured==nil)''')
 
 
 @pytest.mark.parametrize('change', [
@@ -148,7 +150,9 @@ def test_replaced_or_foreign_native_entity_cannot_supply_capacity(change):
 @pytest.mark.parametrize('invalid', [True, -1, 1.5, '3'])
 def test_atomic_python_decoder_rejects_malformed_capacity(monkeypatch, invalid):
     backend, _, payload, calls = atomic_setup(monkeypatch)
-    payload['factory']['inventory_insertable'] = {'coal': invalid}
+    payload['inventory_capacity'] = {'schema': 1, 'tick': 10,
+        'inventory': 'character_main', 'quality': 'normal',
+        'method': 'get_insertable_count', 'items': {'coal': invalid}}
     with pytest.raises(ValueError, match='capacity'):
         backend.observe()
     assert len(calls) == 1
@@ -173,16 +177,11 @@ def test_native_consumer_capacity_read_budget_is_fixed_and_unknowns_not_fabricat
         assert(captured.factory.entities["burner:17"].fuel_insertable==nil)''')
 
 
-@pytest.mark.parametrize('field', ['inventory_insertable', 'fuel_insertable'])
-def test_empty_wire_capacity_maps_remain_unknown(monkeypatch, field):
+def test_empty_wire_consumer_capacity_map_remains_unknown(monkeypatch):
     backend, _, payload, calls = atomic_setup(monkeypatch)
-    if field == 'inventory_insertable':
-        payload['factory'][field] = []
-    else:
-        payload['factory']['entities'] = {'burner': {field: []}}
+    payload['factory']['entities'] = {'burner': {'fuel_insertable': []}}
     state = backend.observe()
-    target = state.factory if field == 'inventory_insertable' else state.factory['entities']['burner']
-    assert target[field] == {} and len(calls) == 1
+    assert state.factory['entities']['burner']['fuel_insertable'] == {} and len(calls) == 1
 
 
 @pytest.mark.parametrize('capacity', [None, {}])
