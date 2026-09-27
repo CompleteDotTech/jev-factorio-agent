@@ -135,3 +135,16 @@ def test_unrelated_researched_technology_facts_are_not_captured(tmp_path):
     record = loop.step()
     commit = next(value for value in record['history'] if value['kind'] == 'solid_kit_committed')
     assert not any(name.startswith('unrelated-') for name in commit['acquisition']['technologies'])
+
+
+def test_new_kit_cannot_replace_a_retained_ordinary_plan(tmp_path):
+    loop, _ = kit_loop(tmp_path)
+    loop._observe(); initial = asdict(loop.memory)
+    record = loop.step(); final = asdict(loop.memory)
+    assert not funding_history_issues(initial, [record], final)
+    # Admission/barrier exits can retain an ordinary plan before it reserves
+    # materials. A subsequent step must finish that plan before selecting a kit.
+    initial['active_plan'] = Plan('ordinary-retained', 'rocket_launch', 'Finish owned work', (
+        Step('factory_craft', 'inventory', 'iron-gear-wheel', 1,
+             costs={'iron-plate': 2}, parameters={'recipe': 'iron-gear-wheel', 'batches': 1}),)).to_dict()
+    assert funding_history_issues(initial, [record], final)

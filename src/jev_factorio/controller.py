@@ -1002,7 +1002,10 @@ class HierarchicalLoop(AgentLoop):
             self.memory.active_plan = chosen.to_dict()
             self.memory.step_index = 0
             self.memory.event("plan_committed", plan=chosen.id, source=self._decision.source,
-                              tick=snapshot.tick)
+                              tick=snapshot.tick, **({'definition': chosen.to_dict()}
+                                  if getattr(self, '_solid_science_policy', False)
+                                  and not (chosen.id.startswith('solid-project:')
+                                           and chosen.id.endswith(':kit')) else {}))
             self._save()
             if self._trace.enabled:
                 self._trace.emit("plan_committed", {"plan_id": chosen.id, "plan": chosen.to_dict(),

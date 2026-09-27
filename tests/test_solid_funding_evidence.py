@@ -88,6 +88,7 @@ def funded_evidence():
                 {'intent_index': 4, 'state': 'proposed', 'reason': 'ready_layout'})
     declaration = solid_funding.acquisition_evidence(route, GameSnapshot(**rows[0]['state']), data, {})
     for cp in (initial, final):
+        cp['solid_funding_catalogs'][funding['key']]['catalog_sha256'] = solid_funding.digest(declaration['catalog'])
         cp['solid_funding_catalogs'][funding['key']]['acquisition_sha256'] = solid_funding.digest(
             {k: v for k, v in declaration.items() if k != 'reserved'})
     return rows, trial, initial, final
@@ -114,11 +115,12 @@ def event(kind, funding, tick, **extras):
 
 def plan_event(funding, tick):
     return {'kind': 'plan_committed', 'plan': funding['key'] + ':kit',
-            'source': 'deterministic', 'tick': tick}
+            'source': 'jev', 'tick': tick}
 
 
 def decision_for(record, funding):
-    record['decision'] = asdict(Decision(funding['key'] + ':kit', 'deterministic'))
+    record['decision'] = asdict(Decision(funding['key'] + ':kit', 'jev', model_called=True))
+    record.update(model_call=True, resolved_model=record['requested_model'])
     if record['action'] == 'observe': record['verified'] = False
 
 

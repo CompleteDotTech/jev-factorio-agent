@@ -115,8 +115,10 @@ to one while retaining funding. It cannot justify an exhausted-budget release.
 Deadline deferral requires one unseen current-process attempt, matching the
 selected plan, action, dispatch phase and observation interval.
 
-New commitments capture the bounded kit recipe graph, researched technology
-facts and reservations used in acquisition. The graph must hash to the existing
+New commitments capture the bounded kit/red-green recipe closure, static
+technology definitions and reservations used in acquisition. These definitions
+are independent of researched technologies and the current research selection.
+Replaying the kit bill with fresh research facts must reproduce the existing
 funding catalog binding; replaying acquisition against the initial observation
 must produce the exact captured step. This prevents a self-consistent step hash
 for unrelated crafting from proving kit acquisition. Paid components likewise
@@ -130,15 +132,25 @@ state; invented, omitted or contradictory final transitions fail measurement.
 
 Acquisition replay uses the preceding durable reservation owners, observed paid
 commitments and failure counters for the entire simulated kit, not just its first
-step. Compact current-research and relevant unlock/recipe facts support demand,
+step. Compact supported-research and relevant unlock/recipe definitions support demand,
 payback and global queue/building admission checks. Both catalog and admission
 facts must match the starting checkpoint's declarations, with runtime base-version
 agreement when that evidence is present. A changed or undeclared catalog needs a
 new independently captured measurement baseline; changing event hashes cannot
 declare its own authority. These are consistency anchors, not log authentication.
+Research progress uses the same immutable declaration. The final checkpoint must
+retain every initial declaration exactly, including its original observation tick.
+New verified service outcomes require a matching fresh dispatch or completion of
+the exact retained pending attempt before contributing to admission payback.
+Kit attempts bind the captured step's receipt and observed endpoint, including
+explicit null fields for crafting. Decision source and model-call state must be
+possible under the recorded deterministic, hybrid or strict Jev policy.
 Verified observation labels cannot clear an active kit. Only its matching
 existing-effect verification, dispatched attempt or proven failure can clear it,
 and final checkpoint activity must agree with the tracked plan.
+Ordinary plans also block new kit selection until a causal completion or failure.
+Policy-enabled ordinary `plan_committed` events retain detached plan definitions
+for this replay; those definitions are removed from model-facing history.
 
 Detailed funding audit proofs stay in checkpoint/gameplay history. Model-facing
 history contains only compact event identity, tick and reason; unrelated research

@@ -473,7 +473,8 @@ class SolidRouteMixin:
     def _model_history(self):
         return [{key: value for key, value in event.items()
                  if key in {'kind', 'key', 'tick', 'reason'}}
-                if event.get('kind', '').startswith('solid_kit_') else deepcopy(event)
+                if event.get('kind', '').startswith('solid_kit_') else
+                {key: deepcopy(value) for key, value in event.items() if key != 'definition'}
                 for event in super()._model_history()]
 
     def _model_facts(self, snapshot):
@@ -512,19 +513,7 @@ def solid_loop_type(base):
             if type(memory.solid_science_policy) is not bool:
                 raise ValueError("Invalid solid policy binding")
             validate_intents(memory.solid_intents)
-            if not isinstance(memory.solid_funding_catalogs, dict) or len(memory.solid_funding_catalogs) > routes.MAX_ROUTES:
-                raise ValueError('Invalid funding catalog declarations')
-            for key, value in memory.solid_funding_catalogs.items():
-                if (not isinstance(key, str) or not key.startswith('solid-project:')
-                        or not isinstance(value, dict) or set(value) != {'schema', 'observed_tick', 'version', 'catalog_sha256', 'acquisition_sha256'}
-                        or type(value['schema']) is not int or value['schema'] != 1
-                        or not routes.integer(value['observed_tick'], 0, memory.last_tick)
-                        or not isinstance(value['version'], str) or not value['version'].startswith('2.0.')
-                        or not isinstance(value['catalog_sha256'], str) or len(value['catalog_sha256']) != 64
-                        or any(c not in '0123456789abcdef' for c in value['catalog_sha256'])
-                        or not isinstance(value['acquisition_sha256'], str) or len(value['acquisition_sha256']) != 64
-                        or any(c not in '0123456789abcdef' for c in value['acquisition_sha256'])):
-                    raise ValueError('Invalid funding catalog declaration')
+            solid_funding.validate_catalog_declarations(memory.solid_funding_catalogs, memory.last_tick)
             if memory.solid_funding is not None:
                 if not memory.solid_science_policy or memory.capital_investment is not None:
                     raise ValueError("Solid funding conflicts with immutable policy or capital")
