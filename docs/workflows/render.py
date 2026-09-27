@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import re
+import shutil
 import struct
 import subprocess
 import xml.etree.ElementTree as ET
@@ -27,8 +29,12 @@ NODE = re.compile(r'\b([A-Z][A-Z0-9_]*)\s*(\["[^"]*"\]|\{"[^"]*"\})')
 
 def split_sections(directory: Path) -> list[Path]:
     complete = directory / "mmd/00-complete-workflow.mmd"
-    source = complete.read_text()
-    definitions = dict(NODE.findall(source))
+    source = complete.read_text(encoding="utf-8")
+    declared = NODE.findall(source)
+    definitions = dict(declared)
+    if len(declared) != len(definitions):
+        raise ValueError("Workflow node IDs must be unique across sections")
+    palette = "\n".join(line for line in source.splitlines() if line.startswith("classDef "))
     paths = [complete]
     for section, filename in SECTIONS.items():
         match = re.search(
@@ -47,30 +53,52 @@ def split_sections(directory: Path) -> list[Path]:
         if external:
             continuation = (
                 "\n" + continuation + "\n"
-                + "classDef continuation fill:#fff7ed,stroke:#c2410c,stroke-dasharray:5 4;\n"
                 + f"class {','.join(external)} continuation;\n"
             )
+        section_style = "\n".join(line for line in source.splitlines()
+                                  if line.startswith(f"style {section} "))
         path = directory / "mmd" / f"{filename}.mmd"
-        path.write_text(("flowchart TD\n\n" + body + "\n" + continuation).rstrip() + "\n")
+        path.write_text(("flowchart TD\n\n" + body + "\n" + continuation
+                         + "\n" + palette + "\n" + section_style).rstrip() + "\n",
+                        encoding="utf-8", newline="\n")
         paths.append(path)
     return paths
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mmdc", required=True)
-    parser.add_argument("--browser", required=True)
+    parser.add_argument("--mmdc")
+    parser.add_argument("--browser")
+    parser.add_argument("--split-only", action="store_true",
+                        help="Regenerate section sources without launching a browser")
     parser.add_argument("--scale", type=float, default=2)
     parser.add_argument("--only", help="Render just this source filename stem")
     arguments = parser.parse_args()
     if not math.isfinite(arguments.scale) or arguments.scale <= 0:
         parser.error("--scale must be positive and finite")
     directory = Path(__file__).resolve().parent
+    sources = split_sections(directory)
+    if arguments.split_only:
+        return
+    if not arguments.mmdc or not arguments.browser:
+        parser.error("--mmdc and --browser are required for rendering")
+    if arguments.only and arguments.only not in {source.stem for source in sources}:
+        parser.error("--only must name an existing workflow source")
+    mmdc = Path(arguments.mmdc).resolve()
+    # Invoke the Node entry point directly on Windows, avoiding cmd quoting of
+    # paths containing spaces. The entry also anchors Puppeteer's module lookup.
+    if mmdc.suffix.lower() in {".cmd", ".bat"}:
+        mmdc = mmdc.parent.parent / "@mermaid-js/mermaid-cli/src/cli.js"
+    command = ["node", str(mmdc)] if mmdc.suffix == ".js" else [str(mmdc)]
+    config = json.loads((directory / "mermaid-config.json").read_text(encoding="utf-8"))
+    background = config["themeVariables"].get("background", "white")
     workspace = directory.parents[1]
     temporary = workspace / "runs/mermaid-render/tmp"
     temporary.mkdir(parents=True, exist_ok=True)
     output = directory / "pngs"
     output.mkdir(exist_ok=True)
+    vectors = directory / "svgs"
+    vectors.mkdir(exist_ok=True)
     browser_config = temporary / "puppeteer.json"
     browser_config.write_text(json.dumps({
         "executablePath": str(Path(arguments.browser).resolve()),
@@ -93,26 +121,28 @@ def main() -> None:
         ET.ElementTree(fonts).write(font_config, encoding="utf-8", xml_declaration=True)
         environment["FONTCONFIG_FILE"] = str(font_config)
     manifest = output / "manifest.json"
-    records = json.loads(manifest.read_text()) if arguments.only and manifest.exists() else []
-    for source in split_sections(directory):
+    records = json.loads(manifest.read_text(encoding="utf-8")) if arguments.only and manifest.exists() else []
+    for source in sources:
         if arguments.only and source.stem != arguments.only:
             continue
         config_path = directory / "mermaid-config.json"
         viewport_width = 2400
         if source.stem == "00-complete-workflow":
-            config = json.loads(config_path.read_text())
+            config = json.loads(config_path.read_text(encoding="utf-8"))
             config["flowchart"]["useMaxWidth"] = True
             config_path = temporary / "complete-config.json"
-            config_path.write_text(json.dumps(config))
+            config_path.write_text(json.dumps(config), encoding="utf-8", newline="\n")
             viewport_width = 12000
-        common = [
-            str(Path(arguments.mmdc).resolve()), "-i", str(source),
+        common = command + [
+            "-i", str(source),
             "-c", str(config_path),
-            "-p", str(browser_config), "-b", "white",
+            "-p", str(browser_config), "-b", background,
             "-w", str(viewport_width), "-H", "1600",
         ]
         vector = temporary / f"{source.stem}.svg"
         subprocess.run(common + ["-o", str(vector)], check=True, env=environment, timeout=300)
+        published_vector = vectors / vector.name
+        shutil.copyfile(vector, published_vector)
         viewbox = ET.parse(vector).getroot().attrib["viewBox"].split()
         width, height = map(float, viewbox[2:])
         scale = min(
@@ -126,10 +156,10 @@ def main() -> None:
         tiles = temporary / f"{source.stem}-tiles"
         subprocess.run([
             "node", str(directory / "render-svg-tiles.mjs"),
-            str(Path(arguments.mmdc).resolve()), str(vector), str(browser_config),
-            str(tiles), str(dimensions[0]), str(dimensions[1]),
+            str(mmdc), str(vector), str(browser_config),
+            str(tiles), str(dimensions[0]), str(dimensions[1]), background,
         ], check=True, env=environment, timeout=600)
-        image = Image.new("RGB", dimensions, "white")
+        image = Image.new("RGB", dimensions, background)
         for tile in json.loads((tiles / "tiles.json").read_text()):
             with Image.open(tiles / tile["filename"]) as part:
                 image.paste(part, (tile["left"], tile["top"]))
@@ -141,8 +171,14 @@ def main() -> None:
             raise ValueError(f"Invalid PNG: {raster}")
         pixels = struct.unpack(">II", header[16:24])
         record = {
-            "source": str(source.relative_to(directory)),
-            "png": str(raster.relative_to(directory)),
+            "source": source.relative_to(directory).as_posix(),
+            "png": raster.relative_to(directory).as_posix(),
+            "svg": published_vector.relative_to(directory).as_posix(),
+            "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "config_sha256": hashlib.sha256((directory / "mermaid-config.json").read_bytes()).hexdigest(),
+            "effective_config_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
+            "png_sha256": hashlib.sha256(raster.read_bytes()).hexdigest(),
+            "svg_sha256": hashlib.sha256(published_vector.read_bytes()).hexdigest(),
             "width": pixels[0], "height": pixels[1],
             "scale": scale, "bytes": raster.stat().st_size,
         }
@@ -150,7 +186,7 @@ def main() -> None:
         records.append(record)
         print(json.dumps(record), flush=True)
     records.sort(key=lambda entry: entry["source"])
-    manifest.write_text(json.dumps(records, indent=2) + "\n")
+    manifest.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
 if __name__ == "__main__":
