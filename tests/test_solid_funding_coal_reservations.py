@@ -11,8 +11,7 @@ from test_solid_kit_acquisition import kit_loop
 from coal_supply_fixtures import fixture, TARGETS, INTENTS, paid_source, paid_corridor
 
 
-@pytest.mark.parametrize('corridor_paid', [False, True])
-def test_composed_kit_commit_preserves_coal_source_and_future_corridor_locks(tmp_path, corridor_paid):
+def composed_kit_loop(tmp_path, corridor_paid=False):
     loop, backend = kit_loop(tmp_path)
     state = fixture()
     first = coal.sources(state)['alpha']
@@ -34,6 +33,8 @@ def test_composed_kit_commit_preserves_coal_source_and_future_corridor_locks(tmp
     loop._coal_targets = TARGETS
     loop._coal_fault = False
     loop._coal_evidence = {}
+    loop._coal_kit_policy = False
+    loop._coal_kit_evidence = {}
     loop._solid_intents = [*loop._solid_intents, *INTENTS]
     loop.memory.solid_commitments = {key: solid.commitment(route) for key, route in
         backend.state.factory['solid_routes']['routes'].items() if route['parts']}
@@ -43,6 +44,12 @@ def test_composed_kit_commit_preserves_coal_source_and_future_corridor_locks(tmp
     loop._compile_candidates = lambda snapshot: SolidRouteMixin._compile_candidates(loop, snapshot)
     backend.kit_after = lambda: backend.state.factory['coal_supply'].update(tick=backend.state.tick)
     loop._observe()
+    return loop, backend
+
+
+@pytest.mark.parametrize('corridor_paid', [False, True])
+def test_composed_kit_commit_preserves_coal_source_and_future_corridor_locks(tmp_path, corridor_paid):
+    loop, backend = composed_kit_loop(tmp_path, corridor_paid)
     initial = asdict(loop.memory)
     record = loop.step(); final = asdict(loop.memory)
     assert record['verified'], record['outcome']

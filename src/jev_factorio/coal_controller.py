@@ -15,6 +15,7 @@ from pathlib import Path
 from . import coal_supply as coal, solid_routes as solid
 from .backends.coal_supply import CoalSupplyFactory
 from .planning.coal_supply import MARKER, candidates
+from .planning import coal_funding, solid_funding, solid_investment
 from .planning.demand import SupplyLedger
 from .research_log import RunConfiguration, ResearchLogError
 from .skills import Plan
@@ -26,20 +27,27 @@ UNBOUND_FAULT = "Coal-source epoch unbound; native reconciliation required"
 
 
 class CoalSupplyMixin:
-    def __init__(self, backend, jev=None, *, coal_targets, **options) -> None:
+    def __init__(self, backend, jev=None, *, coal_targets, coal_kit_policy=False, **options) -> None:
+        if type(coal_kit_policy) is not bool:
+            raise ValueError("Coal kit policy must be an explicit boolean")
+        self._coal_kit_policy = coal_kit_policy
+        self._coal_kit_evidence = {}
         self._coal_targets = coal.validate_targets(coal_targets)
         self._coal_fault = False
         self._coal_evidence = {}
         coal.validate_transport_intents(self._coal_targets, options.get("solid_intents"))
         sink = options.get("research_log")
         if sink is not None and (not isinstance(getattr(sink, "configuration", None), RunConfiguration)
-                                 or sink.configuration.coal_supply is not True):
+                                 or sink.configuration.coal_supply is not True
+                                 or sink.configuration.coal_kit_policy is not coal_kit_policy):
             raise ValueError("Research manifest must explicitly bind the coal treatment")
         if options.get("resume_controller"):
             raw = Path(options["checkpoint"]).read_bytes()
             data = json.loads(raw)
             if (not isinstance(data, dict) or not CHECKPOINT_FIELDS <= data.keys()
-                    or data["coal_targets"] != self._coal_targets or not data["coal_epoch"]):
+                    or data["coal_targets"] != self._coal_targets or not data["coal_epoch"]
+                    or data.get("coal_kit_policy", False) is not coal_kit_policy
+                    or coal_kit_policy and "coal_funding" not in data):
                 raise ValueError("Coal treatment cannot adopt or migrate an unbound checkpoint")
             # The inner solid initializer does the full composed memory validation
             # plus sticky pre/post-observation byte checks before any mutation.
@@ -60,6 +68,7 @@ class CoalSupplyMixin:
         snapshot = super()._observe_snapshot()
         if not self.memory.coal_targets:
             self.memory.coal_targets = list(self._coal_targets)
+            self.memory.coal_kit_policy = self._coal_kit_policy
         if not self.memory.coal_epoch:
             try:
                 coal.sources(snapshot)
@@ -78,7 +87,8 @@ class CoalSupplyMixin:
             rows = coal.sources(snapshot)
             data = snapshot.factory["coal_supply"]
             epoch = {k: data[k] for k in ("actor_index", "surface_index", "force_index")}
-            if (self.memory.coal_targets != self._coal_targets or data["targets"] != self._coal_targets
+            if (self.memory.coal_kit_policy is not self._coal_kit_policy
+                    or self.memory.coal_targets != self._coal_targets or data["targets"] != self._coal_targets
                     or self.memory.coal_epoch != epoch or any(not coal.current(row, snapshot) for row in rows.values())):
                 raise ValueError("Coal source binding or ownership changed")
             from .construction_journal import require_owner
@@ -114,6 +124,9 @@ class CoalSupplyMixin:
                         raise ValueError("Untracked paid coal part")
             if data["committed"]:
                 self.memory.coal_commitments = {target: coal.commitment(row) for target, row in rows.items()}
+            self._reconcile_coal_funding(snapshot)
+            if not self._coal_fault:
+                super()._finalize_solid_funding(snapshot)
         except (ValueError, KeyError, TypeError, AttributeError, IndexError):
             self._coal_fault = True
             self.memory.status = "uncertain"
@@ -127,7 +140,8 @@ class CoalSupplyMixin:
         return self._coal_fault or super()._execution_barrier(snapshot)
 
     def _step_allowed(self, step, snapshot):
-        if self._execution_barrier(snapshot) or not coal.permits(step.action, step.parameters or {}, snapshot):
+        if (self._execution_barrier(snapshot) or self._coal_job_conflict(step)
+                or not coal.permits(step.action, step.parameters or {}, snapshot)):
             return False
         try:
             rows = coal.sources(snapshot)
@@ -137,6 +151,13 @@ class CoalSupplyMixin:
             if not network:
                 bill.update(solid.remaining(solid.routes(snapshot)[own]) if own else step.costs or {})
             reserved = Counter()
+            state = self.memory.coal_funding
+            if state and not network:
+                reserved.update(state["held"])
+            if (network and self._coal_kit_policy and not self.memory.coal_commitments
+                    and (self.memory.failures.get(coal_funding.project_key(self._coal_targets), 0) >= 2
+                         or coal_funding.build_budget_exhausted(rows, self.memory.failures))):
+                return False
             # Coal corridors are already in the whole-network bill; do not count
             # them twice. Other route, background and active-plan locks survive.
             for key, saved in self.memory.solid_commitments.items():
@@ -156,11 +177,24 @@ class CoalSupplyMixin:
 
     def _solid_reservations(self):
         reserved = Counter(super()._solid_reservations())
+        if self.memory.coal_funding:
+            reserved.update(self.memory.coal_funding["held"])
         # Solid already accounts for each committed corridor. Source components
         # and not-yet-committed receiving corridors are part of the same durable
         # coal bundle, even before a chest has produced an observable route.
         reserved.update(coal.reserved_components(self.memory.coal_commitments, self.memory.solid_commitments))
         return dict(reserved)
+
+    def _coal_job_conflict(self, step):
+        state = self.memory.coal_funding
+        if state is None or step.action != "factory_craft_job":
+            return False
+        recipe = self.catalog.recipes.get((step.parameters or {}).get("recipe"))
+        # A tracked job locks its entire output inventory, including baseline
+        # stock. Include newly acquired kit components: post-action observation
+        # may hold partial output before the background job is admitted.
+        return recipe is None or any(product["name"] in state["kit"]
+                                     for product in recipe.get("products", []))
 
     def _compile_candidates(self, snapshot):
         plans, blocker = super()._compile_candidates(snapshot)
@@ -170,9 +204,148 @@ class CoalSupplyMixin:
         # bundle proposals. The original useful production frontier is not rerun.
         plans = [p for p in plans if not (p.steps[0].action == solid.COMMAND
                                          and coal.is_network_route(p.steps[0].parameters, snapshot))]
+        state = self.memory.coal_funding
+        if state:
+            plans = [p for p in plans if "capital_investment" not in (p.materials or {})
+                     and (p.materials or {}).get(solid_investment.MARKER, {}).get("stage") != "kit"
+                     and not self._coal_job_conflict(p.steps[0])]
         extra = candidates(snapshot, self.memory.active_goal, failures=self.memory.failures)
+        if self._coal_kit_policy and not self.memory.coal_commitments:
+            try:
+                offer, self._coal_kit_evidence = coal_funding.candidate(
+                    snapshot, self.catalog, **self._coal_funding_options())
+                if offer is not None:
+                    extra.append(offer)
+            except (ValueError, KeyError, TypeError, AttributeError):
+                self._coal_kit_evidence = {"reason": "unfunded_or_locked_bundle", "native_flow_proven": False}
         plans.extend(p for p in extra if p.id not in {p.id for p in plans} and self._step_allowed(p.steps[0], snapshot))
         return plans, blocker if not plans else ""
+
+    def _coal_funding_options(self, plan=None):
+        reserved = Counter(self._solid_reservations())
+        if plan is not None:
+            reserved.subtract(self.memory.reservations.get(plan.id, {}))
+        return {"reserved": {k: v for k, v in reserved.items() if v > 0},
+                "job": getattr(self, "_job", lambda: None)(),
+                "failures": self.memory.failures, "state": self.memory.coal_funding,
+                "capital": self.memory.capital_investment,
+                "other_funding": self.memory.solid_funding, "goal": self.memory.active_goal,
+                "successor_projects": getattr(self.memory, "successor_projects", {})}
+
+    def _commit_solid(self, plan, snapshot):
+        if coal_funding.MARKER not in (plan.materials or {}):
+            if self.memory.coal_funding and ((plan.materials or {}).get("capital_investment")
+                    or (plan.materials or {}).get(solid_investment.MARKER, {}).get("stage") == "kit"):
+                raise ValueError("An existing coal funding project owns the optional investment lane")
+            return super()._commit_solid(plan, snapshot)
+        if (not self._coal_kit_policy or self.memory.pending
+                or not coal_funding.fresh_permission(plan, plan.steps[0], snapshot, self.catalog,
+                                                      **self._coal_funding_options(plan))):
+            raise ValueError("Cannot commit an unqualified coal kit")
+        state = self.memory.coal_funding
+        if state is None:
+            options = self._coal_funding_options(plan)
+            self.memory.coal_funding = coal_funding.start(
+                plan, snapshot, self.catalog, options["reserved"], options["job"])
+            self.memory.event("coal_kit_committed", key=plan.id, tick=snapshot.tick)
+        else:
+            if state["actions"] >= coal_funding.MAX_ACTIONS:
+                raise ValueError("Coal funding action budget exhausted")
+            state["actions"] += 1
+        # Base plan-commit and prepared-action saves are the authoritative barriers.
+
+    def _finalize_solid_funding(self, snapshot):
+        # The inner observer cannot release funding before coal ownership checks.
+        # _observe_solid invokes the parent hook once after those checks succeed.
+        return
+
+    def _reconcile_coal_funding(self, snapshot):
+        if self._coal_fault or self._solid_fault or self.memory.status == "uncertain":
+            return
+        state = self.memory.coal_funding
+        if state is None:
+            return
+        coal_funding.validate_state(state, snapshot.tick, self._coal_targets)
+        rows = coal.sources(snapshot)
+        if self.memory.coal_commitments:
+            if not all(coal.reconciles(saved, rows[target]) for target, saved in state["bundle"].items()):
+                raise ValueError("Coal funding cannot hand off to a different paid bundle")
+            self.memory.event("coal_kit_paid_handoff", key=state["key"], tick=snapshot.tick)
+            self.memory.coal_funding = None
+            return  # The exact whole-network commitment is saved by this observer.
+        reserved = Counter(self._solid_reservations())
+        if self.memory.pending and self.memory.active_plan:
+            # The pending action may already have consumed its own cost hold.
+            # It is not another project's still-carried reservation. The native
+            # receipt remains unresolved; only actual final-kit stock is held.
+            reserved.subtract(self.memory.reservations.get(self.memory.active_plan["id"], {}))
+        external = coal_funding.spendable_reservations(dict(+reserved), state)
+        held = coal_funding.held_stock(snapshot, self.catalog, state["kit"], external,
+                                      getattr(self, "_job", lambda: None)())
+        if any(held.get(item, 0) < n for item, n in state["held"].items()):
+            raise ValueError("An unaccounted mutation consumed a held coal-kit component")
+        state["held"] = held
+        if self.memory.pending:
+            return  # Never release or abandon an unresolved action.
+        reason = None
+        if not coal_funding.bound(state, rows):
+            reason = "kit_bundle_changed"
+        elif snapshot.tick >= state["deadline_tick"]:
+            reason = "kit_deadline"
+        elif self.memory.failures.get(state["key"], 0) >= 2:
+            reason = "kit_failure_budget"
+        elif coal_funding.build_budget_exhausted(rows, self.memory.failures):
+            reason = "kit_build_failure_budget"
+        elif state["actions"] >= coal_funding.MAX_ACTIONS and self.memory.active_plan is None:
+            if any(held.get(k, 0) < v for k, v in state["kit"].items()):
+                reason = "kit_action_budget"
+        if reason is None:
+            try:
+                if solid_funding.bill_catalog_digest(state["kit"], snapshot, self.catalog) != state["catalog_sha256"]:
+                    reason = "kit_catalog_changed"
+            except (ValueError, KeyError, TypeError, AttributeError):
+                reason = "kit_catalog_unavailable"
+        if reason is None:
+            try:
+                solid_funding._acquire_bill(
+                    state["kit"], state["key"], snapshot, self.catalog,
+                    reserved=external, job=getattr(self, "_job", lambda: None)(),
+                    failures=self.memory.failures, budget_check=coal_funding.failure_count,
+                    protect_final_stock=True)
+            except solid_funding.KitBudgetExhausted:
+                reason = "kit_acquisition_failure_budget"
+            except (ValueError, KeyError, TypeError, AttributeError):
+                pass  # Temporary stock/queue visibility is not budget exhaustion.
+        if reason:
+            old = self.memory.failures.get(state["key"], 0)
+            self.memory.failures[state["key"]] = max(2, old)
+            if old < 2:
+                self.memory.event("coal_kit_abandoned", key=state["key"], reason=reason, tick=snapshot.tick)
+            if (self.memory.active_plan or {}).get("id") != state["key"]:
+                self.memory.coal_funding = None
+
+    def _clear_plan(self):
+        super()._clear_plan()
+        state = self.memory.coal_funding
+        if (state and not self._coal_fault and not self._solid_fault
+                and self.memory.status != "uncertain" and not self.memory.pending
+                and self.memory.failures.get(state["key"], 0) >= 2):
+            self.memory.coal_funding = None
+
+    def _plan_failure_count(self, plan):
+        count = super()._plan_failure_count(plan)
+        if coal_funding.MARKER in (plan.materials or {}) and len(plan.steps) == 1:
+            count = max(count, coal_funding.failure_count(plan, self.memory.failures))
+        return count
+
+    def _investment_step_allowed(self, plan, step, snapshot):
+        if coal_funding.MARKER in (plan.materials or {}) or plan.id.startswith("coal-kit:"):
+            if (not self._coal_kit_policy or self.memory.coal_funding is None
+                    or self._plan_failure_count(plan) >= 2
+                    or not coal_funding.fresh_permission(plan, step, snapshot, self.catalog,
+                                                          **self._coal_funding_options(plan))):
+                return False
+        return super()._investment_step_allowed(plan, step, snapshot)
 
     def _verify_pending(self, snapshot):
         pending = self.memory.pending
@@ -209,7 +382,8 @@ class CoalSupplyMixin:
 
     def _record_extras(self):
         return {**super()._record_extras(), "coal_supply": True,
-                "coal_supply_evidence": deepcopy(self._coal_evidence), "coal_supply_fault": self._coal_fault}
+                "coal_supply_evidence": deepcopy(self._coal_evidence), "coal_supply_fault": self._coal_fault,
+                "coal_kit_policy": self._coal_kit_policy, "coal_kit_evidence": deepcopy(self._coal_kit_evidence)}
 
     def _model_facts(self, snapshot):
         facts = super()._model_facts(snapshot)
@@ -232,6 +406,8 @@ def coal_loop_type(base):
     @dataclass
     class CoalMemory(base.memory_type):
         coal_supply_schema: int = 1
+        coal_kit_policy: bool = False
+        coal_funding: dict | None = None
         coal_targets: list = field(default_factory=list)
         coal_epoch: dict = field(default_factory=dict)
         coal_commitments: dict = field(default_factory=dict)
@@ -244,6 +420,18 @@ def coal_loop_type(base):
             if not solid.integer(memory.coal_supply_schema, 1, 1):
                 raise ValueError("Unsupported coal checkpoint schema")
             coal.validate_targets(memory.coal_targets)
+            if type(memory.coal_kit_policy) is not bool:
+                raise ValueError("Invalid immutable coal kit policy")
+            if memory.coal_funding is not None:
+                if (not memory.coal_kit_policy or memory.capital_investment is not None
+                        or memory.solid_funding is not None
+                        or any(p.get("status") != "qualified" for p in
+                               getattr(memory, "successor_projects", {}).values())):
+                    raise ValueError("Coal funding conflicts with immutable policy or another investment")
+                coal_funding.validate_state(memory.coal_funding, memory.last_tick, memory.coal_targets)
+            active = Plan.from_dict(memory.active_plan) if memory.active_plan else None
+            if active and (active.id.startswith("coal-kit:") or coal_funding.MARKER in (active.materials or {})):
+                coal_funding.validate_active(memory.coal_funding, active, memory.last_tick, memory.active_goal)
             coal.validate_transport_intents(memory.coal_targets, memory.solid_intents)
             if not isinstance(memory.coal_epoch, dict) or not isinstance(memory.coal_commitments, dict):
                 raise ValueError("Invalid coal checkpoint binding")

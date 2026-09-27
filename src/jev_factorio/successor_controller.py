@@ -131,6 +131,7 @@ class SuccessorMixin:
         project = self.memory.successor_projects.get(source)
         if project is None:
             if (self.memory.capital_investment or self.memory.pending or getattr(self.memory, 'background_job', None)
+                    or getattr(self.memory, "coal_funding", None)
                     or any(p['status'] != 'qualified' for p in self.memory.successor_projects.values())
                     or self.memory.failures.get('successor:' + source, 0) >= 2):
                 raise ValueError('Successor project conflict or exhausted budget')
@@ -177,6 +178,7 @@ class SuccessorMixin:
     def _compile_candidates(self, snapshot):
         original, blocker = super()._compile_candidates(snapshot)
         if (self.memory.active_goal != 'rocket_launch' or self.memory.capital_investment
+                or getattr(self.memory, 'coal_funding', None)
                 or getattr(self.memory, 'background_job', None) or snapshot.factory.get('crafting_queue', 0)):
             return original, blocker
         evidence = candidate_evidence(snapshot, self.catalog, original)
