@@ -18,7 +18,7 @@ from .planning import solid_investment, solid_funding
 from .planning.demand import SupplyLedger
 from .skills import Plan
 from .research_log import ResearchLogError, RunConfiguration
-from .telemetry import phase
+from .telemetry import phase, fingerprint
 
 CHECKPOINT_FIELDS = {"solid_routes_schema", "solid_intents", "solid_epoch", "solid_commitments"}
 UNBOUND_FAULT = "Solid-route epoch unbound; native reconciliation required"
@@ -423,6 +423,18 @@ class SolidRouteMixin:
             reserved = Counter(self._solid_reservations())
             held = self.memory.reservations.get(plan.id, {})
             reserved.subtract(held)
+            if step.action == routes.COMMAND and isinstance(getattr(self, '_planning_diagnostics', None), dict):
+                try:
+                    row = routes.routes(snapshot)[step.parameters['route']]
+                    admission = {
+                        'plan_id': plan.id, 'step_sha256': fingerprint(asdict(step)),
+                        'observed_tick': snapshot.tick, 'funding': deepcopy(state),
+                        'acquisition': deepcopy(solid_funding.acquisition_evidence(
+                            row, snapshot, self.catalog, {k: v for k, v in reserved.items() if v > 0})),
+                    }
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    admission = None  # Missing diagnostics never change action authority.
+                self._planning_diagnostics['solid_build_admission'] = admission
             if not solid_investment.fresh_permission(
                     plan, step, snapshot, self.catalog, outcomes=self.memory.attempt_outcomes,
                     reserved={key: value for key, value in reserved.items() if value > 0},

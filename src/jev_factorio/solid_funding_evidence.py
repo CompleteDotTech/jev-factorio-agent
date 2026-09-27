@@ -91,39 +91,33 @@ def _kit_step(value: dict) -> Step:
     return step
 
 
-def _acquisition_matches(commit: dict, record: dict, proof: dict, budgets: dict,
-                         reservations: dict, outcomes: list, bindings: dict) -> bool:
+def _catalog_from_evidence(value, binding, record, tick):
     from .planning.catalog import Catalog
-    from .planning import solid_investment
-    from . import solid_routes
-    if record.get('capital_investment') is not None:
-        return False
-    value = commit.get('acquisition')
     if not isinstance(value, dict) or set(value) != {'catalog', 'reserved', 'technologies', 'recipes', 'stack_sizes'}:
-        return False
+        return None
     data = value['catalog']
     if (not isinstance(data, dict) or set(data) != {'recipes', 'hand_categories', 'version'}
             or len(data['recipes']) > solid_funding.MAX_EXPANSIONS):
-        return False
-    binding = bindings.get(proof['key'])
+        return None
     if (not isinstance(binding, dict) or binding.get('catalog_sha256') != solid_funding.digest(data)
-            or binding['observed_tick'] > proof['started_tick']
+            or binding['observed_tick'] > tick
             or binding.get('version') != data['version']
             or binding.get('acquisition_sha256') != solid_funding.digest({k: v for k, v in value.items() if k != 'reserved'})):
-        return False
+        return None
     runtime = record['state'].get('factory', {}).get('acceptance_runtime', {})
     if runtime and runtime.get('mods', {}).get('base') != data['version']:
-        return False
+        return None
     if set(value['recipes']) & set(data['recipes']) or len(value['recipes']) + len(data['recipes']) > 512:
-        return False
-    catalog = Catalog.from_dict({**data, 'recipes': {**data['recipes'], **value['recipes']},
+        return None
+    return Catalog.from_dict({**data, 'recipes': {**data['recipes'], **value['recipes']},
         'technologies': value['technologies'], 'machines': {}, 'stack_sizes': value['stack_sizes']})
-    snapshot = GameSnapshot(**record['state'])
-    row = snapshot.factory['solid_routes']['routes'][proof['route']]
-    if solid_funding.catalog_digest(row, snapshot, catalog) != proof['catalog_sha256']:
-        return False
+
+
+def _observed_reservations(snapshot, reservations, exclude=None):
+    from . import solid_routes
     reserved = Counter()
-    for held in reservations.values(): reserved.update(held)
+    for owner, held in reservations.items():
+        if owner != exclude: reserved.update(held)
     for route in solid_routes.routes(snapshot).values():
         if route.get('parts'): reserved.update(solid_routes.remaining(route))
     if 'coal_supply' in snapshot.factory:
@@ -131,9 +125,27 @@ def _acquisition_matches(commit: dict, record: dict, proof: dict, budgets: dict,
         sources = coal.sources(snapshot)
         if snapshot.factory['coal_supply']['committed']:
             if not all(coal.current(source, snapshot) for source in sources.values()):
-                return False
+                raise ValueError('Coal commitment is not current')
             paid_routes = {key: route for key, route in solid_routes.routes(snapshot).items() if route.get('parts')}
             reserved.update(coal.reserved_components(sources, paid_routes))
+    return dict(reserved)
+
+
+def _acquisition_matches(commit: dict, record: dict, proof: dict, budgets: dict,
+                         reservations: dict, outcomes: list, bindings: dict) -> bool:
+    from .planning import solid_investment
+    from . import solid_routes
+    if record.get('capital_investment') is not None:
+        return False
+    value = commit.get('acquisition')
+    catalog = _catalog_from_evidence(value, bindings.get(proof['key']), record, proof['started_tick'])
+    if catalog is None:
+        return False
+    snapshot = GameSnapshot(**record['state'])
+    row = snapshot.factory['solid_routes']['routes'][proof['route']]
+    if solid_funding.catalog_digest(row, snapshot, catalog) != proof['catalog_sha256']:
+        return False
+    reserved = _observed_reservations(snapshot, reservations)
     if not _same(dict(reserved), value['reserved']):
         return False
     if (snapshot.factory.get('crafting_queue', 0)
@@ -147,6 +159,39 @@ def _acquisition_matches(commit: dict, record: dict, proof: dict, budgets: dict,
     expected, _ = solid_investment._kit_offer(row, snapshot, catalog, offer,
                                              reserved=dict(reserved), failures=budgets)
     return expected is not None and _same(asdict(expected.steps[0]), commit['step'])
+
+
+def _solid_build_admitted(record, plan, step, reservations, outcomes, bindings, funding, budgets, job):
+    from .planning import solid_investment
+    from . import coal_supply as coal
+    snapshot = GameSnapshot(**record['state'])
+    marker = (plan.materials or {}).get(solid_investment.MARKER)
+    if step.action != 'factory_solid_build':
+        return marker is None  # Ordinary work cannot impersonate a kit commitment.
+    if coal.is_network_route(step.parameters, snapshot) and marker is None:
+        return True
+    value = record.get('planning_diagnostics', {}).get('solid_build_admission')
+    if (not isinstance(value, dict) or set(value) != {'plan_id', 'step_sha256', 'observed_tick', 'funding', 'acquisition'}
+            or value['plan_id'] != plan.id or value['step_sha256'] != fingerprint(asdict(step))
+            or not _same(value['observed_tick'], snapshot.tick)):
+        return False
+    row = snapshot.factory['solid_routes']['routes'].get(step.parameters['route'])
+    if row is None:
+        return False
+    key = solid_funding.project_key(row)
+    catalog = _catalog_from_evidence(value['acquisition'], bindings.get(key), record, snapshot.tick)
+    if catalog is None:
+        return False
+    reserved = _observed_reservations(snapshot, reservations, exclude=plan.id)
+    expected_funding = funding
+    if funding is not None and _native_bound(funding, record, paid=True, observation='state'):
+        expected_funding = None  # The observer hands off before dispatch.
+    if not _same(value['acquisition']['reserved'], reserved) or not _same(value['funding'], expected_funding):
+        return False
+    from .craft_jobs import CraftJob
+    return solid_investment.fresh_permission(plan, step, snapshot, catalog, outcomes=outcomes,
+        reserved=reserved, job=CraftJob.from_dict(job) if job is not None else None,
+        funding=expected_funding, failures=budgets)
 
 
 def _project_budget_open(proof: dict, budgets: dict, step_value: dict) -> bool:
@@ -1076,8 +1121,14 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 issues.add('solid_funding_initial_proposal_not_reconciled')
             if not _same(working, current):
                 issues.add('solid_funding_record_history_mismatch')
-            payment_proofs = {_encoded(_identity(value)): value for value in (prior, working, current, committed_proof)
+            payment_proofs = {value['route']: value for value in (prior, working, current, committed_proof)
                               if value is not None}
+            if policy:
+                for observed in (previous_routes, record['state']['factory'].get('solid_routes', {}).get('routes', {}),
+                                 record['after_state']['factory'].get('solid_routes', {}).get('routes', {})):
+                    for route_key, route_row in observed.items():
+                        if route_row.get('parts'):
+                            payment_proofs.setdefault(route_key, {'route': route_key, 'key': solid_funding.project_key(route_row), 'layout': route_row['layout']})
             for payment_proof in payment_proofs.values():
                 route = payment_proof['route']
                 before_routes = record.get('state', {}).get('factory', {}).get('solid_routes', {}).get('routes', {})
@@ -1183,6 +1234,13 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 candidate_index = (plan.next_step(GameSnapshot(**record['state']), ordinary_index)
                                    if previous_pending is None else ordinary_index)
                 step = plan.steps[candidate_index] if candidate_index < len(plan.steps) else None
+                attempts_now = [record.get('attempt'), *record.get('attempt_outcomes', [])]
+                if (previous_pending is None and step is not None and any(isinstance(value, dict)
+                        and value.get('id') not in seen_attempts and value.get('plan_id') == plan.id
+                        for value in attempts_now)
+                        and not _solid_build_admitted(record, plan, step, reservations, outcomes, bindings,
+                                                       prior, previous_budgets, dispatch_job)):
+                    issues.add('solid_funding_build_admission_unproven')
                 verified = [value for value in completed if value.get('plan_id') == plan.id
                     and step is not None and value.get('step_index') == candidate_index and value.get('action') == step.action
                     and value.get('step_sha256') == fingerprint(asdict(step))
