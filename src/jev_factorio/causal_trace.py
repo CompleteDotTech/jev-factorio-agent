@@ -95,6 +95,28 @@ class CausalTrace:
         self._tick = None
         self.emit("step_started", {})
 
+    def _record_metrics(self, event_type: str, began: int, cpu_began: int, *,
+                        elapsed: int | None = None, failed: bool = False,
+                        preserve_error: bool = False) -> None:
+        """A failed diagnostic cannot authorize reuse or replace a primary error.
+
+        The counter may be partially updated when interrupted. Do not retry it;
+        freeze the trace exactly as for an uncertain sink/capture boundary.
+        """
+        if self.metrics is None:
+            return
+        try:
+            self.metrics.call(event_type,
+                              time.perf_counter_ns() - began if elapsed is None else elapsed,
+                              failed=failed, cpu_ns=time.process_time_ns() - cpu_began)
+        except BaseException as error:
+            self._failed = True
+            if preserve_error:
+                return
+            if isinstance(error, Exception):
+                raise ResearchLogError("Causal metrics recording failed") from None
+            raise
+
     @measured("trace_emit")
     def emit(self, event_type: str, payload: dict) -> None:
         if not self.enabled:
@@ -126,9 +148,8 @@ class CausalTrace:
             self._failed = True
             raise
         finally:
-            if self.metrics is not None:
-                self.metrics.call('trace_emit', time.perf_counter_ns() - began, failed=failed,
-                                  cpu_ns=time.process_time_ns() - cpu_began)
+            self._record_metrics('trace_emit', began, cpu_began,
+                                 failed=failed, preserve_error=failed)
 
     def error(self, event_type: str, error: BaseException, **details) -> None:
         # Preserve the primary exception if the attempt to log it also fails.
@@ -145,25 +166,32 @@ class CausalTrace:
     def call(self, event_type: str, operation: Callable[[], T], *,
              details: dict | None = None,
              result: Callable[[T], dict] | None = None) -> T:
+        if self._failed:
+            raise ResearchLogError("Causal trace has failed")
         if not self.enabled and self.metrics is None:
             with span(event_type):
                 return operation()
-        if self._failed:
-            raise ResearchLogError("Causal trace has failed")
         start, cpu_start = time.perf_counter_ns(), time.process_time_ns()
         try:
             with span(event_type):
                 value = operation()
         except BaseException as error:
-            elapsed = time.perf_counter_ns() - start
-            if self.metrics is not None:
-                self.metrics.call(event_type, elapsed, failed=True,
-                                  cpu_ns=time.process_time_ns() - cpu_start)
-            self.error(event_type, error, duration_ns=elapsed, **(details or {}))
+            try:
+                elapsed = time.perf_counter_ns() - start
+                self._record_metrics(event_type, start, cpu_start,
+                                     elapsed=elapsed, failed=True)
+                self.error(event_type, error, duration_ns=elapsed, **(details or {}))
+            except BaseException:
+                # Metric updates and argument assembly are secondary recording
+                # work too. Preserve the actual operation failure unchanged.
+                self._failed = True
             raise
-        elapsed = time.perf_counter_ns() - start
-        if self.metrics is not None:
-            self.metrics.call(event_type, elapsed, cpu_ns=time.process_time_ns() - cpu_start)
+        try:
+            elapsed = time.perf_counter_ns() - start
+            self._record_metrics(event_type, start, cpu_start, elapsed=elapsed)
+        except BaseException:
+            self._failed = True
+            raise
         if not self.enabled:
             return value
         capture_start, capture_cpu = time.perf_counter_ns(), time.process_time_ns()
@@ -183,9 +211,8 @@ class CausalTrace:
             self._failed = True
             raise
         finally:
-            if self.metrics is not None:
-                self.metrics.call('trace_capture', time.perf_counter_ns() - capture_start,
-                                  failed=capture_failed, cpu_ns=time.process_time_ns() - capture_cpu)
+            self._record_metrics('trace_capture', capture_start, capture_cpu,
+                                 failed=capture_failed, preserve_error=capture_failed)
         self.emit(event_type, event)
         return value
 

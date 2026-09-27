@@ -27,6 +27,22 @@ is poisoned even if error classification/capture fails before reaching the sink.
 the original operation failure; if its error event is successfully recorded, that alone
 does not poison the recorder. Existing controller reconciliation rules govern its effects.
 
+## Metrics failure continuation
+
+The result/sink correction also needs to cover the associated performance-counter
+updates. An interruption or exception in counters can occur after an operation or
+sink append has already completed. Such a failure now poisons the trace before
+unwinding; it cannot become a recoverable backend error or permit a second action.
+Ordinary counter exceptions become a content-free `ResearchLogError`; interruptions
+retain their exact exception instance. This applies to metrics-only calls too.
+
+If an operation, result capture, or sink write already failed, a secondary metric
+failure cannot replace that primary error or its storage-pressure classification.
+Likewise, malformed diagnostic details cannot mask the original operation failure.
+Partially updated counters are neither retried nor represented as complete samples.
+The successful clock/count contract is unchanged. This is a tested callback-boundary
+contract, not signal masking or an atomic guarantee at every Python instruction.
+
 ## Measurement and durability
 
 Operation wall/process-CPU timing is unchanged and excludes capture and sink work.
