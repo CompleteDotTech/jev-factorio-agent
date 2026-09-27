@@ -33,6 +33,48 @@ identity, power, role, item and corridor checks. There is no new global scan,
 resource observation, actor mutation, remote call, or model evaluation during
 this calculation. Stockpiled plates alone do not establish science progress.
 
+## Count queued production and destination inputs once
+
+The research material bill already credits complete batches backed by current
+machine inputs as forecast products. Those inputs are pledged to the credited
+batches; they cannot also satisfy the additional recipe-input bill. The route
+valuation now deducts only the **uncommitted input residue**, computed with the
+same queued-batch arithmetic used by `SupplyLedger.capture`. Completed output,
+carried/reserved stock and the separate in-flight batch retain their existing
+ledger semantics. No new stock category is made spendable or persisted.
+
+For the fixture's one-gear/one-copper red-science recipe and a remaining
+120-pack horizon with no carried gears or finished packs:
+
+| Gears / copper in destination | Old incoming gear deficit | Correct incoming gear deficit |
+| --- | ---: | ---: |
+| 0 / 120 | 120 | 120 |
+| 40 / 40 | 40 | 80 |
+| 60 / 60 | 0 | 60 |
+| 60 / 40 | 20 | 60 |
+| 120 / 40 | 0 | 0 |
+
+The final row matters: removing all destination-stock credit would also be
+wrong. Its 40 complete batches are already forecast, but the remaining 80 gears
+are still available to fund the additional 80 batches once copper arrives.
+Transforming input pairs into completed science must not change the remaining
+incoming-gear requirement. Fresh preconditions recompute this accounting; a
+newly supplied complete horizon still rejects a new construction payment.
+
+Valuation diagnostics expose `destination_input_units`, `queued_input_units`,
+`uncommitted_input_units`, and the basis
+`net_recipe_bill_less_uncommitted_input`. They are current-observation estimates,
+not proof that machines ran, that an ingredient traveled on a belt, or that
+science was delivered. Native route/recipe qualification remains unchanged.
+The conservation tests exercise additional recipe coefficients as arithmetic
+fixtures only; they do not expand the supported native transport contract.
+
+This correction is deliberately limited to avoiding a duplicate credit at the
+valued destination. It does not make the bounded recipe bill a global factory
+allocation or throughput optimizer. In particular, it does not route residual
+input from a different machine, qualify unsupported sources, acquire a missing
+kit, or construct an unconfigured topology.
+
 ## Declared economics, not action permission
 
 Manual handling volume is bounded by current source supply and required input.
@@ -136,7 +178,8 @@ native paid flow and crash qualification are still required.
 
 ```sh
 PYTHONPATH=src python -m pytest tests/test_solid_investment.py \
-  tests/test_solid_partial_service.py tests/test_solid_route_integration.py -q
+  tests/test_solid_partial_service.py tests/test_solid_route_integration.py \
+  tests/test_solid_demand_accounting.py tests/test_demand_service.py -q
 PYTHONPATH=src python -m pytest tests/test_solid*.py -q
 ```
 

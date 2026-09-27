@@ -14,7 +14,7 @@ from statistics import median
 from .. import solid_routes as contract
 from ..skills import Plan
 from ..telemetry import validate_attempt
-from .demand import SupplyLedger
+from .demand import SupplyLedger, uncommitted_input
 from .solid_routes import candidates as build_candidates
 from . import solid_funding
 from .scheduling import SERVICE_TICKS, TRAVEL_TICKS_PER_TILE
@@ -158,7 +158,11 @@ def offer_value(row, snapshot, catalog, demand, outcomes=()) -> dict:
         wanted = demand.get(target.get("recipe", ""), {}).get(row["item"], 0)
         if not finite(stock) or not finite(wanted):
             return {"eligible": False, "reason": "invalid_destination_stock"}
-        missing = max(0, wanted - math.floor(stock))
+        # The recipe bill is net of input-backed queued output. Subtracting the
+        # whole observed input again counts those same ingredients twice and can
+        # erase a real downstream shortage. Unpaired residual input still counts.
+        residue = uncommitted_input(target, catalog, row["item"])
+        missing = max(0, wanted - math.floor(residue))
         if not missing:
             return {"eligible": False, "reason": "no_current_recipe_deficit"}
         available = _owned_supply(row, snapshot)
@@ -191,6 +195,9 @@ def offer_value(row, snapshot, catalog, demand, outcomes=()) -> dict:
         return {"eligible": eligible, "reason": "bounded_payback" if eligible else "manual_service_cheaper",
                 "demand_units": math.ceil(missing), "source_units": available, "valued_units": math.ceil(units),
                 "horizon_packs_cap": HORIZON_PACKS, "manual_trips_estimate": trips,
+                "destination_input_units": stock, "queued_input_units": stock - residue,
+                "uncommitted_input_units": residue,
+                "demand_basis": "net_recipe_bill_less_uncommitted_input",
                 "service_game_ticks": trip, "service_basis": basis, "service_samples": counts,
                 "build_game_ticks_estimate": build, "manual_game_ticks_estimate": manual,
                 "cost_margin": 1.25, "remaining_kit": kit,

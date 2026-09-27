@@ -12,6 +12,46 @@ from dataclasses import dataclass, field
 from .materials import quantities
 
 
+@dataclass(frozen=True)
+class _QueuedProduction:
+    """One supported recipe's input-backed forecast, before identity deduplication."""
+    product: str
+    output: float
+    batches: int
+    ingredients: tuple[tuple[str, float], ...]
+
+
+def _queued_production(machine: dict, catalog) -> _QueuedProduction | None:
+    """Shared arithmetic for forecast products and the inputs already funding them."""
+    recipe = catalog.recipes.get(machine.get('recipe', ''), {})
+    ingredients, products = recipe.get('ingredients', []), recipe.get('products', [])
+    if (not ingredients or len(products) != 1 or products[0].get('type') != 'item'
+            or products[0].get('probability', 1) != 1
+            or any(i.get('type') != 'item' or i.get('amount', 0) <= 0 for i in ingredients)):
+        return None
+    product, output = products[0]['name'], products[0]['amount']
+    quantities({product: output})
+    queued = min(math.floor(machine.get('input', {}).get(i['name'], 0) / i['amount'])
+                 for i in ingredients)
+    return _QueuedProduction(product, output, queued,
+                             tuple((i['name'], i['amount']) for i in ingredients))
+
+
+def uncommitted_input(machine: dict, catalog, item: str) -> float:
+    """Input left AFTER the complete queued batches credited by SupplyLedger.
+
+    A net material bill has already consumed the corresponding forecast products.
+    Only this residue can reduce its additional ingredient demand. An in-flight
+    batch consumes inputs before the observed input inventory and is therefore
+    not subtracted again. This is a forecast credit, never spendable actor stock.
+    """
+    stock = quantities(machine.get('input', {})).get(item, 0)
+    queued = _queued_production(machine, catalog)
+    pledged = (queued.batches * dict(queued.ingredients).get(item, 0)
+               if queued is not None else 0)
+    return max(0, stock - pledged)
+
+
 @dataclass
 class SupplyLedger:
     carried: dict[str, float] = field(default_factory=dict)
@@ -55,19 +95,12 @@ class SupplyLedger:
                 credit('collectible', identity, item, count)
             for item, count in machine.get('input', {}).items():
                 credit('machine_inputs', identity, item, count)
-            recipe = catalog.recipes.get(machine.get('recipe', ''), {})
-            ingredients, products = recipe.get('ingredients', []), recipe.get('products', [])
-            if (not ingredients or len(products) != 1 or products[0].get('type') != 'item'
-                    or products[0].get('probability', 1) != 1
-                    or any(i.get('type') != 'item' or i.get('amount', 0) <= 0 for i in ingredients)):
+            queued = _queued_production(machine, catalog)
+            if queued is None:
                 continue
-            product, output = products[0]['name'], products[0]['amount']
-            quantities({product: output})
-            queued = min(math.floor(machine.get('input', {}).get(i['name'], 0) / i['amount'])
-                         for i in ingredients)
-            credit('queued_output', identity, product, queued * output)
+            credit('queued_output', identity, queued.product, queued.batches * queued.output)
             if machine.get('crafting') is True:
-                credit('in_flight_output', identity, product, output)
+                credit('in_flight_output', identity, queued.product, queued.output)
         for (category, _, item), count in buckets.items():
             target = getattr(ledger, category)
             target[item] = target.get(item, 0) + count
