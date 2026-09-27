@@ -1247,6 +1247,14 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     and _attempt_endpoint(value, asdict(step), record['state']) and step.satisfied(snapshot)
                     and (previous_pending is not None or _dispatch_admitted(step, record, plan.id, reservations, dispatch_job, plan))]
                 if len(verified) == 1:
+                    verification_events = [value for value in fresh
+                        if value.get('kind') == 'step_verified' and value.get('plan') == plan.id]
+                    if (len(verification_events) != 1
+                            or set(verification_events[0]) != {'kind', 'plan', 'action', 'tick'}
+                            or verification_events[0]['action'] != step.action
+                            or not _tick(verification_events[0]['tick'])
+                            or verification_events[0]['tick'] != verified[0]['finished_tick']):
+                        issues.add('solid_funding_ordinary_verification_unproven')
                     proven_outcomes.extend(verified)
                     ordinary_index = candidate_index + 1
                     reservations.pop(plan.id, None)
