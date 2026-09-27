@@ -86,6 +86,14 @@ def _names(values, maximum=32):
             and len(set(values)) == len(values))
 
 
+def _valid_mods(value):
+    return (isinstance(value, dict) and 1 <= len(value) <= 1024
+            and all(type(name) is str and type(version) is str
+                    and 1 <= len(name) <= 128 and 1 <= len(version) <= 128
+                    and all(32 <= ord(char) <= 126 for char in name + version)
+                    for name, version in value.items()))
+
+
 def validate_trial(trial: dict) -> None:
     if not isinstance(trial, dict) or set(trial) != TRIAL_KEYS or trial['schema'] != TRIAL_SCHEMA:
         raise ValueError('Invalid integration trial schema')
@@ -199,11 +207,16 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
     reject(not isinstance(session, str) or not session or final.get('session_id') != session, 'checkpoint_session_mismatch')
     reject(any(final.get(k) for k in ('pending', 'attempt', 'active_plan', 'reservations',
                                      'background_job', 'background_attempt')), 'unresolved_final_work')
+    reject(initial.get('status') != 'running', 'initial_checkpoint_not_running')
     reject(final.get('status') not in {'running', 'completed'}, 'terminal_failure')
+    extensions = {'background_work': 'background_schema', 'furnace_input_belts': 'input_routes_schema',
+                  'mining_outposts': 'outposts_schema', 'ore_side_successors': 'successor_schema'}
     for cp in (initial, final):
         reject(cp.get('solid_intents') != trial['solid_intents']
                or cp.get('solid_science_policy', False) is not trial['configuration']['solid_science_policy'],
                'checkpoint_treatment_mismatch')
+        reject(any((field in cp) is not trial['configuration'][flag] for flag, field in extensions.items()),
+               'checkpoint_composition_mismatch')
     seen, previous_identity, runtime_identity = set(), None, None
     evidence_hash = hashlib.sha256()
     previous_tick = previous_time = None
@@ -257,7 +270,8 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                or record.get('campaign_treatment') != trial['campaign_treatment'], 'configuration_mismatch')
         reject(record.get('requested_model') != trial['requested_model'], 'requested_model_mismatch')
         reject(type(record.get('model_call')) is not bool, 'invalid_model_call_flag')
-        reject(record.get('status') not in {'running', 'completed'} or record.get('solid_route_fault') is True,
+        reject(type(record.get('status')) is not str or record.get('status') not in {'running', 'completed'}
+               or record.get('solid_route_fault') is not False,
                'controller_or_route_failure')
         reject(record.get('policy') not in {'hybrid', 'jev'}, 'actual_jev_policy_not_demonstrated')
         if index and record.get('model_call') is True:
@@ -305,6 +319,7 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                 reject(bound['session_id'] != session or any(not _integer(bound[k], 1) for k in (
                     'actor_unit', 'player_index', 'surface_index', 'force_index'))
                     or not isinstance(bound['mods'], dict) or not bound['mods'], 'invalid_native_epoch')
+                reject(not _valid_mods(bound['mods']), 'invalid_native_mods')
                 reject(runtime_identity is not None and bound != runtime_identity, 'native_epoch_drift')
                 runtime_identity = bound
                 epoch = {'actor_index': bound['player_index'], 'surface_index': bound['surface_index'], 'force_index': bound['force_index']}
@@ -467,6 +482,7 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
         prior = record.get('previous_iteration_timing')
         if prior is not None:
             prior = validate_timing(prior)
+            reject(prior['status'] != 'returned', 'failed_iteration_timing')
             number = prior['iteration_index']
             reject(last_timing_index is not None and number <= last_timing_index, 'duplicate_or_regressed_iteration_timing')
             reject(last_timing_index is not None and number != last_timing_index + 1, 'complete_iteration_timing_coverage_missing')
@@ -513,7 +529,7 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
             outcome_gaps.add(code)
     outcome(longest_stall > trial['max_no_science_progress_seconds'], 'sustained_science_progress_missing')
     outcome(baseline_goal_complete or not goal_completed, 'new_research_milestone_not_completed')
-    outcome(sum(deliveries.values()) <= 0 or any(consumptions[p] <= 0 for p in trial['science_packs']),
+    outcome(any(deliveries[p] <= 0 or consumptions[p] <= 0 for p in trial['science_packs']),
             'science_delivery_or_consumption_missing')
     reject(not model_calls or len(resolved_models) != 1, 'single_actual_jev_model_not_demonstrated')
     reject(final.get('last_tick') != last_tick, 'final_checkpoint_window_mismatch')
@@ -535,7 +551,13 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
         'evidence_sha256': evidence_hash.hexdigest(),
         'invocation_sha256': sha256(canonical(_identity(rows[0]))),
         'runtime_mods_sha256': sha256(canonical(runtime_identity['mods'])) if runtime_identity is not None
-                               and isinstance(runtime_identity['mods'], dict) else None,
+                               and _valid_mods(runtime_identity['mods']) else None,
+        'checkpoint_sha256': {'initial': sha256(canonical(initial)), 'final': sha256(canonical(final))},
+        'input_binding_sha256': sha256(canonical({
+            'gameplay': evidence_hash.hexdigest(), 'trial': sha256(canonical(trial)),
+            'initial_checkpoint': sha256(canonical(initial)),
+            'final_checkpoint': sha256(canonical(final)),
+        })),
         'source_commit': trial['expected_commit'], 'source_sha256': trial['expected_source_sha256'],
         'working_tree_cleanliness': 'explicitly_reported_clean' if all(
             row.get('code_revision', {}).get('dirty') is False for row in rows) else 'not_reported',
@@ -592,7 +614,8 @@ def compare(baseline: dict, treatment: dict, baseline_trial: dict, treatment_tri
         validate_trial(trial)
         if (not isinstance(value, dict) or value.get('schema') != SCHEMA
                 or value.get('trial_sha256') != sha256(canonical(trial))
-                or not _digest(value.get('evidence_sha256')) or not _digest(value.get('invocation_sha256'))):
+                or not _digest(value.get('evidence_sha256')) or not _digest(value.get('invocation_sha256'))
+                or not _digest(value.get('input_binding_sha256'))):
             raise ValueError('Report is not bound to the supplied trial and capture')
     issues = set()
     axis = baseline_trial['comparison_axis']
@@ -612,6 +635,14 @@ def compare(baseline: dict, treatment: dict, baseline_trial: dict, treatment_tri
     if (not _digest(baseline.get('runtime_mods_sha256'))
             or baseline.get('runtime_mods_sha256') != treatment.get('runtime_mods_sha256')):
         issues.add('uncontrolled_runtime_mods')
+    windows = [value.get('window', {}) for value in (baseline, treatment)]
+    if (not all(isinstance(v, dict) and _number(v.get('wall_seconds'))
+                and _integer(v.get('native_ticks')) for v in windows)
+            or abs(windows[0]['wall_seconds'] - windows[1]['wall_seconds'])
+                > baseline_trial['max_observation_gap_seconds']
+            or abs(windows[0]['native_ticks'] - windows[1]['native_ticks'])
+                > baseline_trial['max_observation_gap_seconds'] * 60):
+        issues.add('unmatched_measurement_windows')
     if baseline.get('integrity_checks_passed') is not True or treatment.get('measurement_checks_passed') is not True:
         issues.add('ineligible_pair_arm')
     rates = [r.get('science', {}).get('consumed_per_wall_minute') for r in (baseline, treatment)]
@@ -634,6 +665,8 @@ def compare(baseline: dict, treatment: dict, baseline_trial: dict, treatment_tri
             'evidence_kind': baseline_trial['evidence_kind'],
             'baseline_evidence_sha256': baseline['evidence_sha256'],
             'treatment_evidence_sha256': treatment['evidence_sha256'],
+            'baseline_input_binding_sha256': baseline['input_binding_sha256'],
+            'treatment_input_binding_sha256': treatment['input_binding_sha256'],
             'baseline_science_per_wall_minute': rates[0], 'treatment_science_per_wall_minute': rates[1],
             'science_rate_ratio': rate_ratio, 'iteration_p95_ratio': latency_ratio,
             'causal_improvement_proven': False, 'native_acceptance': 'not_accepted',

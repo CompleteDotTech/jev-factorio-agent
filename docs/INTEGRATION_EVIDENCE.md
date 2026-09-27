@@ -134,6 +134,10 @@ before-state or an old route counter. The first record's previous work, existing
 stock, receipts and cumulative route flow are excluded from new output. Require at
 least the declared wall duration and native tick duration at normal speed, bounded
 record gaps, stable actor/session/surface/force/mod identities, and monotone ticks.
+Observed mod names and versions must be bounded printable strings; a hash of
+malformed mod metadata is not an identity proof. The initial checkpoint must be
+running, and its background, input, outpost and successor extensions must agree
+with the declared checkpoint-backed configuration flags.
 
 All before/after boundaries are checked, not just first/last observations. Paid
 prefixes, native component identities and durable receipt IDs may not disappear or
@@ -142,8 +146,9 @@ match its paid receipt. Final checkpoints must contain the observed commitments
 and failure history, with no unresolved action, attempt, reservation or background
 work. A valid final checkpoint alone cannot erase a mid-window fault or reset.
 
-Science output uses new, tick-bound receipts for the same owned lab, consumption
-deltas for every declared pack, and a newly completed declared milestone. Force
+Science output uses new, tick-bound receipts for every declared pack at the same
+owned lab, consumption deltas for every declared pack, and a newly completed
+declared milestone. Force
 consumption is only used while exactly one owned lab is observed. Sustained useful
 progress requires consumption alongside advancing research within the predeclared
 stall limit. Plate accumulation and a last-minute science burst do not suffice.
@@ -155,13 +160,16 @@ measurements require new route flow plus increasing output at an allowlisted
 recipe. Old counters, an alias of one consumer, a stale route, changed flow epoch,
 rewritten receipt, replacement entity or lost paid prefix cannot establish these
 measurements. These checks do not replace isolated native recovery experiments.
+The target's `products_finished` counter may not reset at either observation
+boundary while claiming downstream production.
 
 ## Timing and matched comparison
 
 Completed-iteration timing is published one record late. Prior cycles attached to
 the first two records are validated but excluded when their scope crosses the
 first after-state boundary. The final unpublished cycle is not inferred. All later
-records require consecutive, complete timing samples. Wall and process CPU,
+records require consecutive, complete returned timing samples; failed iterations
+are an integrity issue. Wall and process CPU,
 exclusive phase counts/costs, logical native call/byte/failure counts, intentional
 sleep, and other inter-iteration gap costs remain separate. Nested inclusive
 phases are never added to the iteration total. Missing phases remain explicitly
@@ -195,11 +203,15 @@ Arms must have different invocation and capture hashes, but the same declared
 experiment, workload/save, configuration, intent set, model, outcome definitions,
 windows and regression limits. The observed native mod sets must also have the same
 sanitized `runtime_mods_sha256` binding across arms. Algorithm comparisons hold
-capacity profile fixed;
-capacity comparisons hold source commit and fingerprint fixed. This narrow schema
+capacity profile fixed; capacity comparisons hold source commit and fingerprint
+fixed. Actual wall and native tick windows must match within the predeclared
+maximum observation gap. This narrow schema
 does not compare a legacy no-solid controller with a solid-enabled controller or
 permit arbitrary feature-flag changes. `unmatched` production trends are not
 accepted as controlled pairs.
+The comparison carries an aggregate binding for gameplay, trial and both composed
+checkpoints in each arm; raw file-byte hashes remain available in file-based arm
+reports. These hashes identify inputs but do not authenticate their origin.
 
 A stalled baseline is valid data if its integrity checks pass: it is not discarded
 for failing treatment outcome goals. A zero baseline science rate produces an

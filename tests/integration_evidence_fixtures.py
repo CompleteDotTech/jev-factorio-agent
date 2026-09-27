@@ -133,7 +133,7 @@ def evidence():
             acceptance_configuration=deepcopy(config), recorded_at_utc=(start + timedelta(minutes=i)).isoformat(),
             tick=state['tick'], state=deepcopy(rows[-1]['after_state']) if rows else deepcopy(state),
             after_state=deepcopy(state), status='running', pending=None, attempt=None, phases=[],
-            action='observe', verified=True, failure_budgets={},
+            action='observe', verified=True, solid_route_fault=False, failure_budgets={},
             **({'previous_iteration_timing': timing(i)} if i else {})))
         # The preceding after-state can share the tick with this before-state.
         # Its flow evidence stays bound to its own snapshot, not this later tick.

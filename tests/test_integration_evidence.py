@@ -28,7 +28,7 @@ def test_reconciled_fixture_is_still_not_native_acceptance():
     assert 'private-fixture' not in json.dumps(value)
 
 
-@pytest.mark.parametrize('status', ['failed', None, 'unexpected'])
+@pytest.mark.parametrize('status', ['failed', None, 'unexpected', [], {}])
 def test_unrecognized_controller_status_cannot_pass(status):
     args = evidence()
     args[0][4]['status'] = status
@@ -225,6 +225,94 @@ def test_pair_rejects_different_observed_mod_sets():
     result = report.compare(baseline, treatment, args[0][1], args[1][1])
     assert 'uncontrolled_runtime_mods' in result['issues']
     assert not result['paired_measurement_checks_passed']
+
+
+@pytest.mark.parametrize('status', ['completed', 'blocked', 'uncertain'])
+def test_initial_checkpoint_must_be_running(status):
+    args = evidence()
+    args[2]['status'] = status
+    value = report.analyze_rows(*args)
+    assert 'initial_checkpoint_not_running' in value['issues']
+
+
+def test_checkpoint_extensions_must_match_declared_composition():
+    args = evidence()
+    for checkpoint in args[2:]:
+        checkpoint.update(background_schema=2, background_job=None, background_attempt=None)
+    value = report.analyze_rows(*args)
+    assert 'checkpoint_composition_mismatch' in value['issues']
+
+
+def test_valid_successor_composed_checkpoint_can_be_analyzed():
+    args = evidence()
+    for checkpoint in args[2:]:
+        checkpoint.update(background_schema=2, background_job=None, background_attempt=None,
+                          input_routes_schema=1, input_commitments={}, successor_schema=1,
+                          successor_projects={}, successor_receipts={})
+    for flag in ('background_work', 'furnace_input_belts', 'ore_side_successors'):
+        args[1]['configuration'][flag] = True
+    for record in args[0]:
+        record['acceptance_configuration'] = deepcopy(args[1]['configuration'])
+    value = report.analyze_rows(*args)
+    assert value['measurement_checks_passed'], value['issues']
+
+
+@pytest.mark.parametrize('mods', [{'base': None}, {'base': True}, {'base': {'nested': 'value'}}])
+def test_malformed_observed_mods_cannot_be_hashed_as_valid(mods):
+    args = evidence()
+    for record in args[0]:
+        for boundary in ('state', 'after_state'):
+            record[boundary]['factory']['acceptance_runtime']['mods'] = deepcopy(mods)
+    value = report.analyze_rows(*args)
+    assert 'invalid_native_mods' in value['issues']
+    assert value['runtime_mods_sha256'] is None
+
+
+def test_matched_pair_requires_comparable_actual_windows():
+    args = paired()
+    from datetime import datetime, timedelta
+    for index, record in enumerate(args[0][0]):
+        instant = datetime.fromisoformat(record['recorded_at_utc'])
+        record['recorded_at_utc'] = (instant + timedelta(minutes=index)).isoformat()
+    baseline = report.analyze_rows(*args[0])
+    treatment = report.analyze_rows(*args[1])
+    assert baseline['integrity_checks_passed'] and treatment['measurement_checks_passed']
+    assert 'unmatched_measurement_windows' in report.compare(baseline, treatment, args[0][1], args[1][1])['issues']
+
+
+def test_each_declared_science_pack_needs_new_delivery():
+    args = evidence()
+    args[1]['science_packs'].append('logistic-science-pack')
+    for index, record in enumerate(args[0]):
+        record['state']['factory']['consumed']['logistic-science-pack'] = max(0, index - 1) * 2
+        record['after_state']['factory']['consumed']['logistic-science-pack'] = index * 2
+    value = report.analyze_rows(*args)
+    assert 'science_delivery_or_consumption_missing' in value['outcome_gaps']
+
+
+@pytest.mark.parametrize('fault', [None, 'false', 0])
+def test_solid_fault_flag_must_be_explicitly_false(fault):
+    args = evidence()
+    args[0][4]['solid_route_fault'] = fault
+    assert 'controller_or_route_failure' in report.analyze_rows(*args)['issues']
+
+
+def test_failed_iteration_is_not_a_successful_timing_sample():
+    args = evidence()
+    args[0][4]['previous_iteration_timing']['status'] = 'error'
+    value = report.analyze_rows(*args)
+    assert 'failed_iteration_timing' in value['issues']
+    assert not value['measurement_checks_passed']
+
+
+def test_comparison_carries_checkpoint_and_full_input_bindings():
+    args = paired()
+    original = comparison(args)
+    args[0][2]['reason'] = 'different retained reason'
+    changed = comparison(args)
+    assert original['baseline_evidence_sha256'] == changed['baseline_evidence_sha256']
+    assert original['baseline_input_binding_sha256'] != changed['baseline_input_binding_sha256']
+    assert original['treatment_input_binding_sha256'] == changed['treatment_input_binding_sha256']
 
 
 @pytest.mark.parametrize('field,value', [
