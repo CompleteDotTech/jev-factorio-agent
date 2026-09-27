@@ -154,6 +154,7 @@ def test_initially_unbound_project_can_be_abandoned_at_observation(missing):
     records, _, initial, _ = data
     close_funding(data)
     records[3]['history'][0]['tick'] = records[3]['state']['tick']
+    records[3]['history'][0]['reason'] = 'kit_endpoint_or_layout_changed'
     routes = records[3]['state']['factory']['solid_routes']['routes']
     if missing:
         routes.pop(initial['solid_funding']['route'])
@@ -168,5 +169,10 @@ def test_abandonment_may_follow_an_intermediate_pre_dispatch_observation():
     data = funded_evidence()
     close_funding(data)
     data[0][3]['history'][0]['tick'] = data[0][3]['state']['tick'] + 1
+    deadline = data[0][3]['history'][0]['tick']
+    data[2]['solid_funding']['deadline_tick'] = deadline
+    for record in data[0][:3]:
+        record['solid_funding']['deadline_tick'] = deadline
+    data[0][3]['history'][0]['funding']['deadline_tick'] = deadline
     result = analyze_rows(*data)
     assert result['measurement_checks_passed'], result['issues']

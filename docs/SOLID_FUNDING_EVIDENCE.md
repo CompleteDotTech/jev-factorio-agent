@@ -77,6 +77,23 @@ evidence: a matching pending action or a verified attempt spanning the deadline.
 This applies to ordinary production as well as kit work. An action label or an
 old outcome repeated in history alone cannot defer reconciliation.
 
+Plan commits must be new occurrences in the bounded history, with the exact
+controller event fields, a recognized selection source, and the funding event
+before the plan event. Identical plan values at one game tick remain possible:
+history overlap tracks occurrences rather than rejecting equal values globally.
+Initial history cannot preload a future plan event. Paid component growth must
+match the one component and receipt of a recorded build attempt, including a
+carried pending attempt after a lost reply; observation alone cannot pay a route.
+
+An abandonment reason also needs independent support: an elapsed deadline,
+observed changed binding, exhausted action budget with missing kit stock, or an
+already exhausted failure budget/current recorded plan failure. A newly written
+budget does not prove its own cause. Catalog/payback recomputation and an
+intermediate changed binding may be absent from retained snapshots; those
+releases fail measurement with `solid_funding_abandonment_trigger_unproven`.
+This is an evidence limitation, not a controller rejection or a reason to retry
+or alter the campaign. Preserve that evidence for richer native qualification.
+
 ## Evidence boundary and rollout
 
 Tests exercise fabricated retained evidence and the actual Python controller with

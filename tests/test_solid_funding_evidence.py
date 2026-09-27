@@ -63,6 +63,13 @@ def plan_event(funding, tick):
 def close_funding(data, index=3, kind='solid_kit_abandoned'):
     rows, _, initial, final = data
     funding = initial['solid_funding']
+    # An initial lock may have a shorter retained horizon. Make the synthetic
+    # deadline release consistent with its recorded observation.
+    deadline = min(funding['deadline_tick'], rows[index]['after_state']['tick'])
+    funding['deadline_tick'] = deadline
+    for record in rows:
+        if record['solid_funding'] is not None:
+            record['solid_funding']['deadline_tick'] = deadline
     rows[index]['history'] = [event(kind, funding, rows[index]['after_state']['tick'], reason='kit_deadline')]
     for record in rows[index:]:
         record['solid_funding'] = None
@@ -119,7 +126,9 @@ def test_transient_funding_can_be_committed_then_abandoned_in_one_record():
     for record in rows: record['solid_funding'] = None
     rows[3]['history'] = [event('solid_kit_committed', funding, funding['started_tick']),
                           plan_event(funding, funding['started_tick']),
-                          event('solid_kit_abandoned', funding, rows[3]['after_state']['tick'], reason='kit_evidence_unavailable')]
+                          {'kind': 'plan_failed', 'plan': funding['key'] + ':kit',
+                           'reason': 'Plan precondition changed', 'tick': rows[3]['after_state']['tick']},
+                          event('solid_kit_abandoned', funding, rows[3]['after_state']['tick'], reason='kit_failure_budget')]
     for record in rows[3:]: record['failure_budgets'][funding['key'] + ':kit'] = 2
     final['failures'] = deepcopy(rows[-1]['failure_budgets'])
     result = analyze_rows(*data)
