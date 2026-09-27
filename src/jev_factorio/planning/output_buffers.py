@@ -48,9 +48,8 @@ class OutputBufferPlanner(ReadyWorkPlanner):
         fuel = inserter.get("fuel", {}).get("coal", 0)
         if fuel < 2:
             self._buffer_service = True
-            count = 5 - fuel
-            prerequisite = self._prerequisite("coal", count, path)
-            return prerequisite or self._transfer(inserter_role, "coal", count)
+            from .fuel_service import service_plan
+            return service_plan(self, inserter_role, row["source"], path, self._prerequisite)
         if not flow_complete(row["source"], row["layout"], self.snapshot):
             self._buffer_service = True
             # A short, explicit commissioning interval. Never call placement
@@ -59,11 +58,48 @@ class OutputBufferPlanner(ReadyWorkPlanner):
                               timeout=1800, identity=f"commission:{row['layout']}")
         return None
 
+    def _ready_buffer_output(self, item, amount) -> Plan | None:
+        """Collect only paid, commissioned, current stock before refueling it.
+
+        This does not certify new flow or authorize a transfer by forecast.
+        The unchanged controller/dispatch guards still own locks and receipts.
+        Retain bounded collection batching: do not turn each newly arrived
+        plate into its own trip. Remaining demand is replanned after receipts.
+        """
+        missing = math.ceil(amount - self.snapshot.inventory.get(item, 0))
+        if missing <= 0:
+            return None
+        for row in sources(self.snapshot).values():
+            if (row.get("source", "").startswith("growth:")
+                    or row.get("item") != item
+                    or not flow_complete(row.get("source", ""), row.get("layout", ""), self.snapshot)):
+                continue
+            role = row.get("chest_role", "")
+            available = self.entities.get(role, {}).get("output", {}).get(item, 0)
+            if type(available) not in {int, float} or not math.isfinite(available) or available < 1:
+                continue
+            recipe = self.catalog.recipes.get(item, {})
+            incoming = potential(row, self.snapshot, recipe) if recipe else available
+            target = min(self.collection_batch, missing, incoming)
+            if available < max(1, target):
+                continue
+            plan = self._transfer(role, item, min(missing, math.floor(available)), extracting=True)
+            if plan.steps[0].allowed(self.snapshot) and not plan.steps[0].satisfied(self.snapshot):
+                return replace(plan, materials={**(plan.materials or {}), "maintenance_policy": {
+                    "schema": 1, "reason": "collect_ready_owned_output_before_upstream_refill",
+                    "observed_tick": self.snapshot.tick, "required": missing,
+                    "ready": math.floor(available), "source": row["source"],
+                }})
+        return None
+
     def _need(self, item, amount, path=()):
         if self._acquiring_buffer or self.snapshot.inventory.get(item, 0) >= amount:
             return super()._need(item, amount, path)
         if self.focus is None:
             self._set_focus(item, amount)
+        ready = self._ready_buffer_output(item, amount)
+        if ready is not None:
+            return ready
         for row in sources(self.snapshot).values():
             if row.get("source", "").startswith("growth:"):
                 continue  # Explicit trial/preference policy owns successor collection.

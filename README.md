@@ -227,3 +227,13 @@ Controller and supervisor treatment flags remain explicit and default off.
 Offline reports separate useful science consumption from action counts; source
 integration and synthetic tests do not prove native improvement or authorize
 production cutover.
+
+## Gameplay/latency tracker #103 (offline work, acceptance pending)
+
+The [implementation/evidence boundaries](docs/ISSUE_103_OFFLINE_IMPLEMENTATION.md)
+describe the maintenance, grouped-fuel, planner-reuse, checkpoint and attribution
+changes. The [read-only capacity audit](docs/CAPACITY_AUDIT.md) and
+[native acceptance runbook](docs/NATIVE_ACCEPTANCE_103.md) do not authorize a live
+change or prove native progress. General solid transport and its coal/downstream
+consumers remain separate implementation work; keep #92/#103 open until their
+actual native requirements are met.

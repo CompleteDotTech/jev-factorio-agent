@@ -104,24 +104,11 @@ class InputRouteMixin:
         return facts
 
     def _compile_candidates(self, snapshot):
-        # OutputBufferMixin uses planner_type, preserving its boiler, output-arm,
-        # background-lock, and research-prefetch priorities.
+        # The composed planner owns demand-aware maintenance. This adapter adds
+        # ownership/freshness barriers, never an unconditional fuel override.
         plans, blocker = super()._compile_candidates(snapshot)
         if self.memory.active_goal == "bootstrap_mining":
             return plans, blocker
-        planner = InputRoutePlanner(self.catalog, snapshot, self.memory.active_goal)
-        boiler = snapshot.factory.get("entities", {}).get("utility:boiler", {})
-        if not boiler or boiler.get("fuel", {}).get("coal", 0) >= 5:
-            for row in sources(snapshot).values():
-                if len(row["steps"]) != len(row["parts"]) or not row["topology"]:
-                    continue
-                for name in ("inserter", "drill"):
-                    part = row["parts"][name]
-                    fuel = snapshot.factory["entities"][part["role"]].get("fuel", {}).get("coal", 0)
-                    if fuel < 2:
-                        plan = planner._acquire("coal", 5-fuel, ()) or planner._transfer(part["role"], "coal", 5-fuel)
-                        if self._step_allowed(plan.steps[0], snapshot):
-                            return [plan], ""
         selected = [plan for plan in plans if self._step_allowed(plan.steps[0], snapshot)]
         if selected:
             return selected, blocker

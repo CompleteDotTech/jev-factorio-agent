@@ -150,7 +150,14 @@ def frontier(loop, snapshot):
     if state and snapshot.tick >= state['deadline_tick'] and not loop.memory.pending and not getattr(loop.memory, 'background_job', None):
         abandon(loop, 'bounded_investment_deadline')
         state = None
-    planner = getattr(loop, 'planner_type', ReadyWorkPlanner)(loop.catalog, snapshot, 'rocket_launch')
+    planner = None
+    def current_planner():
+        # Most frontiers return ready work without inspecting any investment.
+        # Do not rebuild a supply ledger unless a distinct capital query needs it.
+        nonlocal planner
+        if planner is None:
+            planner = getattr(loop, 'planner_type', ReadyWorkPlanner)(loop.catalog, snapshot, 'rocket_launch')
+        return planner
     def admissible(plan):
         marker = (plan.materials or {}).get(capital.MARKER)
         return (not marker or (capital.matches(plan, state) if state is not None
@@ -172,6 +179,7 @@ def frontier(loop, snapshot):
     if state is None and not safe and original:
         # Reject optional intent before urgency shortcuts, but retain ordinary
         # acquisition so an exhausted investment cannot stop the controller.
+        planner = current_planner()
         planner._economic_acquiring = True
         try:
             safe = [p for p in planner.candidates() if feasible(p)]
@@ -191,7 +199,7 @@ def frontier(loop, snapshot):
         return urgent, blocker
     if state:
         try:
-            plan = capital.continuation(planner, state['spec'])
+            plan = capital.continuation(current_planner(), state['spec'])
             tracked = getattr(loop, '_tracked_plan', None)
             if tracked:
                 plan = tracked(plan, snapshot)
@@ -210,7 +218,7 @@ def frontier(loop, snapshot):
             or any(p.steps[0].action not in {'factory_wait', 'factory_gather'}
                    and capital.MARKER not in (p.materials or {}) for p in safe)):
         return safe, blocker
-    for plan in capital.offers(planner):
+    for plan in capital.offers(current_planner()):
         if loop.memory.failures.get(plan.materials[capital.MARKER]['spec']['key'], 0) >= 2:
             continue
         tracked = getattr(loop, '_tracked_plan', None)

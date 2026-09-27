@@ -99,6 +99,8 @@ class CausalTrace:
             return
         if self._failed:
             raise ResearchLogError("Causal trace has failed")
+        began, cpu_began = time.perf_counter_ns(), time.process_time_ns()
+        failed = False
         try:
             envelope = {"trace_id": self.trace_id, "controller": self.controller,
                         "decision_id": self.decision_id,
@@ -110,10 +112,18 @@ class CausalTrace:
             # Even a custom sink must not retain or mutate live controller data.
             self.sink.emit(event_type, safe_payload(envelope, self._secrets))
         except Exception as error:
+            failed = True
             self._failed = True
             if isinstance(error, OSError) and error.errno in {errno.ENOSPC, errno.EDQUOT}:
                 raise TraceStorageError("Causal storage exhausted; retain pending ownership") from None
             raise ResearchLogError("Causal event persistence failed") from None
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            if self.metrics is not None:
+                self.metrics.call('trace_emit', time.perf_counter_ns() - began, failed=failed,
+                                  cpu_ns=time.process_time_ns() - cpu_began)
 
     def error(self, event_type: str, error: BaseException, **details) -> None:
         # Preserve the primary exception if the attempt to log it also fails.
@@ -131,25 +141,36 @@ class CausalTrace:
             return operation()
         if self._failed:
             raise ResearchLogError("Causal trace has failed")
-        start = time.perf_counter_ns()
+        start, cpu_start = time.perf_counter_ns(), time.process_time_ns()
         try:
             value = operation()
         except BaseException as error:
             elapsed = time.perf_counter_ns() - start
             if self.metrics is not None:
-                self.metrics.call(event_type, elapsed, failed=True)
+                self.metrics.call(event_type, elapsed, failed=True,
+                                  cpu_ns=time.process_time_ns() - cpu_start)
             self.error(event_type, error, duration_ns=elapsed, **(details or {}))
             raise
         elapsed = time.perf_counter_ns() - start
         if self.metrics is not None:
-            self.metrics.call(event_type, elapsed)
+            self.metrics.call(event_type, elapsed, cpu_ns=time.process_time_ns() - cpu_start)
         if not self.enabled:
             return value
+        capture_start, capture_cpu = time.perf_counter_ns(), time.process_time_ns()
+        capture_failed = False
         try:
             captured = result(value) if result else {}
         except Exception:
+            capture_failed = True
             self._failed = True
             raise ResearchLogError("Cannot capture a causal event") from None
+        except BaseException:
+            capture_failed = True
+            raise
+        finally:
+            if self.metrics is not None:
+                self.metrics.call('trace_capture', time.perf_counter_ns() - capture_start,
+                                  failed=capture_failed, cpu_ns=time.process_time_ns() - capture_cpu)
         self.emit(event_type, {**(details or {}), "status": "ok", "duration_ns": elapsed, **captured})
         return value
 
@@ -189,7 +210,7 @@ class CausalTrace:
         if self.admission_check is not None and role != "mock_clock_advance":
             self.admission_check()
         if not self.enabled:
-            return operation()
+            return self.call("action_returned", operation)
         action_id = self.identity("action")
         self.action_id = action_id
         related = self._pending_action_id if role == "mock_clock_advance" else None
@@ -214,7 +235,7 @@ class CausalTrace:
     def verify(self, step, snapshot, *, plan_id: str, index: int,
                pending: dict, phase: str, attempt_id=None) -> bool:
         if not self.enabled:
-            return step.satisfied(snapshot)
+            return self.call("verification", lambda: step.satisfied(snapshot))
         return self.call("verification", lambda: step.satisfied(snapshot),
                          details={**self.pending_ref(plan_id, index, pending, attempt_id=attempt_id),
                                   "phase": phase, "predicate": asdict(step)},

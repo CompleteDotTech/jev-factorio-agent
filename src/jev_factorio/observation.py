@@ -6,6 +6,7 @@ import math
 import re
 import time
 from collections import Counter
+from copy import deepcopy
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -29,71 +30,113 @@ def label(command: str) -> str:
 
 
 class ObservationProfile:
-    def __init__(self, clock=time.perf_counter_ns):
-        self.clock = clock
-        self.started = clock()
+    """Ordered, nested wall/process-CPU clocks; never a network-time estimator.
+
+    A profile belongs to one sequential observation. Process CPU is for this
+    Python process, including other threads, not native Factorio or host CPU.
+    Inclusive helper/RPC durations remain for compatibility. Exclusive nested
+    intervals partition each observed clock without adding parents to children.
+    """
+    def __init__(self, clock=time.perf_counter_ns, cpu_clock=time.process_time_ns):
+        self.clock, self.cpu_clock = clock, cpu_clock
+        self.started, self.cpu_started = clock(), cpu_clock()
         self.calls: dict[str, dict] = {}
         self.native_ns: dict[str, int] = {}
         self.subcalls: dict[str, dict] = {}
         self.decode_ns = 0
         self.cache = Counter()
+        self._stack: list[dict] = []
+        self._exclusive = Counter()
+        self._exclusive_cpu = Counter()
+
+    @contextmanager
+    def _timed(self, category, name):
+        start, cpu_start = self.clock(), self.cpu_clock()
+        frame = {'children': 0, 'child_cpu': 0, 'failed': False,
+                 'response_bytes': 0, 'request_bytes': 0}
+        self._stack.append(frame)
+        try:
+            yield frame
+        except BaseException:
+            frame['failed'] = True
+            raise
+        finally:
+            elapsed = max(0, self.clock() - start)
+            cpu = max(0, self.cpu_clock() - cpu_start)
+            self._stack.pop()
+            exclusive = max(0, elapsed - frame['children'])
+            exclusive_cpu = max(0, cpu - frame['child_cpu'])
+            self._exclusive[category] += exclusive
+            self._exclusive_cpu[category] += exclusive_cpu
+            if self._stack:
+                self._stack[-1]['children'] += elapsed
+                self._stack[-1]['child_cpu'] += cpu
+            if category == 'decode':
+                self.decode_ns += elapsed
+            else:
+                destination = self.calls if category == 'rpc' else self.subcalls
+                row = destination.setdefault(name, {
+                    'count': 0, 'failed': 0, 'total_ns': 0, 'max_ns': 0,
+                    'exclusive_ns': 0, 'process_cpu_ns': 0, 'exclusive_process_cpu_ns': 0})
+                for key, value in (('count', 1), ('failed', int(frame['failed'])),
+                                   ('total_ns', elapsed), ('exclusive_ns', exclusive),
+                                   ('process_cpu_ns', cpu), ('exclusive_process_cpu_ns', exclusive_cpu)):
+                    row[key] += value
+                row['max_ns'] = max(row['max_ns'], elapsed)
+                if category == 'rpc':
+                    for key in ('request_bytes', 'response_bytes'):
+                        row[key] = row.get(key, 0) + frame[key]
 
     def rpc(self, name, operation, request_bytes=0):
-        if name not in LABELS:
-            name = "other"
-        start, failed, size = self.clock(), False, 0
-        try:
+        name = name if name in LABELS else 'other'
+        with self._timed('rpc', name) as frame:
+            frame['request_bytes'] = request_bytes
             result = operation()
             values = result.values() if isinstance(result, dict) else [result]
-            size = sum(len(v.encode("utf-8")) for v in values if isinstance(v, str))
+            frame['response_bytes'] = sum(len(v.encode('utf-8')) for v in values if isinstance(v, str))
             return result
-        except BaseException:
-            failed = True
-            raise
-        finally:
-            elapsed = max(0, self.clock() - start)
-            row = self.calls.setdefault(name, {"count": 0, "failed": 0, "total_ns": 0,
-                                               "max_ns": 0, "response_bytes": 0, "request_bytes": 0})
-            for key, value in (("count", 1), ("failed", int(failed)), ("total_ns", elapsed),
-                               ("response_bytes", size), ("request_bytes", request_bytes)):
-                row[key] += value
-            row["max_ns"] = max(row["max_ns"], elapsed)
 
     def subcall(self, name, operation):
-        name = name if name in LABELS else "other"
-        start, failed = self.clock(), False
-        try:
+        name = name if name in LABELS else 'other'
+        with self._timed('helpers', name):
             return operation()
-        except BaseException:
-            failed = True
-            raise
-        finally:
-            elapsed = max(0, self.clock() - start)
-            row = self.subcalls.setdefault(name, {"count": 0, "failed": 0, "total_ns": 0, "max_ns": 0})
-            row["count"] += 1
-            row["failed"] += int(failed)
-            row["total_ns"] += elapsed
-            row["max_ns"] = max(row["max_ns"], elapsed)
 
     def decode(self, raw):
-        if not isinstance(raw, str) or len(raw.encode("utf-8")) > MAX_PAYLOAD_BYTES:
-            raise ValueError("Observation payload exceeds the declared budget")
-        start = self.clock()
-        try:
+        if not isinstance(raw, str) or len(raw.encode('utf-8')) > MAX_PAYLOAD_BYTES:
+            raise ValueError('Observation payload exceeds the declared budget')
+        with self._timed('decode', 'other'):
             return json.loads(raw)
-        finally:
-            self.decode_ns += max(0, self.clock() - start)
 
     def summary(self):
         total = max(0, self.clock() - self.started)
-        rpc = sum(row["total_ns"] for row in self.calls.values())
-        return {"schema": 1, "total_ns": total, "calls": self.calls,
-                "decode_ns": self.decode_ns, "native_ns": self.native_ns, "subcalls": self.subcalls,
-                "decode_scope": "instrumented_envelopes_only",
-                "local_unattributed_ns": max(0, total - rpc - self.decode_ns),
-                "cache": dict(self.cache), "durations_are_inclusive": True,
-                "native_timing_available": bool(self.native_ns),
-                "rpc_includes_native_and_transport": True}
+        cpu = max(0, self.cpu_clock() - self.cpu_started)
+        rpc = sum(row['total_ns'] for row in self.calls.values())
+        # Only completed, ordered intervals may be partitioned. A mid-call
+        # diagnostic remains explicitly unavailable rather than inventing time.
+        complete = not self._stack
+        wall = {name: self._exclusive[name] for name in ('rpc', 'helpers', 'decode')}
+        cpu_parts = {name: self._exclusive_cpu[name] for name in ('rpc', 'helpers', 'decode')}
+        complete = complete and sum(wall.values()) <= total and sum(cpu_parts.values()) <= cpu
+        wall['unattributed'] = total - sum(wall.values()) if complete else None
+        cpu_parts['unattributed'] = cpu - sum(cpu_parts.values()) if complete else None
+        legacy_residual = max(0, total - rpc - self.decode_ns)
+        return {'schema': 1, 'attribution_schema': 1, 'total_ns': total,
+                'process_cpu_ns': cpu, 'wall_clock': 'perf_counter_ns',
+                'cpu_clock': 'process_time_ns', 'cpu_scope': 'python_process_including_other_threads',
+                'calls': deepcopy(self.calls), 'subcalls': deepcopy(self.subcalls),
+                'decode_ns': self.decode_ns, 'native_ns': dict(self.native_ns),
+                'decode_scope': 'instrumented_envelopes_only',
+                'local_unattributed_ns': legacy_residual,
+                'unattributed_wall_ns': wall['unattributed'],
+                'legacy_residual_scope': 'wall_minus_inclusive_rpc_and_envelope_decode_not_cpu',
+                'wall_partition_ns': wall if complete else None,
+                'process_cpu_partition_ns': cpu_parts if complete else None,
+                'partition_complete': complete,
+                'cache': dict(self.cache), 'durations_are_inclusive': True,
+                'native_timing_available': bool(self.native_ns),
+                'rpc_includes_native_and_transport': True,
+                'transport_separation_available': False,
+                'helper_retry_attempts': None, 'helper_backoff_ns': None}
 
 
 class ProfiledTools:
