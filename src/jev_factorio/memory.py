@@ -189,6 +189,11 @@ def load_checkpoint(path: Path, session_id: str, target: str) -> CampaignMemory:
             raise ValueError('Incomplete mining-outpost checkpoint extension')
         from .outpost_controller import outpost_loop_type
         loop_type = outpost_loop_type(loop_type)
+    if {'successor_schema', 'successor_projects', 'successor_receipts'} & data.keys():
+        if not {'successor_schema', 'successor_projects', 'successor_receipts'} <= data.keys():
+            raise ValueError('Incomplete successor checkpoint extension')
+        from .successor_controller import successor_loop_type
+        loop_type = successor_loop_type(loop_type)
     if {"solid_routes_schema", "solid_intents", "solid_epoch", "solid_commitments", "solid_science_policy"} & data.keys():
         from .solid_controller import CHECKPOINT_FIELDS, solid_loop_type
         if not CHECKPOINT_FIELDS <= data.keys():
