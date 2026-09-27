@@ -337,6 +337,25 @@ def test_file_pair_binds_exact_input_bytes(tmp_path):
     assert original['treatment_raw_inputs_binding_sha256'] == changed['treatment_raw_inputs_binding_sha256']
 
 
+def test_file_pair_rejects_formatting_change_between_trial_reads(tmp_path, monkeypatch):
+    baseline, treatment = paired()
+    first = files(tmp_path / 'baseline', baseline)
+    second = files(tmp_path / 'treatment', treatment)
+    original_read = report.stable_read
+    reads = 0
+    def changed_second_read(path, *args, **kwargs):
+        nonlocal reads
+        value = original_read(path, *args, **kwargs)
+        if path == first['trial']:
+            reads += 1
+            if reads == 2:
+                return json.dumps(json.loads(value), indent=2).encode() + b'\n'
+        return value
+    monkeypatch.setattr(report, 'stable_read', changed_second_read)
+    with pytest.raises(ValueError, match='Trial changed during comparison'):
+        report.compare_files(first, second)
+
+
 def test_record_attempt_requires_reconciliation():
     args = evidence()
     args[0][4]['attempt'] = {'action': 'unresolved'}

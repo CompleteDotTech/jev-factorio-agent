@@ -754,8 +754,10 @@ def compare_files(baseline: dict[str, Path], treatment: dict[str, Path]) -> dict
         if set(paths) != {'gameplay', 'trial', 'initial_checkpoint', 'final_checkpoint'}:
             raise ValueError('Four explicit input files are required per comparison arm')
         value = analyze(paths['gameplay'], paths['trial'], paths['initial_checkpoint'], paths['final_checkpoint'])
-        trial = load_json(stable_read(paths['trial'], MAX_JSON))
-        if sha256(canonical(trial)) != value['trial_sha256']:
+        trial_bytes = stable_read(paths['trial'], MAX_JSON)
+        trial = load_json(trial_bytes)
+        if (sha256(trial_bytes) != value['inputs_sha256']['trial']
+                or sha256(canonical(trial)) != value['trial_sha256']):
             raise ValueError('Trial changed during comparison')
         return value, trial
     first, first_trial = arm(baseline)
