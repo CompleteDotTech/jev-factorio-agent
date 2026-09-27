@@ -316,7 +316,7 @@ def test_composed_observer_rejects_overlapping_commitment_without_erasing_failur
 def test_matching_revision_without_matching_reservation_contract_is_not_reattached(marker):
     lua = runtime()
     lua.globals().replacement_marker = marker
-    lua.execute('a,b,pa,pb=both();campaign.prepare_solid_route(pa);storage.solid_routes.implementation_revision=3;storage.solid_routes.reservation_contract=replacement_marker;retained=storage.solid_routes')
+    lua.execute('a,b,pa,pb=both();campaign.prepare_solid_route(pa);storage.solid_routes.implementation_revision=4;storage.solid_routes.reservation_contract=replacement_marker;retained=storage.solid_routes')
     with pytest.raises(Exception, match='reconciliation'):
         lua.execute(files('jev_factorio').joinpath('lua/solid_routes.lua').read_text())
     lua.execute('assert(storage.solid_routes==retained and paid_calls==0 and retained.cells[a.route].pending.receipt==pa.receipt)')

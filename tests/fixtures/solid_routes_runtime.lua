@@ -20,7 +20,7 @@ function entity(name,kind,x,y,half)
     local e={valid=true,quality={name="normal"},name=name,type=kind,unit_number=100+#all_entities,position={x=x,y=y},direction=0,
         force=force,surface=surface,bounding_box={left_top={x=x-half,y=y-half},right_bottom={x=x+half,y=y+half}},
         energy=100,products_finished=0,productivity_bonus=0,input=inv({}),output=inv({}),fuel=inv({}),
-        held_stack={valid_for_read=false},prototype={supply_area_distance=10},electric_network_id=1,crafting=false}
+        held_stack={valid_for_read=false},prototype={get_supply_area_distance=function(quality) assert(quality.name=="normal");return 10 end},electric_network_id=1,crafting=false}
     e.get_inventory=function(kind) return kind==1 and e.output or e.input end
     e.get_output_inventory=function() return e.output end
     e.get_fuel_inventory=function() return e.fuel end

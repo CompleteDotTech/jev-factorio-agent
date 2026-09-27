@@ -89,7 +89,11 @@ class SupplyLedger:
             count = quantities({item: count})[item]
             key = category, identity, item
             buckets[key] = max(buckets.get(key, 0), count)
+        from ..coal_supply import private_source_roles
+        network_sources = private_source_roles(snapshot)
         for role, machine in sorted(snapshot.factory.get('entities', {}).items()):
+            if role in network_sources:
+                continue  # Paid source stock belongs to its coal network.
             if 'successors' in snapshot.factory:
                 from ..successors import private_output
                 if private_output(role, snapshot):

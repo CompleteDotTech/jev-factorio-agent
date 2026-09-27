@@ -105,8 +105,12 @@ class FactoryPlanner:
         return f"{item}:target:{target}:site:{identity}"
 
     def _output_pickup(self, item, missing):
+        from ..coal_supply import private_source_roles
+        network_sources = private_source_roles(self.snapshot)
         candidates = []
         for role, machine in sorted(self.entities.items()):
+            if role in network_sources:
+                continue  # Do not strand a raw-material need behind an illegal pickup.
             if 'successors' in self.factory:
                 from ..successors import private_output
                 if private_output(role, self.snapshot):

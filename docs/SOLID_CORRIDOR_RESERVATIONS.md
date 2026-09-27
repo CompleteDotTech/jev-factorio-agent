@@ -45,13 +45,13 @@ collision, whole-kit, ordinary fair placement or receipt checks.
 
 ## Installation and operational handoff
 
-The native wire protocol remains 1. The installed implementation revision is 3,
+The native wire protocol remains 1. The installed implementation revision is 4,
 with `reservation_contract=full-corridor-manhattan-v1`. Both are checked before
 reattaching an existing runtime, along with the existing contract family and
 observer/transfer/configure bindings. A coincidentally equal revision in another
 continuation does not authorize a semantically different installed extension.
 
-Revision 2 is deliberately **not upgraded in place**. Do not clear native storage,
+Earlier revisions are deliberately **not upgraded in place**. Do not clear native storage,
 replace the observer behind the running controller, reset the campaign, discard
 pending receipts or alter its immutable treatment/cutoff to install this change.
 Before native use, reconcile this exact source with the coal-source and downstream

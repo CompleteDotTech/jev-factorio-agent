@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import json
 from pathlib import Path
 
-from . import solid_routes as routes
+from . import solid_routes as routes, coal_supply as coal
 from .backends.solid_routes import SolidRouteFactory, validate_intents
 from .planning.solid_routes import candidates
 from .planning import solid_investment, solid_funding
@@ -380,7 +380,8 @@ class SolidRouteMixin:
                 or self._plan_failure_count(plan) >= 2
                 or plan.id != self.memory.solid_funding["key"] + ":kit"):
             return False
-        if self._solid_science_policy and (step.action == routes.COMMAND
+        if self._solid_science_policy and ((step.action == routes.COMMAND
+                                          and not coal.is_network_route(step.parameters, snapshot))
                                           or solid_investment.MARKER in (plan.materials or {})):
             # Do not double-reserve the active one-component plan and its paid
             # project's remaining kit while assessing current downstream demand.
