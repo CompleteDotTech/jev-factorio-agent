@@ -161,7 +161,7 @@ def offer_value(row, snapshot, catalog, demand, outcomes=()) -> dict:
         # The recipe bill is net of input-backed queued output. Subtracting the
         # whole observed input again counts those same ingredients twice and can
         # erase a real downstream shortage. Unpaired residual input still counts.
-        residue = uncommitted_input(target, catalog, row["item"])
+        residue = uncommitted_input(target, catalog, row["item"], require_supported=True)
         missing = max(0, wanted - math.floor(residue))
         if not missing:
             return {"eligible": False, "reason": "no_current_recipe_deficit"}
