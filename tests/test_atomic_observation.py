@@ -193,3 +193,16 @@ def test_bootstrap_fuel_uses_unit_binding_at_native_insert(monkeypatch):
     entity=NS(name='burner-mining-drill',unit_number=51,position=NS(x=1,y=2))
     assert fair.insert_item(NS(value=['coal']),entity,3)==3
     assert calls==[('insert','burner-mining-drill',{'x':1.0,'y':2.0},'coal',3,51)]
+
+
+@pytest.mark.parametrize('name',['water','deepwater'])
+def test_native_water_anchor_names_are_explicitly_supported(monkeypatch,name):
+    backend,native,payload,_=setup(monkeypatch)
+    payload['anchors']={'water':{'name':name,'surface_index':1,'position':{'x':3,'y':6}}}
+    assert backend.observe().nearby_resources['water']==2
+
+
+def test_arbitrary_native_tile_cannot_claim_water(monkeypatch):
+    backend,native,payload,_=setup(monkeypatch)
+    payload['anchors']={'water':{'name':'grass-1','surface_index':1,'position':{'x':3,'y':6}}}
+    with pytest.raises(ValueError,match='discovery identity'):backend.observe()

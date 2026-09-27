@@ -161,6 +161,7 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
             if (not isinstance(value, dict) or not isinstance(value.get('name'), str)
                     or not value['name'] or len(value['name']) > 128
                     or (item not in {'wood', 'water'} and value['name'] != item)
+                    or (item == 'water' and value['name'] not in {'water', 'deepwater'})
                     or type(value.get('surface_index')) is not int
                     or value['surface_index'] != result['surface_index']):
                 raise ValueError('Invalid atomic discovery identity')

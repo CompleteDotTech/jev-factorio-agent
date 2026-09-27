@@ -89,7 +89,7 @@ def test_alias_does_not_duplicate_native_consumer():
 
 def test_geometry_unavailable_is_unknown_not_a_zero_cost_reserve():
     state,data=due_scenario()
-    state.factory['entities']['input:drill'].pop('position')
+    state.factory['entities']['input:inserter'].pop('position')
     plan=InputRoutePlanner(data,state,'rocket_launch')._need('iron-plate',10)
     assert plan.materials['fuel_service']['lead_ticks_estimate'] is None
     assert plan.materials['fuel_service']['reserve']==0

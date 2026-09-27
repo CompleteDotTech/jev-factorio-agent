@@ -102,6 +102,9 @@ def service_plan(planner, primary: str, source: str, path, acquire):
             deferred['plan_failure_budget'] += 1
             continue
         target_point = position(entities[role].get('position'))
+        if role != primary and (primary_point is None or target_point is None):
+            deferred['unknown_optional_geometry'] += 1
+            continue
         if (role != primary and primary_point is not None and target_point is not None
                 and sum(abs(a-b) for a,b in zip(primary_point, target_point)) > MAX_SERVICE_LEG_TILES):
             deferred['service_leg_budget'] += 1
