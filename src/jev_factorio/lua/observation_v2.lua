@@ -42,8 +42,18 @@ local function coal_capacity(inv)
     assert(integer(amount,0,9007199254740991),"Invalid native coal capacity")
     return {coal=amount}
 end
-local function fuel_capacities(factory, player, main_inventory)
-    factory.inventory_insertable=coal_capacity(main_inventory)
+-- A supported actor read that fails is a rejected observation, not unknown
+-- headroom. Bind this one reading to the current tick and main inventory.
+local function actor_coal_capacity(inv, tick)
+    local supported, method=pcall(function() return inv.get_insertable_count end)
+    if not supported or method==nil then return false end
+    assert(type(method)=="function", "Invalid native inventory capacity method")
+    local count=method({name="coal",quality="normal"})
+    assert(integer(count,0,4294967295),"Invalid native inventory capacity")
+    return {schema=1,tick=tick,inventory="character_main",quality="normal",
+        method="get_insertable_count",items={coal=count}}
+end
+local function fuel_capacities(factory, player)
     local roles={}
     for role, row in pairs(factory.entities or {}) do
         row.fuel_insertable=nil -- never pass through a stale wrapper hint
@@ -176,9 +186,12 @@ campaign.observation_snapshot_v2=function(generation,expected_drill)
     local tick=game.tick
     local timer=profiler()
     local factory=campaign.observe() -- all installed capability wrappers, never cached
+    factory.inventory_insertable=nil
+    factory.inventory_insertable_evidence=nil
     local main_inventory=player.get_main_inventory()
     local inventory=contents(main_inventory)
-    fuel_capacities(factory,player,main_inventory)
+    local inventory_capacity=actor_coal_capacity(main_inventory,tick)
+    fuel_capacities(factory,player)
     local initial=bootstrap(player,expected_drill)
     finish(timer,"campaign_snapshot")
     local radius=factory.exploration_radius
@@ -206,6 +219,7 @@ campaign.observation_snapshot_v2=function(generation,expected_drill)
     assert(game.tick==tick and factory.tick==tick and controls.tick==tick,"Native snapshot tick changed")
     timer=profiler()
     local encoded=helpers.table_to_json({schema=2,tick=tick,factory=factory,inventory=inventory,
+        inventory_capacity=inventory_capacity,
         controls=controls,position=point(player.position),bootstrap=initial,targets=targets,anchors=witness,
         session_id=storage.jev_session_id,actor_unit=player.character.unit_number,
         surface_index=player.surface.index,force_index=player.force.index,cache={hits=hits,misses=misses},

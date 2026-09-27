@@ -211,6 +211,16 @@ def allowed(action: str, parameters: dict, snapshot: GameSnapshot) -> bool:
     if action == "factory_bind":
         return factory.get("player_connected") is True
     if action == "factory_gather":
+        # A retained plan can outlive the headroom it was sized against.
+        # The fresh observation rejects an oversized step before dispatch.
+        headroom = factory.get("inventory_insertable", {})
+        if not isinstance(headroom, dict):
+            return False
+        resource = parameters["resource"]
+        if resource in headroom:
+            count = headroom[resource]
+            if type(count) is not int or not parameters["quantity"] <= count <= 2**32 - 1:
+                return False
         return parameters["resource"] in snapshot.nearby_resources
     if action == "factory_place":
         if parameters["anchor"].startswith("cell-site:") and not production_sites.allowed(parameters, snapshot):
