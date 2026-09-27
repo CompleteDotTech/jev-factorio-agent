@@ -249,3 +249,22 @@ def test_non_successor_controller_refuses_world_with_retained_successor_state():
     backend = Backend(empty_state())
     loop = BASE(backend, policy='deterministic', target='rocket_launch', factory_scheduling='ready-work')
     with pytest.raises(ValueError, match='explicit controller capability'): loop._observe()
+
+
+def test_coal_funding_prevents_starting_a_competing_successor(tmp_path):
+    state = empty_state(); site = site_offer(state)
+    state.inventory = successors.initial_kit(site, 'iron-ore')
+    backend = Backend(state)
+    loop = KIND(backend, policy='deterministic', target='rocket_launch',
+                factory_scheduling='ready-work', checkpoint=str(tmp_path / 'state.json'))
+    loop.memory = loop.memory_type(state.session_id, 'rocket_launch', active_goal='rocket_launch',
+                                  last_tick=state.tick)
+    # The successor layer only tests occupancy; the coal layer owns its schema.
+    loop.memory.coal_funding = {'held': {'stone-furnace': 1}}
+    planner = SuccessorPlanner(native_catalog(), state, 'rocket_launch')
+    plan = marked(planner.continuation(GROWTH, site['anchor']), GROWTH, site, state)
+    with pytest.raises(ValueError, match='Successor project conflict'):
+        loop._commit_successor(plan, state)
+    plans, _ = loop._compile_candidates(state)
+    assert not any(successors.MARKER in (p.materials or {}) for p in plans)
+    assert not loop.memory.successor_projects and not backend.calls

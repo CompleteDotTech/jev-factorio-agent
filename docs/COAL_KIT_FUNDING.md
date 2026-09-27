@@ -132,3 +132,15 @@ still qualify the actual deployment/configuration, paid mining and delivery to a
 least two consumers beyond bootstrap, downstream useful science/research, recovery,
 resource/latency attribution, and the original authorized >=30-minute useful-progress
 window. No issue is closed by these fixture results or by source merge alone.
+
+## Review reconciliation
+
+Coal acquisition plans retain the controller's current active goal, including
+non-rocket targets, so an interrupted extraction/craft produces a reloadable
+checkpoint and preserves its original attempt. Active or paused successor
+projects exclude new coal funding, and retained coal funding excludes a new
+successor project. Qualified predecessors do not occupy that investment lane.
+Coal checkpoint loading rejects simultaneous conflicting project ownership.
+Fresh permission compares the complete acquisition cost evidence as well as the
+first step and binding; a later-bill change cannot retain stale dispatch estimates
+merely because the immediate command is unchanged.

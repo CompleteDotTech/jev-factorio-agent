@@ -88,15 +88,15 @@ class Backend(BaseBackend):
         return 'fixture paid kit action'
 
 
-def controller(backend, path, *, resume=False, policy=True, kind=Loop, **options):
+def controller(backend, path, *, resume=False, policy=True, kind=Loop, target="rocket_launch", **options):
     backend.checkpoint = path / 'coal-kit.json'
-    loop = kind(backend, target='rocket_launch', policy='deterministic',
+    loop = kind(backend, target=target, policy='deterministic',
                 factory_scheduling='ready-work', tick_seconds=0,
                 checkpoint=str(backend.checkpoint), resume_controller=resume,
                 solid_intents=INTENTS, coal_targets=TARGETS, coal_kit_policy=policy, **options)
     if not resume:
-        loop.memory = loop.memory_type(backend.state.session_id, 'rocket_launch',
-            active_goal='rocket_launch', completed_goals={'stockpile_fuel': 0, 'bootstrap_mining': 0},
+        loop.memory = loop.memory_type(backend.state.session_id, target,
+            active_goal=target, completed_goals={'stockpile_fuel': 0, 'bootstrap_mining': 0},
             last_tick=backend.state.tick)
     return loop
 
@@ -245,13 +245,14 @@ def test_pending_funding_cannot_be_reinterpreted_on_resume(tmp_path, change):
     assert backend.enabled == before
 
 
-@pytest.mark.parametrize('change', ['cost', 'receipt', 'key', 'tick', 'bundle', 'quantity'])
+@pytest.mark.parametrize('change', ['cost', 'receipt', 'key', 'tick', 'bundle', 'quantity', 'evidence'])
 def test_canonical_fresh_permission_rejects_modified_selection(tmp_path, change):
     backend = Backend(); loop = controller(backend, tmp_path)
     snapshot, plans = offers(loop); plan = next(p for p in plans if funding.MARKER in (p.materials or {}))
     loop._commit_solid(plan, snapshot)
     altered = deepcopy(plan.to_dict())
-    if change == 'cost': altered['steps'][0]['costs'] = {'coal': 1}
+    if change == 'evidence': altered['materials']['coal_kit_cost']['acquisition_actions_estimate'] += 1
+    elif change == 'cost': altered['steps'][0]['costs'] = {'coal': 1}
     elif change == 'receipt': altered['steps'][0]['parameters']['receipt'] = 'other'
     elif change == 'key': altered['id'] = 'coal-kit:' + '0' * 64
     elif change == 'tick': altered['materials'][funding.MARKER]['observed_tick'] += 1
@@ -420,3 +421,57 @@ def test_ready_science_frontier_remains_and_parent_compiles_once(tmp_path):
     assert loop.compiled == 1
     assert any(p.id == 'science:ready' for p in plans)
     assert any(funding.MARKER in (p.materials or {}) for p in plans)
+
+
+@pytest.mark.parametrize('mode', ['output', 'craft'])
+def test_nonrocket_goal_survives_paid_kit_lost_reply_and_resume(tmp_path, mode):
+    backend = Backend(mode); backend.lose_kit_ack = True
+    loop = controller(backend, tmp_path, target='iron_smelting')
+    assert not loop.step()['verified']
+    assert loop.memory.active_plan['goal'] == loop.memory.active_goal == 'iron_smelting'
+    pending, attempt = deepcopy(loop.memory.pending), deepcopy(loop.memory.attempt)
+    backend.lose_kit_ack = False
+    resumed = controller(backend, tmp_path, resume=True, target='iron_smelting')
+    assert resumed.step()['verified']
+    assert len(backend.calls) == 1
+    assert resumed.memory.attempt_outcomes[-1]['id'] == attempt['id']
+    assert pending['action'] == backend.calls[0][0]
+
+
+@pytest.mark.parametrize('status', ['active', 'paused'])
+def test_successor_ownership_excludes_coal_offer_and_commit(tmp_path, status):
+    backend = Backend(); loop = controller(backend, tmp_path)
+    snapshot, plans = offers(loop)
+    plan = next(p for p in plans if funding.MARKER in (p.materials or {}))
+    loop.memory.successor_projects = {'growth:iron-plate': {'status': status}}
+    plans, _ = loop._compile_candidates(snapshot)
+    assert not any(funding.MARKER in (p.materials or {}) for p in plans)
+    with pytest.raises(ValueError, match='unqualified coal kit'):
+        loop._commit_solid(plan, snapshot)
+    assert loop.memory.coal_funding is None and not backend.calls
+
+
+def test_changed_later_kit_stock_invalidates_cost_evidence_with_same_first_action(tmp_path):
+    backend = Backend(); loop = controller(backend, tmp_path)
+    backend.state.inventory['wooden-chest'] = 0
+    backend.state.factory['entities']['kit:storage']['output']['wooden-chest'] = 2
+    snapshot, plans = offers(loop)
+    plan = next(p for p in plans if funding.MARKER in (p.materials or {}))
+    loop._commit_solid(plan, snapshot)
+    fresh = deepcopy(snapshot)
+    fresh.inventory['wooden-chest'] = 2
+    current, _ = funding.candidate(fresh, loop.catalog, **loop._coal_funding_options(plan))
+    assert current.steps == plan.steps
+    assert current.materials['coal_kit_cost'] != plan.materials['coal_kit_cost']
+    assert not loop._investment_step_allowed(plan, plan.steps[0], fresh)
+    assert not backend.calls
+
+
+def test_qualified_successor_does_not_block_coal_funding(tmp_path):
+    backend = Backend(); loop = controller(backend, tmp_path)
+    loop.memory.successor_projects = {'growth:iron-plate': {'status': 'qualified'}}
+    snapshot, plans = offers(loop)
+    plan = next(p for p in plans if funding.MARKER in (p.materials or {}))
+    loop._commit_solid(plan, snapshot)
+    assert loop.memory.coal_funding is not None
+    assert not backend.calls

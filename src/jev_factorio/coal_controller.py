@@ -216,7 +216,8 @@ class CoalSupplyMixin:
                 "job": getattr(self, "_job", lambda: None)(),
                 "failures": self.memory.failures, "state": self.memory.coal_funding,
                 "capital": self.memory.capital_investment,
-                "other_funding": self.memory.solid_funding}
+                "other_funding": self.memory.solid_funding, "goal": self.memory.active_goal,
+                "successor_projects": getattr(self.memory, "successor_projects", {})}
 
     def _commit_solid(self, plan, snapshot):
         if coal_funding.MARKER not in (plan.materials or {}):
@@ -397,12 +398,14 @@ def coal_loop_type(base):
                 raise ValueError("Invalid immutable coal kit policy")
             if memory.coal_funding is not None:
                 if (not memory.coal_kit_policy or memory.capital_investment is not None
-                        or memory.solid_funding is not None):
+                        or memory.solid_funding is not None
+                        or any(p.get("status") != "qualified" for p in
+                               getattr(memory, "successor_projects", {}).values())):
                     raise ValueError("Coal funding conflicts with immutable policy or another investment")
                 coal_funding.validate_state(memory.coal_funding, memory.last_tick, memory.coal_targets)
             active = Plan.from_dict(memory.active_plan) if memory.active_plan else None
             if active and (active.id.startswith("coal-kit:") or coal_funding.MARKER in (active.materials or {})):
-                coal_funding.validate_active(memory.coal_funding, active, memory.last_tick)
+                coal_funding.validate_active(memory.coal_funding, active, memory.last_tick, memory.active_goal)
             coal.validate_transport_intents(memory.coal_targets, memory.solid_intents)
             if not isinstance(memory.coal_epoch, dict) or not isinstance(memory.coal_commitments, dict):
                 raise ValueError("Invalid coal checkpoint binding")

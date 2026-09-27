@@ -132,7 +132,10 @@ def spendable_reservations(reserved: dict | None, state: dict | None) -> dict:
 
 
 def candidate(snapshot: GameSnapshot, catalog: Catalog, *, reserved=None, job=None,
-              failures=None, state=None, capital=None, other_funding=None) -> tuple[Plan | None, dict]:
+              failures=None, state=None, capital=None, other_funding=None,
+              goal="rocket_launch", successor_projects=None) -> tuple[Plan | None, dict]:
+    if any(project.get('status') != 'qualified' for project in (successor_projects or {}).values()):
+        raise ValueError('An unfinished successor project owns the investment lane')
     rows = proposal(snapshot)
     targets = snapshot.factory['coal_supply']['targets']
     key = project_key(targets)
@@ -162,7 +165,7 @@ def candidate(snapshot: GameSnapshot, catalog: Catalog, *, reserved=None, job=No
     costs = {**estimates, 'kit_components': dict(kit),
              'admission_basis': 'explicit_immutable_coal_bundle_not_autonomous_payback',
              'native_flow_proven': False, 'avoided_haul_ticks': None, 'net_coal_return': None}
-    return replace(plan, description='Acquire the next paid coal-network kit prerequisite',
+    return replace(plan, goal=goal, description='Acquire the next paid coal-network kit prerequisite',
                    materials={MARKER: marker, 'coal_kit_cost': costs}), costs
 
 
@@ -182,14 +185,14 @@ def start(plan: Plan, snapshot: GameSnapshot, catalog: Catalog, reserved=None, j
             'started_tick': snapshot.tick, 'deadline_tick': snapshot.tick + MAX_TICKS, 'actions': 1}
 
 
-def validate_active(state: dict, plan: Plan, last_tick: int) -> None:
+def validate_active(state: dict, plan: Plan, last_tick: int, goal: str) -> None:
     marker = (plan.materials or {}).get(MARKER)
     if (not state or not isinstance(marker, dict) or set(marker) != MARKER_FIELDS
             or not solid.integer(marker['schema'], 1, 1) or marker['key'] != state['key']
             or marker['bundle_sha256'] != funding.digest(state['bundle'])
             or marker['catalog_sha256'] != state['catalog_sha256']
             or not solid.integer(marker['observed_tick'], state['started_tick'], last_tick)
-            or plan.id != state['key'] or plan.goal != 'rocket_launch'
+            or plan.id != state['key'] or plan.goal != goal
             or len(plan.steps) != 1 or plan.steps[0].action not in {'factory_craft', 'factory_extract'}):
         raise ValueError('Coal funding and its active plan disagree')
 
@@ -203,13 +206,14 @@ def fresh_permission(plan: Plan, step: Step, snapshot: GameSnapshot, catalog: Ca
                 or len(plan.steps) != 1 or step != plan.steps[0]):
             return False
         if state:
-            validate_active(state, plan, snapshot.tick)
+            validate_active(state, plan, snapshot.tick, options.get("goal", "rocket_launch"))
         # The selected next action is already charged to the action budget.
         check_state = deepcopy(state)
         if check_state and check_state['actions'] == MAX_ACTIONS:
             check_state['actions'] -= 1
         current, _ = candidate(snapshot, catalog, **{**options, 'state': check_state})
-        if current is None or current.id != plan.id:
+        if (current is None or current.id != plan.id or current.goal != plan.goal
+                or (plan.materials or {}).get("coal_kit_cost") != current.materials["coal_kit_cost"]):
             return False
         expected = {**current.materials[MARKER], 'observed_tick': marker['observed_tick']}
         if marker != expected:
