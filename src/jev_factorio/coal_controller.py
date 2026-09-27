@@ -371,6 +371,8 @@ class CoalSupplyMixin:
                     except ResearchLogError:
                         raise
                     except Exception:
+                        if self._persistence_failed:
+                            raise
                         pending["dispatch"] = "ambiguous"
                         self._save()
                         return self._record(snapshot, "observe", "Exact coal replay remains ambiguous; preserve pending receipt")
