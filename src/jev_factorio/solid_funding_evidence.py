@@ -622,12 +622,15 @@ def _terminal_outcomes(record, plan, index, pending, attempt, seen, fresh, budge
     events = [event for event in fresh if event.get('kind') == kind]
     if (len(events) != 1 or events[0].get('attempt_id') != value['id'] or events[0].get('tick') != now):
         return [], False
+    rejection = value['dispatch_phases']['dispatch'].get('error_code')
     if kind == 'connection_preflight_rejected':
         valid = (step.action == 'factory_connect' and record.get('action') == step.action and failure
                  and set(events[0]) == {'kind', 'code', 'attempt_id', 'tick'}
-                 and isinstance(events[0]['code'], str) and bool(events[0]['code']))
+                 and isinstance(events[0]['code'], str)
+                 and rejection == 'connection_preflight:' + events[0]['code'])
         return ([value], True) if valid else ([], False)
-    valid = record.get('action') == 'observe' and not failed and set(events[0]) == {'kind', 'attempt_id', 'tick'}
+    valid = (record.get('action') == 'observe' and not failed and rejection == kind
+             and set(events[0]) == {'kind', 'attempt_id', 'tick'})
     return ([value], False) if valid else ([], False)
 
 

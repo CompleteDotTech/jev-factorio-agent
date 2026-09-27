@@ -57,6 +57,7 @@ def test_known_preflight_rejection_is_durable_failure_not_success_or_poll(tmp_pa
     assert loop.memory.failures[plan.id] == 1
     outcome = loop.memory.attempt_outcomes[-1]
     assert outcome["outcome"] == "connection_preflight_rejected"
+    assert outcome["dispatch_phases"]["dispatch"]["error_code"] == "connection_preflight:missing_fluid_port"
     validate_attempt(outcome, finished=True)
     saved = CampaignMemory.load(loop.checkpoint, loop.memory.session_id, loop.target)
     assert saved.attempt_outcomes[-1] == outcome
@@ -86,6 +87,7 @@ def test_rejection_subclass_is_not_the_explicit_backend_contract(tmp_path):
 
     loop, _, _ = controller(tmp_path, UntrustedRejection("missing_fluid_port"))
     loop.step()
+    assert loop.memory.attempt["dispatch_phases"]["dispatch"]["error_code"] == "invalid_data"
     assert loop.memory.pending["dispatch"] == "ambiguous"
 
 

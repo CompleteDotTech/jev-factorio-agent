@@ -119,7 +119,8 @@ def test_fresh_ordinary_plan_cannot_ignore_its_exhausted_budget(tmp_path):
     assert funding_history_issues(initial, [record], final)
 
 
-def test_connection_preflight_closes_its_owned_attempt(tmp_path):
+@pytest.mark.parametrize('diagnostic', ['timeout', 'invalid_data', 'connection', 'execution'])
+def test_connection_preflight_closes_its_owned_attempt(tmp_path, diagnostic):
     from jev_factorio.backends.errors import ConnectionPreflightRejected
     from solid_routes_fixtures import SOURCE, TARGET
     loop, backend = kit_loop(tmp_path)
@@ -134,6 +135,10 @@ def test_connection_preflight_closes_its_owned_attempt(tmp_path):
     initial = asdict(loop.memory); record = loop.step(); final = asdict(loop.memory)
     assert record['attempt_outcomes'][-1]['outcome'] == 'connection_preflight_rejected'
     assert not funding_history_issues(initial, [record], final)
+    corrupted = deepcopy(record); changed = deepcopy(final)
+    corrupted['attempt_outcomes'][-1]['dispatch_phases']['dispatch']['error_code'] = diagnostic
+    changed['attempt_outcomes'][-1] = deepcopy(corrupted['attempt_outcomes'][-1])
+    assert funding_history_issues(initial, [corrupted], changed)
     record['failure_budgets'][plan.id] = final['failures'][plan.id] = 0
     assert funding_history_issues(initial, [record], final)
 

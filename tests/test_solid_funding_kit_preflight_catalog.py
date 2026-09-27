@@ -27,6 +27,10 @@ def test_kit_preflight_outcome_retains_exact_funding_and_active_plan(tmp_path, e
     assert final['pending'] is None and final['attempt'] is None
     loop.memory_type.from_bytes(json.dumps(final).encode(), loop.memory.session_id, loop.target)
     assert not funding_history_issues(initial, [record], final)
+    corrupted = deepcopy(record); changed = deepcopy(final)
+    corrupted['attempt_outcomes'][-1]['dispatch_phases']['dispatch']['error_code'] = 'io'
+    changed['attempt_outcomes'][-1] = deepcopy(corrupted['attempt_outcomes'][-1])
+    assert funding_history_issues(initial, [corrupted], changed)
     record['history'] = [event for event in record['history'] if not event['kind'].endswith('preflight_rejected')]
     final['history'] = deepcopy(record['history'])
     assert funding_history_issues(initial, [record], final)
