@@ -199,4 +199,9 @@ def load_checkpoint(path: Path, session_id: str, target: str) -> CampaignMemory:
         if not CHECKPOINT_FIELDS <= data.keys():
             raise ValueError("Incomplete solid-route checkpoint extension")
         loop_type = solid_loop_type(loop_type)
+    if {"coal_supply_schema", "coal_targets", "coal_epoch", "coal_commitments"} & data.keys():
+        from .coal_controller import CHECKPOINT_FIELDS, coal_loop_type
+        if not CHECKPOINT_FIELDS <= data.keys():
+            raise ValueError("Incomplete coal checkpoint extension")
+        loop_type = coal_loop_type(loop_type)
     return loop_type.memory_type.from_bytes(raw, session_id, target)

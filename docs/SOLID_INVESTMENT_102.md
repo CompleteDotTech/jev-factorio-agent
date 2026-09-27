@@ -169,7 +169,7 @@ lacks the field means the old false treatment only; it cannot be resumed as true
 Resume-time policy changes fail before native attachment. Ordinary controller
 loads still reject the solid extension rather than dropping ownership state.
 
-The native extension's implementation revision is now 2 within the same contract
+The native extension's implementation revision is now 4 within the same contract
 family, reflecting the narrower partial-service guard. An already attached older
 revision is refused rather than silently patched, detached or reset. This is a
 fail-closed compatibility boundary, not a tested in-world migration procedure.
@@ -198,3 +198,9 @@ The native Lua runs in a Lua 5.2 VM with API-shaped doubles. These tests do not
 exercise Factorio physics, real coal distribution, research progress or native
 latency. Independent review, signed publication/CI/merge, representative native
 hauling comparisons and the full useful-progress window remain open.
+
+
+The experimental mixed coal composition retains downstream paid-kit funding.
+An incomplete coal corridor is not a downstream investment slot; fresh kit
+permission applies the same distinction. Pending work from either family still
+blocks new acquisition, and private coal-source stock cannot finance a kit.

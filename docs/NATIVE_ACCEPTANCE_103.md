@@ -15,11 +15,17 @@ and independently reviewed. Issues may stay evidence-pending while source is
 merged/staged; they need not be closed before the shared native run. Current source
 contains #100's narrow paid straight-corridor foundation and #102's explicit,
 kit-funded science-investment policy; neither establishes native acceptance or a
-complete logistics network. #101's coal-source bootstrap and multi-consumer fuel
-distribution remain unfinished engineering, and broader automatic kit/source/network
-support remains limited. Check the current issues and reviewed source rather than
+complete production logistics network. #101 now has an experimental paid electric
+source/multi-consumer composition. Automatic coal-kit acquisition, coal investment
+policy, production handoff and native qualification remain unfinished. Check the current issues and reviewed source rather than
 treating an older packet's status table as today's implementation state. Missing
 engineering is a real blocker, not just a native-evidence formality.
+
+The source-only coal experiment in `COAL_SUPPLY_EXPERIMENT.md` adds explicit
+paid independent electric-source bundles, explicitly bound mixed downstream routes,
+shared kit locks and recovery tests. It does not implement
+a complete production coal/downstream treatment or satisfy the native gates. Its
+pre-carried kit, existing-power and engine-accounting assumptions remain explicit.
 
 Before deploying the solid composition, include the first-observation publication
 barrier described in `SOLID_INITIAL_OBSERVATION_TRANSACTION.md` and qualify its

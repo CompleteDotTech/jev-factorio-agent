@@ -153,7 +153,11 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
             batched = self._batch_collection(plan, amount)
             if batched.steps[0].action == "factory_wait":
                 missing = math.ceil(amount - self.snapshot.inventory.get(item, 0))
+                from ..coal_supply import private_source_roles
+                network_sources = private_source_roles(self.snapshot)
                 for role, machine in sorted(self.entities.items()):
+                    if role in network_sources:
+                        continue  # The batch-wait fallback obeys the same source lock.
                     available = machine.get("output", {}).get(item, 0)
                     if available and role != plan.steps[0].parameters["role"]:
                         alternative = self._batch_collection(

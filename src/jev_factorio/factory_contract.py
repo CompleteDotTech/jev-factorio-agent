@@ -5,10 +5,11 @@ import math
 
 from .state import GameSnapshot
 from . import launch_readiness
-from . import output_buffers, input_routes, production_sites, mining_outposts, successors, solid_routes
+from . import output_buffers, input_routes, production_sites, mining_outposts, successors, solid_routes, coal_supply
 
 COMMAND_FIELDS = {
     **launch_readiness.COMMANDS,
+    coal_supply.COMMAND: coal_supply.FIELDS,
     solid_routes.COMMAND: solid_routes.FIELDS,
     mining_outposts.COMMAND: mining_outposts.FIELDS,
     output_buffers.COMMAND: output_buffers.FIELDS,
@@ -28,7 +29,7 @@ COMMAND_FIELDS = {
     "factory_wait": set(),
 }
 EFFECTS = {
-    *launch_readiness.EFFECTS, *solid_routes.EFFECTS,
+    *launch_readiness.EFFECTS, *solid_routes.EFFECTS, *coal_supply.EFFECTS,
     "successor_route_available", "player_bound", "machine", "machine_recipe", "machine_input", "machine_fuel",
     "machine_output", "connection", "research_started", "researched", "research_progress",
     "crafting_idle", "rocket_ready", "rocket_parts", "rocket_launched", "produced", "transfer",
@@ -37,6 +38,9 @@ EFFECTS = {
 
 
 def validate_command(action: str, parameters: dict) -> None:
+    if action == coal_supply.COMMAND:
+        coal_supply.validate(parameters)
+        return
     if action == solid_routes.COMMAND:
         solid_routes.validate(parameters)
         return
@@ -87,6 +91,10 @@ def connected(factory: dict, source: str, target: str, kind: str, fluid: str) ->
 
 def satisfied(effect: str, item: str, threshold: float, parameters: dict, snapshot: GameSnapshot,
               action: str = "") -> bool:
+    if effect == "coal_component":
+        return action == coal_supply.COMMAND and coal_supply.component_complete(parameters, snapshot)
+    if effect == "coal_network_flow":
+        return action == "factory_wait" and coal_supply.flow_complete(snapshot)
     if effect == "solid_component":
         return action == solid_routes.COMMAND and solid_routes.component_complete(parameters, snapshot)
     if effect == "solid_flow":
@@ -161,6 +169,8 @@ def satisfied(effect: str, item: str, threshold: float, parameters: dict, snapsh
 
 def allowed(action: str, parameters: dict, snapshot: GameSnapshot) -> bool:
     validate_command(action, parameters)
+    if "coal_supply" in snapshot.factory and not coal_supply.permits(action, parameters, snapshot):
+        return False
     if "solid_routes" in snapshot.factory and not solid_routes.permits(action, parameters, snapshot):
         return False
     if "successors" in snapshot.factory:
@@ -193,6 +203,8 @@ def allowed(action: str, parameters: dict, snapshot: GameSnapshot) -> bool:
                 return False
         except ValueError:
             return False
+    if action == coal_supply.COMMAND:
+        return coal_supply.allowed(parameters, snapshot)
     if action == solid_routes.COMMAND:
         return solid_routes.allowed(parameters, snapshot)
     if action == mining_outposts.COMMAND:

@@ -120,8 +120,10 @@ conflicting placement is rejected or reported as a route fault, not demolished.
 ## What flow evidence means
 
 The native installer also binds the explicit `straight-solid-corridor-v1` contract
-family and implementation revision 2; an older revision or a different
-experimental protocol-1 implementation is not a compatible reattachment. Do not stack implementations that share command/storage names.
+family, implementation revision 4 and `full-corridor-manhattan-v1` reservation
+marker. An older revision or a different experimental protocol-1 implementation
+is not a compatible reattachment. No in-place migration or retained-state reset
+is authorized. See `SOLID_CORRIDOR_RESERVATIONS.md` and `COAL_SUPPLY_EXPERIMENT.md`.
 
 The observer returns a versioned coherent route envelope bound to session, game
 tick, actor, surface and force. It records proposed layout, paid prefix, connected

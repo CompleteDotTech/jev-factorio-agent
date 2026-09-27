@@ -239,6 +239,10 @@ def candidates(snapshot, catalog, goal, *, outcomes=(), reserved=None, job=None,
     if (goal != "rocket_launch" or job is not None or snapshot.factory.get("crafting_queue", 0)
             or capital_active or any(row["pending"] for row in rows.values())):
         return [], {"reason": "goal_or_pending_or_other_investment", "routes": {}}
+    # Fuel projects have their own demand/ownership policy. A paid coal corridor
+    # must not become the single active *downstream* project and exclude science.
+    # The global pending barrier above still covers both families of mutation.
+    rows = {key: row for key, row in rows.items() if row["target"]["inventory"] == "input"}
     builders = {p.steps[0].parameters["route"]: p for p in build_candidates(snapshot, goal)}
     active = sorted(key for key, row in rows.items() if row["state"] == "building")
     demand, diagnostics["reason"] = requirements(snapshot, catalog, reserved=reserved, job=job)
@@ -359,7 +363,8 @@ def _fresh_kit_permission(plan, step, snapshot, catalog, *, outcomes, reserved, 
                     or snapshot.tick >= funding["deadline_tick"])):
             return False
         if (job is not None or snapshot.factory.get("crafting_queue", 0)
-                or any(other["pending"] or other["state"] == "building"
+                or any(other["pending"] or (other["state"] == "building"
+                       and other["target"]["inventory"] == "input")
                        for other in contract.routes(snapshot).values())):
             return False
         demand, _ = requirements(snapshot, catalog, reserved=reserved, job=job)

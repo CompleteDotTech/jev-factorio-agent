@@ -259,3 +259,13 @@ kit already carried, and labels estimated payback separately from verified
 service-history evidence. See [policy boundaries](docs/SOLID_INVESTMENT_102.md)
 and [resume review corrections](docs/SOLID_RESUME_REVIEW.md). This does not enable
 a production CLI treatment or qualify a native campaign.
+
+### Experimental coal-source bundles
+
+The explicit source-only [coal supply experiment](docs/COAL_SUPPLY_EXPERIMENT.md)
+adds paid independent electric coal branches, bounded explicit mixed downstream
+routes, shared remaining-kit locks and checkpoint recovery tests. The complete
+intent list stays immutable and uses at most four disjoint routes. It is not
+enabled by the production CLI or supervisor. Automatic coal kit acquisition and the
+coal demand/payback policy remain incomplete; modeled builds do not establish
+native flow, a complete production treatment, or acceptance in #101/#92/#103.

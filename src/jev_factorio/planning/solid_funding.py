@@ -98,8 +98,10 @@ def acquire(row: dict, snapshot: GameSnapshot, catalog: Catalog, *, reserved=Non
         raise ValueError('Kit owned-output visibility exceeds bound')
     ids = Counter(m.get('unit_number') for m in entities.values() if isinstance(m, dict)
                   and routes.integer(m.get('unit_number'), 1))
+    from ..coal_supply import private_source_roles
+    network_sources = private_source_roles(snapshot)
     outputs = {role: dict(machine.get('output', {})) for role, machine in entities.items()
-               if isinstance(machine, dict) and routes.integer(machine.get('unit_number'), 1)
+               if role not in network_sources and isinstance(machine, dict) and routes.integer(machine.get('unit_number'), 1)
                and ids[machine['unit_number']] == 1 and isinstance(machine.get('output', {}), dict)}
     expansions, craft_ticks, service_ticks = 0, 0.0, 0.0
     actor = position(snapshot.player_position)

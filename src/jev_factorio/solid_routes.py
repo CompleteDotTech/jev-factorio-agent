@@ -158,7 +158,7 @@ def validate_row(row: dict, route: str) -> None:
                 or not integer(flow["target_unit"], 1) or flow["target_unit"] != row["target"]["unit_number"]
                 or any(not integer(flow[key]) for key in ("first_tick", "last_tick", "last_positive_tick", "positive_samples", "sent", "received", "unattributed_loss"))
                 or not flow["first_tick"] <= flow["last_positive_tick"] <= flow["last_tick"]
-                or flow["method"] != ("exclusive_fuel_lower_bound" if row["target"]["inventory"] == "fuel" else "stoichiometric_balance")
+                or flow["method"] not in ({"exclusive_fuel_lower_bound", "exclusive_mined_coal_lower_bound"} if row["target"]["inventory"] == "fuel" else {"stoichiometric_balance"})
                 or (flow["method"] == "stoichiometric_balance" and flow["unattributed_loss"] != 0)
                 or flow["received"] > flow["sent"]):
             raise ValueError("Invalid solid-flow evidence")
@@ -211,6 +211,10 @@ def routes(snapshot) -> dict:
     endpoints, components, receipts = set(), set(), set()
     for key, row in data["routes"].items():
         validate_row(row, key)
+        if row["flow"].get("method") == "exclusive_mined_coal_lower_bound":
+            from .coal_supply import binds_solid_flow
+            if not binds_solid_flow(row, snapshot):
+                raise ValueError("Mined coal route lacks matching source evidence")
         # Initial topology permits one corridor per endpoint; no silent branches.
         ids = {row["source"]["unit_number"], row["target"]["unit_number"]}
         new = {p["unit_number"] for p in row["parts"].values()}
@@ -314,7 +318,10 @@ def permits(action, parameters, snapshot) -> bool:
                     # mutation, recipe lock, or connected-route accounting.
                     if not (row["state"] == "building" and not row["pending"]
                             and "send" not in row["parts"]):
-                        return False
+                        from .coal_supply import manual_permitted
+                        if (row["pending"] or role != row["target"]["role"]
+                                or not manual_permitted(action, parameters, snapshot)):
+                            return False
         return True
     except (ValueError, KeyError, TypeError, AttributeError):
         return False

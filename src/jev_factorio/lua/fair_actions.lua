@@ -182,7 +182,7 @@ local function mining_entity(player, position, item)
     if item == "wood" then filter.type = "tree" else filter.name = item end
     local best, best_distance
     for _, entity in pairs(player.surface.find_entities_filtered(filter)) do
-        if entity.valid and entity.minable then
+        if entity.valid and entity.minable and (not storage.coal_supply or not storage.coal_supply.resource_reserved(entity)) then
             local distance = (entity.position.x - position.x)^2
                 + (entity.position.y - position.y)^2
             if not best or distance < best_distance then
@@ -257,7 +257,7 @@ fair.next_mine_target = function(item, radius)
     if item == "wood" then filter.type = "tree" else filter.name = item end
     local best, best_distance
     for _, entity in pairs(player.surface.find_entities_filtered(filter)) do
-        if entity.valid and entity.minable then
+        if entity.valid and entity.minable and (not storage.coal_supply or not storage.coal_supply.resource_reserved(entity)) then
             local horizontal = entity.position.x - player.position.x
             local vertical = entity.position.y - player.position.y
             local distance = horizontal * horizontal + vertical * vertical
@@ -364,6 +364,7 @@ fair.find_build_site = function(name, center, radius)
                     or not storage.campaign.production_reserved(name, position, direction))
                     and (not storage.campaign or not storage.campaign.mining_outpost_reserved
                     or not storage.campaign.mining_outpost_reserved(name, position, direction))
+                    and (not storage.coal_supply or not storage.coal_supply.placement_reserved(name, position, direction))
                     and (not best or distance < best_distance) then
                     best = {position = position, direction = direction}
                     best_distance = distance
@@ -377,6 +378,8 @@ end
 
 fair.place = function(name, position, direction)
     local player = fair.actor()
+    assert(not storage.coal_supply or not storage.coal_supply.placement_reserved(name, position, direction),
+        "Coal network owns this construction footprint")
     assert(not player.surface.find_entity(name, position), "Building already exists")
     assert((player.position.x - position.x)^2 + (player.position.y - position.y)^2
         <= player.build_distance^2, "Building is outside normal reach")
@@ -409,6 +412,8 @@ fair.insert = function(name, position, item, quantity, expected_unit)
         assert(type(expected_unit) == "number" and expected_unit > 0 and expected_unit % 1 == 0
             and entity.unit_number == expected_unit, "Transfer target identity changed")
     end
+    assert(not storage.coal_supply or storage.coal_supply.external_insert_allowed(entity, item),
+        "Coal insert must use the journaled campaign transfer")
     local inventory = player.get_main_inventory()
     assert(inventory.get_item_count(item) >= quantity, "Missing transfer items")
     assert(entity.can_insert{name = item, count = quantity}, "Transfer destination is full")

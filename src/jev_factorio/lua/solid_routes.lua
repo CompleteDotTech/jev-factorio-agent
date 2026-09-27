@@ -3,12 +3,12 @@ local c, fair = storage.campaign, storage.fair
 assert(c and fair, "Solid routes require the existing campaign and fair actor")
 local r = storage.solid_routes
 if r then
-    assert(r.protocol == 1 and r.contract_family == "straight-solid-corridor-v1" and r.implementation_revision == 3
+    assert(r.protocol == 1 and r.contract_family == "straight-solid-corridor-v1" and r.implementation_revision == 4
         and r.reservation_contract == "full-corridor-manhattan-v1" and c.observe == r.observer and c.transfer == r.transfer
         and c.configure == r.configure, "Solid route runtime requires reconciliation")
     return
 end
-r = {protocol=1, contract_family="straight-solid-corridor-v1", implementation_revision=3, reservation_contract="full-corridor-manhattan-v1", cells={}, offers={}, intents={}, serial=0}
+r = {protocol=1, contract_family="straight-solid-corridor-v1", implementation_revision=4, reservation_contract="full-corridor-manhattan-v1", cells={}, offers={}, intents={}, serial=0}
 storage.solid_routes = r
 local vectors = {{x=0,y=-1},{x=1,y=0},{x=0,y=1},{x=-1,y=0}}
 local source_names = {["wooden-chest"]=true,["iron-chest"]=true,["steel-chest"]=true,
@@ -136,6 +136,7 @@ local function foreign_connections(cell)
     local source,target=paid_geometry(cell)
     local allowed={[source.unit_number]=true,[target.unit_number]=true}
     for _,part in pairs(cell.parts) do allowed[part.unit_number]=true end
+    if r.coal then r.coal.allow_source(cell,allowed) end
     -- Include long-handed arms and mining drops around both endpoint footprints.
     for _,endpoint in ipairs({source,target}) do
         local box=bounds(endpoint)
@@ -174,7 +175,8 @@ local function powered_position(source,position)
     local poles=source.surface.find_entities_filtered{position=position,radius=10,type="electric-pole",force=source.force,limit=65}
     assert(#poles<=64,"Power survey exceeds bound")
     for _,pole in pairs(poles) do
-        local radius=pole.prototype.supply_area_distance
+        local radius=pole.prototype.get_supply_area_distance(pole.quality)
+        assert(type(radius)=="number" and radius>=0 and radius<math.huge,"Invalid solid power radius")
         local owned=false
         for _,registered in pairs(c.entities) do if registered==pole then owned=true;break end end
         if owned and pole.electric_network_id and radius and math.abs(pole.position.x-position.x)<=radius
@@ -186,6 +188,7 @@ end
 -- Retain faulted/ambiguous reservations until an authorized reconciliation.
 -- Uncommitted offers are alternatives and never reserve against each other.
 local function reservations_clear(cell)
+    if r.coal then r.coal.corridor_reservations_clear(cell) end
     for id,other in pairs(r.cells) do
         if id~=cell.route then
             for _,a in ipairs(cell.steps) do
@@ -220,6 +223,13 @@ local function failure_code(value)
     return "qualification_failed" -- Never publish arbitrary native error text.
 end
 local function survey(intent)
+    if r.coal then
+        local found,cell=r.coal.corridor_offer(intent)
+        if found then
+            if cell then clear(cell);r.serial=r.serial+1;cell.layout="solid-layout:"..r.serial end
+            return cell,"endpoint_unavailable"
+        end
+    end
     local src=owner(intent.source)
     local source,entity=endpoint(intent.source,intent.item,src.type=="container" and "chest" or "output",true)
     local target=endpoint(intent.target,intent.item,intent.destination,false)
@@ -340,6 +350,7 @@ c.prepare_solid_route=function(args)
     assert(not cell.pending or cell.pending.part==args.part and cell.pending.receipt==args.receipt,"Different solid action pending")
     assert(not cell.pending or cell.pending.phase=="prepared","Ambiguous solid dispatch requires reconciliation")
     clear(cell);affordable(cell)
+    if r.coal then r.coal.construction_gate(cell,args.receipt) end
     r.cells[cell.route],r.offers[cell.route]=cell,nil
     cell.pending=cell.pending or {part=args.part,receipt=args.receipt,phase="prepared",spec=s}
     return reply{position=s.position,name=s.name}
@@ -350,6 +361,7 @@ c.build_solid_route=function(args)
     local pending=cell.pending
     assert(pending and pending.part==args.part and pending.receipt==args.receipt and pending.phase=="prepared","Solid action not prepared")
     clear(cell);local player=affordable(cell)
+    if r.coal then r.coal.construction_gate(cell,args.receipt) end
     pending.before=player.get_item_count(s.name);pending.phase="dispatching"
     local receipt=fair.place(s.name,s.position,s.direction)
     local e=player.surface.find_entity(s.name,s.position)
@@ -394,6 +406,7 @@ local function sample(cell)
             pipe=pipe+line.get_item_count(cell.item)
         end
     end
+    if r.coal and r.coal.sample(cell,pipe) then return true end
     local available=stock(inventory(source,cell.source.inventory),cell.item,true)
     local produced=cell.source.inventory=="output" and source.products_finished or 0
     local target_stock=stock(inventory(target,cell.target.inventory),cell.item,false)
@@ -445,6 +458,7 @@ local function sample(cell)
 end
 local old_observe=c.observe
 r.observer=function()
+    if r.coal then r.coal.before_observe() end
     for _,cell in pairs(r.cells) do
         if cell.pending and cell.pending.phase=="placed" then
             if not pcall(finish_pending,cell) then cell.fault="receipt_reconciliation_failed" end
@@ -489,6 +503,7 @@ r.observer=function()
     assert(count(rows)<=4,"Solid route cardinality exceeded")
     result.solid_routes={protocol=1,session_id=storage.jev_session_id,tick=game.tick,
         actor_index=p.index,surface_index=a.surface.index,force_index=a.force.index,routes=rows,diagnostics=diagnostics}
+    if r.coal then result.coal_supply=r.coal.snapshot() end
     return result
 end
 local old_transfer,old_configure=c.transfer,c.configure
@@ -509,7 +524,15 @@ local function guard(role,item,configure)
     end
 end
 r.transfer=function(role,item,quantity,receipt,extracting)
+    if r.coal and r.coal.handles(role,item) then
+        return r.coal.transfer(old_transfer,role,item,quantity,receipt,extracting)
+    end
     guard(role,item,false);return old_transfer(role,item,quantity,receipt,extracting)
 end
 r.configure=function(role,recipe) guard(role,nil,true);return old_configure(role,recipe) end
 c.observe,c.transfer,c.configure=r.observer,r.transfer,r.configure
+
+-- Narrow same-version extension surface. Not an external observation provider.
+r.coal_api={endpoint=endpoint,endpoint_ok=endpoint_ok,owner=owner,epoch=epoch,stock=stock,
+    inventory=inventory,clear=clear,topology=topology,paid_geometry=paid_geometry,remaining=remaining,
+    powered_position=powered_position,reply=reply,inside=inside}
