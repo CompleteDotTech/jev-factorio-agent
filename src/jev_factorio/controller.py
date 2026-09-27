@@ -27,7 +27,7 @@ from .planning.goals import GOALS, completed, goal_order
 from .skills import Plan, compile_plans
 from .state import GameSnapshot
 from .provenance import gameplay_context
-from .telemetry import DISPATCH_STAGES, error_code, make_attempt, phase, utc_now, validate_phase
+from .telemetry import DISPATCH_STAGES, error_code, fingerprint, make_attempt, phase, utc_now, validate_phase
 
 
 def _json_safe(value):
@@ -332,6 +332,9 @@ class HierarchicalLoop(AgentLoop):
         with span("record_console"):
             print(f"[t={before.tick}] {self.memory.status}: {action} -> {outcome}", flush=True)
         return record
+
+    def _model_history(self) -> list:
+        return self.memory.history[-8:]
 
     def _model_facts(self, snapshot: GameSnapshot) -> dict:
         facts = snapshot.for_jev()
@@ -939,6 +942,12 @@ class HierarchicalLoop(AgentLoop):
                 self._planning_diagnostics["ranked_plan_ids"] = [p.id for p in plans]
                 self._planning_diagnostics["candidate_evidence"] = deepcopy(
                     self._selection_support["candidate_evidence"])
+            if getattr(self, "_solid_science_policy", False):
+                # Capture the exact executable frontier independently of the
+                # later selected-plan event. This diagnostic is never a prompt
+                # field or an authorization gate and adds no observation/save.
+                self._planning_diagnostics["candidate_frontier"] = [
+                    {"id": plan.id, "sha256": fingerprint(plan.to_dict())} for plan in plans]
             provider_ready = not isinstance(self.jev, ProviderCircuit) or self.jev.state["phase"] == "healthy"
             singleton = bool(self._selection_support and len(plans) == 1
                              and self.policy == "hybrid" and provider_ready)
@@ -959,7 +968,7 @@ class HierarchicalLoop(AgentLoop):
                     facts["factory"].pop("connectors", None)
                     facts["factory"]["native_transfer_receipt_count"] = len(receipts)
                 state = {"facts": facts, "active_goal": asdict(GOALS[self.memory.active_goal]),
-                         "history": self.memory.history[-8:], **self._selection_support}
+                         "history": self._model_history(), **self._selection_support}
                 if self.factory_scheduling == "ready-work":
                     state["production_scheduling"] = {
                         "objective": "Advance the next production batch identified in plan descriptions",
@@ -999,7 +1008,10 @@ class HierarchicalLoop(AgentLoop):
             self.memory.active_plan = chosen.to_dict()
             self.memory.step_index = 0
             self.memory.event("plan_committed", plan=chosen.id, source=self._decision.source,
-                              tick=snapshot.tick)
+                              tick=snapshot.tick, **({'definition': chosen.to_dict()}
+                                  if getattr(self, '_solid_science_policy', False)
+                                  and not (chosen.id.startswith('solid-project:')
+                                           and chosen.id.endswith(':kit')) else {}))
             self._save()
             if self._trace.enabled:
                 self._trace.emit("plan_committed", {"plan_id": chosen.id, "plan": chosen.to_dict(),

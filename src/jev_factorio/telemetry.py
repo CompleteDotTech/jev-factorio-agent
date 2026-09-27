@@ -11,11 +11,14 @@ from datetime import datetime, timezone
 from typing import Callable, Iterator
 from uuid import uuid4
 from .iteration_timing import span
+from .preflight_codes import CONNECTION_PREFLIGHT_CODES
 
 DISPATCH_STAGES = {"dispatch", "entity_lookup", "approach", "transfer_rpc"}
 STAGES = DISPATCH_STAGES | {"observe", "pre_dispatch_observe", "post_dispatch_observe",
                             "selection", "verification", "planning"}
-ERROR_CODES = {"timeout", "connection", "http", "invalid_data", "io", "interrupted", "execution"}
+ERROR_CODES = ({"timeout", "connection", "http", "invalid_data", "io", "interrupted", "execution",
+                "storage_preflight_rejected", "maintenance_preflight_rejected"}
+               | {"connection_preflight:" + code for code in CONNECTION_PREFLIGHT_CODES})
 WAIT_ACTIONS = {"idle", "factory_wait"}
 Trace = Callable[[dict], None]
 
@@ -27,6 +30,17 @@ def utc_now() -> str:
 def error_code(error: BaseException) -> str:
     """Use a fixed vocabulary; never serialize messages, URLs, or class names."""
     import requests
+    from .backends.errors import ConnectionPreflightRejected
+    from .operational_safety import MaintenanceAdmissionClosed, StoragePressure
+
+    # Mirror the controller's exact rejection contracts. Generic errors and a
+    # ConnectionPreflightRejected subclass remain ambiguous, not local proof.
+    if type(error) is ConnectionPreflightRejected and error.code in CONNECTION_PREFLIGHT_CODES:
+        return "connection_preflight:" + error.code
+    if isinstance(error, MaintenanceAdmissionClosed):
+        return "maintenance_preflight_rejected"
+    if isinstance(error, StoragePressure):
+        return "storage_preflight_rejected"
 
     for types, code in (
         ((KeyboardInterrupt, SystemExit), "interrupted"),
@@ -165,11 +179,12 @@ def validate_attempt(attempt: dict, *, finished: bool = False) -> None:
         attempt["outcome"] not in {
             "verified", "wait_replanned", "wait_expired", "partial_transfer_reconciled",
             "zero_effect_transfer_reconciled", "rejected_transfer_reconciled",
-            "connection_preflight_rejected",
+            "connection_preflight_rejected", "storage_preflight_rejected", "maintenance_preflight_rejected",
         }
         or (attempt["outcome"] not in {"verified", "partial_transfer_reconciled",
                                         "zero_effect_transfer_reconciled",
-                                        "rejected_transfer_reconciled", "connection_preflight_rejected"}
+                                        "rejected_transfer_reconciled", "connection_preflight_rejected",
+                                        "storage_preflight_rejected", "maintenance_preflight_rejected"}
             and attempt["action"] not in WAIT_ACTIONS)
         or (attempt["outcome"] in {"partial_transfer_reconciled", "zero_effect_transfer_reconciled"}
             and attempt["action"] not in {"factory_insert", "factory_extract"})

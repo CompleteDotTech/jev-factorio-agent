@@ -145,36 +145,7 @@ class SuccessorMixin:
     def _investment_step_allowed(self, plan, step, snapshot):
         if not super()._investment_step_allowed(plan, step, snapshot):
             return False
-        marker = (plan.materials or {}).get(contract.MARKER, {})
-        for source, project in self.memory.successor_projects.items():
-            if project['status'] != 'active' or marker.get('source') == source and marker.get('anchor') == project['anchor']:
-                continue
-            try:
-                site = site_sources(snapshot).get(source, {})
-                if site.get('anchor') != project['anchor']:
-                    return False
-                required = dict(site['bill'])
-                if project['source_unit']:
-                    required['stone-furnace'] -= 1
-                output = snapshot.factory.get('output_buffers', {}).get('sources', {}).get(source, {})
-                for part in output.get('parts', {}):
-                    name = 'wooden-chest' if part == 'chest' else 'burner-inserter'
-                    required[name] -= 1
-                route = snapshot.factory.get('input_routes', {}).get('sources', {}).get(source, {})
-                for spec in route.get('steps', []):
-                    if spec['part'] in route.get('parts', {}):
-                        required[spec['name']] -= 1
-                if any(v < 0 for v in required.values()):
-                    return False
-                # Only pieces already carried are protected. Coal and seed ore
-                # are not locked away from predecessor/emergency maintenance.
-                for item, cost in (step.costs or {}).items():
-                    have = snapshot.inventory.get(item, 0)
-                    if have - cost < min(have, required.get(item, 0)):
-                        return False
-            except (KeyError, TypeError, ValueError):
-                return False
-        return True
+        return contract.investment_step_allowed(self.memory.successor_projects, plan, step, snapshot)
 
     def _pause_successor(self, source, reason):
         project = self.memory.successor_projects[source]

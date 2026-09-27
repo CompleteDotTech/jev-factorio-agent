@@ -67,11 +67,78 @@ def intent(row: dict) -> dict:
 
 
 def catalog_digest(row: dict, snapshot: GameSnapshot, catalog: Catalog) -> str:
+    return digest(catalog_evidence(row, snapshot, catalog))
+
+
+def catalog_evidence(row: dict, snapshot: GameSnapshot, catalog: Catalog) -> dict:
     bill = catalog.material_demands(routes.remaining(row), {}, snapshot.researched or [])
     if len(bill.batches) > MAX_EXPANSIONS:
         raise ValueError('Kit catalog graph exceeds bound')
-    return digest({'recipes': {name: catalog.recipes[name] for name in sorted(bill.batches)},
-                   'hand_categories': catalog.hand_categories, 'version': catalog.version})
+    return {'recipes': {name: catalog.recipes[name] for name in sorted(bill.batches)},
+            'hand_categories': catalog.hand_categories, 'version': catalog.version}
+
+
+def acquisition_evidence(row: dict, snapshot: GameSnapshot, catalog: Catalog, reserved: dict) -> dict:
+    """Declare static policy definitions; replay applies fresh research facts.
+
+    A declaration must not change when research advances or a machine changes
+    recipe. Capture the bounded kit/red-green dependency closure regardless of
+    current unlocks; this does not make a locked recipe executable.
+    """
+    from .solid_investment import PACKS, RECIPES
+    def closure(roots):
+        names, visited, pending = set(), set(), list(sorted(roots))
+        while pending:
+            item = pending.pop()
+            if item in visited:
+                continue
+            visited.add(item)
+            if len(visited) > 512:
+                raise ValueError('Admission recipe evidence exceeds bound')
+            try:
+                recipe = catalog.recipe_for(item)
+            except ValueError:
+                continue  # Raw materials have no producer in a recipe catalog.
+            names.add(recipe['name'])
+            pending.extend(value['name'] for value in recipe.get('ingredients', []))
+        return names
+    kit_names = closure({'inserter', 'transport-belt'})
+    names = kit_names | closure(RECIPES)
+    kit = {'recipes': {name: catalog.recipes[name] for name in sorted(kit_names)},
+           'hand_categories': catalog.hand_categories, 'version': catalog.version}
+    technologies = {}
+    for name, value in catalog.technologies.items():
+        effects = [effect for effect in value.get('effects', [])
+                   if effect.get('type') == 'unlock-recipe' and effect.get('recipe') in names]
+        ingredients = value.get('ingredients', [])
+        supported = (isinstance(ingredients, list) and 1 <= len(ingredients) <= 8
+                     and all(isinstance(item, dict) and item.get('name') in PACKS for item in ingredients))
+        if supported or effects:
+            technologies[name] = {'effects': effects}
+            if supported:
+                technologies[name].update({key: value[key] for key in ('count', 'ingredients', 'trigger') if key in value})
+    return {'catalog': kit, 'reserved': reserved, 'technologies': technologies,
+            'recipes': {name: catalog.recipes[name] for name in sorted(names - set(kit['recipes']))},
+            'stack_sizes': {row['item']: catalog.stack_sizes.get(row['item'], 20)}}
+
+
+def validate_catalog_declarations(values: dict, tick: int) -> None:
+    """Validate optional audit metadata without granting acquisition authority."""
+    if not isinstance(values, dict) or len(values) > routes.MAX_ROUTES:
+        raise ValueError('Invalid funding catalog declarations')
+    for key, value in values.items():
+        if (not isinstance(key, str) or not key.startswith('solid-project:')
+                or len(key) != len('solid-project:') + 64
+                or any(c not in '0123456789abcdef' for c in key[len('solid-project:'):])
+                or not isinstance(value, dict) or set(value) != {
+                    'schema', 'observed_tick', 'version', 'catalog_sha256', 'acquisition_sha256'}
+                or type(value['schema']) is not int or value['schema'] != 1
+                or not routes.integer(value['observed_tick'], 0, tick)
+                or not isinstance(value['version'], str) or not value['version'].startswith('2.0.')
+                or any(not isinstance(value[field], str) or len(value[field]) != 64
+                       or any(c not in '0123456789abcdef' for c in value[field])
+                       for field in ('catalog_sha256', 'acquisition_sha256'))):
+            raise ValueError('Invalid funding catalog declaration')
 
 
 def _positive(value: object) -> bool:

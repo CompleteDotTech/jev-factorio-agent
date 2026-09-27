@@ -46,6 +46,15 @@ the primary checkpoint or audit failure.
 The successful clock/count contract is unchanged. This is a tested callback-boundary
 contract, not signal masking or an atomic guarantee at every Python instruction.
 
+`tests/test_solid_component_metrics.py` additionally exercises counter failure
+after each of the first four paid corridor components, at action return, result
+capture and event emission, with ordinary errors and process interruptions. The
+36 cases retain exact prepared checkpoint bytes, the earlier owned prefix and
+failure history while the backend double is one paid component ahead. Disabling
+metrics does not permit another observation or mutation. These regressions pass
+with the existing guard; they do not change its recovery policy or establish
+native engine reconciliation.
+
 ## Measurement and durability
 
 Operation wall/process-CPU timing is unchanged and excludes capture and sink work.

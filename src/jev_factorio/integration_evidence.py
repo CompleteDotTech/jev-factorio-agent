@@ -27,6 +27,7 @@ from .campaign_progress import SCIENCE
 from .iteration_timing import NAMES, validate_timing
 from .latency_report import distribution
 from .memory import load_checkpoint
+from .solid_funding_evidence import funding_history_issues
 from .planning import capital
 from .telemetry import validate_phase
 
@@ -669,6 +670,7 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
     issues.update(final_successor_issues(initial, final, rows[-1], observed_successor_sources))
     issues.update(successor_history_issues(rows))
     issues.update(project_history_issues(initial, rows, final))
+    issues.update(funding_history_issues(initial, rows, final))
     reject(set(final.get('solid_commitments', {})) != set(committed), 'final_route_checkpoint_mismatch')
     for key, current in committed.items():
         reject(final.get('solid_commitments', {}).get(key) != current, 'final_route_checkpoint_mismatch')

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections import Counter
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 import json
 from pathlib import Path
 
@@ -18,7 +18,7 @@ from .planning import solid_investment, solid_funding
 from .planning.demand import SupplyLedger
 from .skills import Plan
 from .research_log import ResearchLogError, RunConfiguration
-from .telemetry import phase
+from .telemetry import phase, fingerprint
 
 CHECKPOINT_FIELDS = {"solid_routes_schema", "solid_intents", "solid_epoch", "solid_commitments"}
 UNBOUND_FAULT = "Solid-route epoch unbound; native reconciliation required"
@@ -32,6 +32,7 @@ class SolidRouteMixin:
             raise ValueError("Solid science policy must be an explicit boolean")
         self._solid_science_policy = solid_science_policy
         self._solid_policy_evidence = {}
+        self._solid_funding_release = None
         self._solid_intents = validate_intents(solid_intents)
         self._solid_fault = False
         self._solid_resume_observing = False
@@ -228,6 +229,19 @@ class SolidRouteMixin:
             self.memory.reason = ("Solid-route evidence invalid; preserve pending state and ownership"
                                   if self.memory.solid_epoch else UNBOUND_FAULT)
         if not self._solid_fault:
+            if self._solid_science_policy:
+                for value in routes.routes(snapshot).values():
+                    key = solid_funding.project_key(value)
+                    if (key not in self.memory.solid_funding_catalogs
+                            and len(self.memory.solid_funding_catalogs) < routes.MAX_ROUTES):
+                        try:
+                            declaration = solid_funding.acquisition_evidence({**value, 'parts': {}}, snapshot, self.catalog, {})
+                            self.memory.solid_funding_catalogs[key] = {
+                                'schema': 1, 'observed_tick': snapshot.tick, 'version': self.catalog.version,
+                                'catalog_sha256': solid_funding.digest(declaration['catalog']),
+                                'acquisition_sha256': solid_funding.digest({k: v for k, v in declaration.items() if k != 'reserved'})}
+                        except (ValueError, KeyError, TypeError, AttributeError):
+                            pass  # Missing audit declaration cannot authorize or block a native action.
             self._reconcile_solid_funding(snapshot)
         self._solid_evidence = deepcopy(snapshot.factory.get("solid_routes", {}))
         self._save()  # Exact paid prefix is durable before another actor mutation.
@@ -244,25 +258,33 @@ class SolidRouteMixin:
                     job=getattr(self, "_job", lambda: None)(), funding=state, failures=self.memory.failures)):
             raise ValueError("Cannot commit an unqualified solid kit")
         row = routes.routes(snapshot)[marker["route"]]
+        acquisition = solid_funding.acquisition_evidence(row, snapshot, self.catalog, self._solid_reservations())
         if state is None:
             self.memory.solid_funding = solid_funding.start(row, marker, snapshot.tick)
-            self.memory.event("solid_kit_committed", key=plan.id, tick=snapshot.tick)
         else:
             if state["actions"] >= solid_funding.MAX_ACTIONS:
                 raise ValueError("Solid kit action budget exhausted")
             state["actions"] += 1
+        self.memory.event("solid_kit_committed", key=plan.id, tick=snapshot.tick,
+                          funding=deepcopy(self.memory.solid_funding), step=asdict(plan.steps[0]),
+                          acquisition=deepcopy(acquisition))
         # The ordinary plan-commit save follows before fresh observation and the
         # prepared mutation save. No asynchronous or new durability path exists.
 
     def _reconcile_solid_funding(self, snapshot):
         state = self.memory.solid_funding
+        if state is None or (self._solid_funding_release is not None
+                             and self._solid_funding_release[0] != state):
+            self._solid_funding_release = None
         if state is None or self.memory.pending:
             return  # Ambiguous native work is reconciled before any release.
         solid_funding.validate_state(state, snapshot.tick, self._solid_intents)
         row = routes.routes(snapshot).get(state["route"])
         if row and row["state"] != "proposed" and state["route"] in self.memory.solid_commitments:
-            self.memory.event("solid_kit_paid_handoff", key=state["key"], tick=snapshot.tick)
+            self.memory.event("solid_kit_paid_handoff", key=state["key"], tick=snapshot.tick,
+                              funding=deepcopy(state))
             self.memory.solid_funding = None
+            self._solid_funding_release = None
             return
         reason = None
         if not row or not solid_funding.bound(state, row):
@@ -288,22 +310,35 @@ class SolidRouteMixin:
             except (ValueError, KeyError, TypeError):
                 reason = "kit_evidence_unavailable"
         if reason:
+            # Preserve this observation's cause through deferred plan cleanup.
+            # It is diagnostic process-local state, never checkpoint authority.
+            if self._solid_funding_release is None:
+                self._solid_funding_release = (deepcopy(state), reason, snapshot.tick)
+            reason = self._solid_funding_release[1]
             key = state["key"] + ":kit"
             prior = self.memory.failures.get(key, 0)
             self.memory.failures[key] = max(2, prior)
-            if prior < 2:
-                self.memory.event("solid_kit_abandoned", key=key, reason=reason, tick=snapshot.tick)
             # Keep the funding/active-plan binding together across every save.
             # A fresh observer must not clear a plan the base dispatch path is
             # still inspecting. Its ordinary failed-precondition path clears it.
             if (self.memory.active_plan or {}).get("id") != key:
+                self.memory.event("solid_kit_abandoned", key=key, reason=reason, tick=snapshot.tick,
+                                  funding=deepcopy(state))
                 self.memory.solid_funding = None
+                self._solid_funding_release = None
 
     def _clear_plan(self):
         super()._clear_plan()
         state = getattr(self.memory, "solid_funding", None)
         if state and self.memory.failures.get(state["key"] + ":kit", 0) >= 2:
+            observed = self._solid_funding_release
+            reason = (observed[1] if observed and observed[0] == state
+                      and observed[2] <= self.memory.last_tick else "kit_failure_budget")
+            self.memory.event("solid_kit_abandoned", key=state["key"] + ":kit",
+                              reason=reason, tick=self.memory.last_tick,
+                              funding=deepcopy(state))
             self.memory.solid_funding = None
+            self._solid_funding_release = None
 
     def _execution_barrier(self, snapshot):
         return (self._persistence_failed or self._solid_resume_observing or self._solid_fault
@@ -388,6 +423,18 @@ class SolidRouteMixin:
             reserved = Counter(self._solid_reservations())
             held = self.memory.reservations.get(plan.id, {})
             reserved.subtract(held)
+            if step.action == routes.COMMAND and isinstance(getattr(self, '_planning_diagnostics', None), dict):
+                try:
+                    row = routes.routes(snapshot)[step.parameters['route']]
+                    admission = {
+                        'plan_id': plan.id, 'step_sha256': fingerprint(asdict(step)),
+                        'observed_tick': snapshot.tick, 'funding': deepcopy(state),
+                        'acquisition': deepcopy(solid_funding.acquisition_evidence(
+                            row, snapshot, self.catalog, {k: v for k, v in reserved.items() if v > 0})),
+                    }
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    admission = None  # Missing diagnostics never change action authority.
+                self._planning_diagnostics['solid_build_admission'] = admission
             if not solid_investment.fresh_permission(
                     plan, step, snapshot, self.catalog, outcomes=self.memory.attempt_outcomes,
                     reserved={key: value for key, value in reserved.items() if value > 0},
@@ -439,7 +486,15 @@ class SolidRouteMixin:
         return {**super()._record_extras(), "solid_routes": True,
                 "solid_route_evidence": deepcopy(self._solid_evidence), "solid_route_fault": self._solid_fault,
                 "solid_science_policy": self._solid_science_policy,
+                "solid_funding_schema": 1, "solid_funding": deepcopy(self.memory.solid_funding),
                 "solid_investment_evidence": deepcopy(self._solid_policy_evidence)}
+
+    def _model_history(self):
+        return [{key: value for key, value in event.items()
+                 if key in {'kind', 'key', 'tick', 'reason'}}
+                if isinstance(event.get('kind'), str) and event['kind'].startswith('solid_kit_') else
+                {key: deepcopy(value) for key, value in event.items() if key != 'definition'}
+                for event in super()._model_history()]
 
     def _model_facts(self, snapshot):
         facts = super()._model_facts(snapshot)
@@ -465,6 +520,7 @@ def solid_loop_type(base):
         solid_epoch: dict = field(default_factory=dict)
         solid_commitments: dict = field(default_factory=dict)
         solid_funding: dict | None = None
+        solid_funding_catalogs: dict = field(default_factory=dict)
 
         @classmethod
         def _from_data(cls, data, session_id, target):
@@ -476,6 +532,7 @@ def solid_loop_type(base):
             if type(memory.solid_science_policy) is not bool:
                 raise ValueError("Invalid solid policy binding")
             validate_intents(memory.solid_intents)
+            solid_funding.validate_catalog_declarations(memory.solid_funding_catalogs, memory.last_tick)
             if memory.solid_funding is not None:
                 if not memory.solid_science_policy or memory.capital_investment is not None:
                     raise ValueError("Solid funding conflicts with immutable policy or capital")
