@@ -16,6 +16,9 @@ from .telemetry import validate_attempt
 
 SCHEMA = 1
 KINDS = frozenset({'solid_kit_committed', 'solid_kit_abandoned', 'solid_kit_paid_handoff'})
+REASONS = frozenset({'kit_deadline', 'kit_failure_budget', 'kit_action_budget',
+                     'kit_endpoint_or_layout_changed', 'kit_catalog_changed',
+                     'kit_demand_or_payback_changed', 'kit_evidence_unavailable'})
 
 
 def _encoded(value: object) -> bytes:
@@ -50,6 +53,35 @@ def _funding_events(history: object) -> list[dict]:
             and event['kind'].startswith('solid_kit_')]
 
 
+def _validate_transition(event: dict, minimum: int, maximum: int, intents: list) -> None:
+    kind = event['kind']
+    fields = {'kind', 'key', 'tick', 'funding'} | ({'reason'} if kind == 'solid_kit_abandoned' else set())
+    if (kind not in KINDS or set(event) != fields or not _tick(event.get('tick'))
+            or not minimum <= event['tick'] <= maximum):
+        raise ValueError('Invalid funding transition schema')
+    solid_funding.validate_state(event['funding'], event['tick'], intents)
+    key = event['funding']['key'] + ('' if kind == 'solid_kit_paid_handoff' else ':kit')
+    if event['key'] != key or kind == 'solid_kit_abandoned' and event['reason'] not in REASONS:
+        raise ValueError('Invalid funding transition identity')
+
+
+def _project_budget_open(proof: dict, budgets: dict, action: str) -> bool:
+    from .solid_routes import MAX_BELTS
+    parts = ['kit', 'receive', 'send', *[f'belt:{index}' for index in range(1, MAX_BELTS + 1)]]
+    counts = [_budget(budgets, proof['key'] + ':' + part) for part in parts]
+    if any(count is None or count >= 2 for count in counts):
+        return False
+    # The retained event does not carry recipe/role parameters. If an ordinary
+    # acquisition budget could exhaust this commit, its identity is unproven.
+    actions = {action} if action in {'factory_craft', 'factory_extract'} else {'factory_craft', 'factory_extract'}
+    for key in budgets:
+        if any(key.startswith('factory:' + value + ':') for value in actions):
+            count = _budget(budgets, key)
+            if count is None or count + counts[0] >= 2:
+                return False
+    return True
+
+
 def _native_bound(state: dict, record: dict, *, paid: bool = False,
                   observation: str = 'after_state') -> bool:
     factory = record.get(observation, {}).get('factory', {})
@@ -68,13 +100,49 @@ def _new_history(previous: list, current: list) -> list:
     # game tick may have identical plan events but different funding proofs.
     overlap = next((size for size in range(min(len(previous), len(current)), 0, -1)
                     if _same(previous[-size:], current[:size])), 0)
+    if len(current) > 8 or overlap < len(previous) and len(current) < 8:
+        raise ValueError('History discontinuity cannot be explained by ring truncation')
     return current[overlap:]
 
 
-def _kit_plan_observed(proof: dict, record: dict, tick: int, fresh: list) -> bool:
+def _kit_plan_observed(proof: dict, record: dict, tick: int, fresh: list,
+                       seen_attempts: set[str]) -> bool:
     action = record.get('action')
-    compatible = action in {'factory_craft', 'factory_extract', 'observe'} or (
+    compatible = action in {'factory_craft', 'factory_extract'} or (
+        action == 'observe' and record.get('verified') is False) or (
         action == 'verify' and record.get('verified') is True)
+    decision = record.get('decision')
+    fields = {'plan_id', 'source', 'reason', 'state', 'questions', 'answers', 'utilities',
+              'model_called', 'diagnostics'}
+    if (not isinstance(decision, dict) or set(decision) != fields
+            or decision.get('plan_id') != proof['key'] + ':kit'
+            or not isinstance(decision.get('reason'), str) or type(decision.get('model_called')) is not bool
+            or any(not isinstance(decision.get(key), dict) for key in
+                   ('state', 'questions', 'answers', 'utilities', 'diagnostics'))):
+        return False
+    if action in {'factory_craft', 'factory_extract'}:
+        verified = record.get('verified') is True
+        values = record.get('attempt_outcomes', []) if verified else [record.get('attempt')]
+        candidates = [value for value in values if isinstance(value, dict)
+            and value.get('plan_id') == proof['key'] + ':kit' and value.get('action') == action
+            and value.get('id') not in seen_attempts and value.get('origin') == 'new'
+            and value.get('process_id') == record.get('process_id')
+            and _tick(value.get('started_tick')) and tick <= value['started_tick'] <= record['after_state']['tick']]
+        if len(candidates) != 1:
+            return False
+        attempt = candidates[0]
+        validate_attempt(attempt, finished=verified)
+        dispatch = attempt['dispatch_phases'].get('dispatch', {})
+        if verified:
+            if (attempt.get('outcome') != 'verified' or attempt.get('finished_tick') != record['after_state']['tick']
+                    or record.get('pending') is not None or record.get('attempt') is not None
+                    or dispatch.get('status') != 'returned'):
+                return False
+        elif (not isinstance(record.get('pending'), dict) or record['pending'].get('action') != action
+              or record['pending'].get('started_tick') != attempt['started_tick']
+              or record['pending'].get('dispatch') not in {'returned', 'ambiguous'}
+              or dispatch.get('status') != ('returned' if record['pending']['dispatch'] == 'returned' else 'failed')):
+            return False
     plans = [(index, event) for index, event in enumerate(fresh)
              if event.get('kind') == 'plan_committed']
     return compatible and len(plans) == 1 and any(
@@ -82,24 +150,25 @@ def _kit_plan_observed(proof: dict, record: dict, tick: int, fresh: list) -> boo
         and event.get('kind') == 'plan_committed' and event.get('plan') == proof['key'] + ':kit'
         and event.get('source') in {'deterministic', 'deterministic-singleton',
                                      'deterministic-fallback', 'jev', 'mock'}
+        and event['source'] == decision['source']
         and _tick(event.get('tick')) and event['tick'] == tick
         and any(value.get('kind') == 'solid_kit_committed' and _same(value.get('funding'), proof)
                 and value.get('tick') == tick for value in fresh[:index])
         for index, event in plans)
 
 
-def _abandonment_observed(proof: dict, event: dict, record: dict,
-                         prior_budget: int | None, fresh: list) -> bool:
-    reason, tick = event['reason'], event['tick']
-    fresh = fresh[:next((index for index, value in enumerate(fresh) if _same(value, event)), 0)]
+def _missing_kit(proof: dict, record: dict, observation: str) -> bool:
+    from .solid_routes import remaining
+    if not _native_bound(proof, record, observation=observation):
+        return False
+    snapshot = record[observation]
+    row = snapshot['factory']['solid_routes']['routes'][proof['route']]
+    return any(snapshot.get('inventory', {}).get(item, 0) < count for item, count in remaining(row).items())
+
+
+def _observable_trigger(proof: dict, reason: str, tick: int, record: dict) -> bool:
     if reason == 'kit_deadline':
         return tick >= proof['deadline_tick']
-    if reason == 'kit_failure_budget':
-        return prior_budget is not None and prior_budget >= 2 or any(
-            set(value) == {'kind', 'plan', 'reason', 'tick'}
-            and value.get('kind') == 'plan_failed' and value.get('plan') == proof['key'] + ':kit'
-            and isinstance(value.get('reason'), str) and bool(value['reason'])
-            and _tick(value.get('tick')) and value['tick'] == tick for value in fresh)
     observations = [name for name in ('state', 'after_state')
                     if record.get(name, {}).get('tick') == tick]
     if reason == 'kit_endpoint_or_layout_changed':
@@ -107,14 +176,32 @@ def _abandonment_observed(proof: dict, event: dict, record: dict,
                         or _native_bound(proof, record, paid=True, observation=name))
                    for name in observations)
     if reason == 'kit_action_budget' and proof['actions'] == solid_funding.MAX_ACTIONS:
-        from .solid_routes import remaining
-        return any(any(record[name].get('inventory', {}).get(item, 0) < count
-                       for item, count in remaining(record[name]['factory']['solid_routes']['routes'][proof['route']]).items())
-                   for name in observations if _native_bound(proof, record, observation=name))
+        return any(_missing_kit(proof, record, name) for name in observations)
     # Catalog/payback recomputation and intermediate observations are not in
     # retained records. An exhausted count written by that observer is not
     # independent evidence of the trigger. Mark that window unmeasurable.
     return False
+
+
+def _abandonment_count(proof: dict, event: dict, record: dict,
+                       prior_budget: int | None, fresh: list) -> int | None:
+    if prior_budget is None:
+        return None
+    reason, tick = event['reason'], event['tick']
+    if reason != 'kit_failure_budget':
+        return max(2, prior_budget) if _observable_trigger(proof, reason, tick, record) else None
+    preceding = fresh[:next((index for index, value in enumerate(fresh) if _same(value, event)), 0)]
+    failures = [value for value in preceding if value.get('kind') == 'plan_failed'
+                and value.get('plan') == proof['key'] + ':kit']
+    failed = (len(failures) == 1 and set(failures[0]) == {'kind', 'plan', 'reason', 'tick'}
+              and isinstance(failures[0]['reason'], str) and bool(failures[0]['reason'])
+              and _tick(failures[0]['tick']) and failures[0]['tick'] == tick
+              and record.get('action') == 'observe' and record.get('verified') is False
+              and any(_observable_trigger(proof, cause, tick, record) for cause in
+                      ('kit_deadline', 'kit_endpoint_or_layout_changed')))
+    if failed:
+        return max(2, prior_budget) + 1
+    return prior_budget if prior_budget >= 2 and not failures else None
 
 
 def _paid_growth_observed(before: dict, after: dict, proof: dict, attempts: list, now: int) -> bool:
@@ -193,13 +280,21 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
         # The ring repeats old events. Seed it from the initial checkpoint and
         # process new event values only once. Hash storage is bounded by input
         # record count (already bounded by the parent analyzer's byte limits).
-        seen = {hashlib.sha256(_encoded(e)).digest()
-                for e in _funding_events(initial.get('history', []))}
+        seen = set()
+        for event in _funding_events(initial.get('history', [])):
+            _validate_transition(event, 0, previous_tick, intents)
+            seen.add(hashlib.sha256(_encoded(event)).digest())
         previous_budgets = initial.get('failures', {})
         previous_pending = initial.get('pending')
         previous_attempt = initial.get('attempt')
         previous_routes = initial.get('solid_commitments', {})
         previous_history = initial.get('history', [])
+        seen_attempts = {value['id'] for value in initial.get('attempt_outcomes', [])
+                         if isinstance(value, dict) and isinstance(value.get('id'), str)}
+        if isinstance(previous_attempt, dict) and isinstance(previous_attempt.get('id'), str):
+            seen_attempts.add(previous_attempt['id'])
+        active_kit = (working is not None and isinstance(initial.get('active_plan'), dict)
+                      and initial['active_plan'].get('id') == working['key'] + ':kit')
         if any(value.get('kind') == 'plan_committed' and (
                 not _tick(value.get('tick')) or value['tick'] > previous_tick)
                for value in previous_history):
@@ -231,6 +326,9 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     not _tick(value.get('tick')) or value['tick'] > now) for value in history):
                 issues.add('solid_funding_plan_history_invalid')
             prior = deepcopy(working)
+            action_budget_due = (prior is not None and prior['actions'] == solid_funding.MAX_ACTIONS
+                                 and previous_pending is None and not active_kit
+                                 and _missing_kit(prior, record, 'state'))
             prior_unbound = (prior is not None and previous_pending is None
                              and not (_native_bound(prior, record, observation='state')
                                       or _native_bound(prior, record, paid=True, observation='state')))
@@ -249,21 +347,10 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 kind = event['kind']
                 proof = event.get('funding')
                 event_tick = event.get('tick')
-                expected_fields = {'kind', 'key', 'tick', 'funding'}
-                if kind == 'solid_kit_abandoned':
-                    expected_fields.add('reason')
-                if (kind not in KINDS or set(event) != expected_fields
-                        or not _tick(event_tick) or not previous_tick <= event_tick <= now):
-                    issues.add('solid_funding_transition_invalid')
-                    continue
                 try:
-                    solid_funding.validate_state(proof, event_tick, intents)
+                    _validate_transition(event, previous_tick, now, intents)
                 except (ValueError, TypeError, KeyError, AttributeError):
-                    issues.add('solid_funding_transition_proof_invalid')
-                    continue
-                expected_key = proof['key'] + ('' if kind == 'solid_kit_paid_handoff' else ':kit')
-                if event.get('key') != expected_key:
-                    issues.add('solid_funding_transition_key_mismatch')
+                    issues.add('solid_funding_transition_invalid')
                     continue
                 if kind == 'solid_kit_committed':
                     # A controller step selects at most one new kit plan. Old
@@ -279,16 +366,18 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                             or not starting and (not _same(_identity(working), _identity(proof))
                                                  or proof['actions'] != working['actions'] + 1)
                             or prior_budget is None or prior_budget >= 2
+                            or not _project_budget_open(proof, previous_budgets, record.get('action'))
                             or previous_pending is not None
                             or proof['key'] in abandoned_keys
                             or not _tick(before_tick) or event_tick != before_tick
                             or event_tick >= proof['deadline_tick']
-                            or not _kit_plan_observed(proof, record, before_tick, fresh)
+                            or not _kit_plan_observed(proof, record, before_tick, fresh, seen_attempts)
                             or not _native_bound(proof, record, observation='state')):
                         issues.add('solid_funding_commit_not_reconciled')
                     else:
                         working = deepcopy(proof)
                         committed_proof = proof
+                        active_kit = True
                 else:
                     if working is None or not _same(working, proof):
                         issues.add('solid_funding_release_proof_mismatch')
@@ -301,9 +390,12 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                                 or event_tick < before_tick):
                             issues.add('solid_funding_abandonment_not_reconciled')
                             continue
-                        if not _abandonment_observed(proof, event, record,
-                                _budget(previous_budgets, proof['key'] + ':kit'), fresh):
+                        expected_count = _abandonment_count(proof, event, record,
+                                _budget(previous_budgets, proof['key'] + ':kit'), fresh)
+                        if expected_count is None:
                             issues.add('solid_funding_abandonment_trigger_unproven')
+                        elif count != expected_count:
+                            issues.add('solid_funding_abandonment_budget_mismatch')
                         # Later events cannot reuse the pre-record budget after
                         # this transition established that the project is spent.
                         abandoned_keys.add(proof['key'])
@@ -323,8 +415,9 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 issues.add('solid_funding_initial_proposal_not_reconciled')
             if not _same(working, current):
                 issues.add('solid_funding_record_history_mismatch')
-            payment_proof = prior or working or current or committed_proof
-            if payment_proof is not None:
+            payment_proofs = {_encoded(_identity(value)): value for value in (prior, working, current, committed_proof)
+                              if value is not None}
+            for payment_proof in payment_proofs.values():
                 route = payment_proof['route']
                 before_routes = record.get('state', {}).get('factory', {}).get('solid_routes', {}).get('routes', {})
                 after_routes = record.get('after_state', {}).get('factory', {}).get('solid_routes', {}).get('routes', {})
@@ -354,6 +447,10 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 budget = _budget(current_budgets, current['key'] + ':kit')
                 if budget is None or budget >= 2:
                     issues.add('solid_funding_retained_budget_exhausted')
+                if budget != _budget(previous_budgets, current['key'] + ':kit'):
+                    issues.add('solid_funding_retained_budget_change_unproven')
+                if action_budget_due:
+                    issues.add('solid_funding_action_budget_release_missing')
                 if (previous_pending is None and _tick(before_tick)
                         and (before_tick >= current['deadline_tick']
                              or now >= current['deadline_tick'] and not _dispatch_crossed_deadline(
@@ -368,6 +465,15 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
             previous_attempt = record.get('attempt')
             previous_routes = record.get('after_state', {}).get('factory', {}).get('solid_routes', {}).get('routes', {})
             previous_history = history
+            for value in [record.get('attempt'), *record.get('attempt_outcomes', [])]:
+                if isinstance(value, dict) and isinstance(value.get('id'), str):
+                    seen_attempts.add(value['id'])
+            if current is None:
+                active_kit = False
+            elif any(value.get('kind') in {'plan_failed', 'step_verified'}
+                     and value.get('plan') == current['key'] + ':kit' for value in fresh) or (
+                         record.get('action') == 'verify' and record.get('verified') is True):
+                active_kit = False
         if not _same(working, final.get('solid_funding')) or not _same(
                 rows[-1].get('solid_funding'), final.get('solid_funding')):
             issues.add('solid_funding_final_checkpoint_mismatch')

@@ -7,6 +7,7 @@ import pytest
 from integration_evidence_fixtures import evidence
 from solid_routes_fixtures import fixture, row as route_row, SOURCE, TARGET
 from jev_factorio.integration_evidence import analyze_rows
+from jev_factorio.judgments import Decision
 from jev_factorio.planning import solid_funding
 from test_solid_kit_acquisition import kit_loop
 
@@ -60,6 +61,11 @@ def plan_event(funding, tick):
             'source': 'deterministic', 'tick': tick}
 
 
+def decision_for(record, funding):
+    record['decision'] = asdict(Decision(funding['key'] + ':kit', 'deterministic'))
+    if record['action'] == 'observe': record['verified'] = False
+
+
 def close_funding(data, index=3, kind='solid_kit_abandoned'):
     rows, _, initial, final = data
     funding = initial['solid_funding']
@@ -73,6 +79,7 @@ def close_funding(data, index=3, kind='solid_kit_abandoned'):
     rows[index]['history'] = [event(kind, funding, rows[index]['after_state']['tick'], reason='kit_deadline')]
     for record in rows[index:]:
         record['solid_funding'] = None
+        record['history'] = deepcopy(rows[index]['history'])
         if kind == 'solid_kit_abandoned':
             record['failure_budgets'][funding['key'] + ':kit'] = 2
     final['solid_funding'] = None
@@ -113,6 +120,7 @@ def test_initial_funding_paid_handoff_has_exact_observed_ownership():
         record['acceptance_configuration']['solid_science_policy'] = True
         record.update(solid_funding_schema=1, solid_funding=None, history=[])
     rows[0]['history'] = [event('solid_kit_paid_handoff', funding, initial['last_tick'])]
+    for record in rows[1:]: record['history'] = deepcopy(rows[0]['history'])
     result = analyze_rows(rows, trial, initial, final)
     assert result['measurement_checks_passed'], result['issues']
 
@@ -129,7 +137,12 @@ def test_transient_funding_can_be_committed_then_abandoned_in_one_record():
                           {'kind': 'plan_failed', 'plan': funding['key'] + ':kit',
                            'reason': 'Plan precondition changed', 'tick': rows[3]['after_state']['tick']},
                           event('solid_kit_abandoned', funding, rows[3]['after_state']['tick'], reason='kit_failure_budget')]
-    for record in rows[3:]: record['failure_budgets'][funding['key'] + ':kit'] = 2
+    rows[3]['verified'] = False
+    decision_for(rows[3], funding)
+    rows[3]['after_state']['factory']['solid_routes']['routes'].pop(funding['route'])
+    for record in rows[3:]:
+        record['failure_budgets'][funding['key'] + ':kit'] = 3
+        record['history'] = deepcopy(rows[3]['history'])
     final['failures'] = deepcopy(rows[-1]['failure_budgets'])
     result = analyze_rows(*data)
     assert result['measurement_checks_passed'], result['issues']
@@ -260,7 +273,11 @@ def test_real_fresh_guard_abandonment_in_one_record_reconciles(change, tmp_path)
     backend.before_observe = update
     result = loop.step()
     assert not result['verified'] and not backend.calls
-    assert not funding_history_issues(initial, [result], asdict(loop.memory))
+    issues = funding_history_issues(initial, [result], asdict(loop.memory))
+    if change == 'deadline':
+        assert not issues
+    else:
+        assert issues == ['solid_funding_abandonment_trigger_unproven']
     assert loop.memory.solid_funding is None
 
 
@@ -269,7 +286,10 @@ def test_commit_increment_needs_an_exact_new_proof_and_retains_identity():
     next_state = deepcopy(initial['solid_funding']); next_state['actions'] = 2
     rows[3]['history'] = [event('solid_kit_committed', next_state, rows[3]['state']['tick']),
                           plan_event(next_state, rows[3]['state']['tick'])]
-    for record in rows[3:]: record['solid_funding'] = deepcopy(next_state)
+    decision_for(rows[3], next_state)
+    for record in rows[3:]:
+        record['solid_funding'] = deepcopy(next_state)
+        record['history'] = deepcopy(rows[3]['history'])
     final['solid_funding'] = deepcopy(next_state)
     result = analyze_rows(*data)
     assert result['measurement_checks_passed'], result['issues']
@@ -424,10 +444,12 @@ def test_repeated_history_commit_does_not_consume_current_record_commit_limit():
     rows, _, initial, final = data
     old = event('solid_kit_committed', initial['solid_funding'], initial['last_tick'])
     initial['history'].append(deepcopy(old))
+    for record in rows[:3]: record['history'] = [deepcopy(old)]
     new = deepcopy(initial['solid_funding'])
     new['actions'] = 2
     history = [old, event('solid_kit_committed', new, rows[3]['state']['tick']),
                plan_event(new, rows[3]['state']['tick'])]
+    decision_for(rows[3], new)
     for record in rows[3:]:
         record['history'] = deepcopy(history)
         record['solid_funding'] = deepcopy(new)

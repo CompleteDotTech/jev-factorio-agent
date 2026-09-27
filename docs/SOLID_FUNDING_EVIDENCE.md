@@ -87,12 +87,35 @@ carried pending attempt after a lost reply; observation alone cannot pay a route
 
 An abandonment reason also needs independent support: an elapsed deadline,
 observed changed binding, exhausted action budget with missing kit stock, or an
-already exhausted failure budget/current recorded plan failure. A newly written
-budget does not prove its own cause. Catalog/payback recomputation and an
+already exhausted failure budget/causally observable failed transition. A newly
+written budget or `plan_failed` label does not prove its own cause. Catalog/payback recomputation and an
 intermediate changed binding may be absent from retained snapshots; those
 releases fail measurement with `solid_funding_abandonment_trigger_unproven`.
 This is an evidence limitation, not a controller rejection or a reason to retry
 or alter the campaign. Preserve that evidence for richer native qualification.
+
+Initial funding events pass the same shape, identity and proof validation as
+record transitions and cannot postdate the initial checkpoint. Short histories
+must retain their preceding entries; only a full eight-event record can explain
+loss through ring truncation. Abandonment counts must equal the observer's
+`max(2, prior)` or its causally supported single plan-failure increment. Retained
+budget changes without such evidence fail measurement. A maxed action budget
+with an incomplete carried kit requires release at the first eligible observation
+without an active kit plan; a complete carried kit can still be commissioned.
+
+New commits check receive/send/belt project budgets as well as the kit budget.
+Ordinary acquisition failure counts also matter, but retained commit events omit
+the selected recipe/role parameters. If those counts could exhaust the selected
+action, its eligibility is unproven and the window fails measurement. This
+conservative evidence rule does not change the controller's exact budget scope.
+
+Each new commit also binds to the complete recorded decision and selection
+source. Craft/extract records need a uniquely new, schema-valid pending or
+completed attempt for that kit plan, action, process and observation interval,
+including its dispatch phase; a verified action cannot omit its outcome.
+Observation-only commits are unverified, while an already-satisfied `verify`
+record remains valid. If one record releases a project and funds another, paid
+growth is checked for every distinct funding identity, not just the old lock.
 
 ## Evidence boundary and rollout
 

@@ -5,7 +5,7 @@ from dataclasses import asdict
 import pytest
 
 from jev_factorio.solid_funding_evidence import funding_history_issues
-from test_solid_funding_evidence import funded_evidence, event, plan_event, close_funding, assert_rejected
+from test_solid_funding_evidence import funded_evidence, event, plan_event, close_funding, assert_rejected, decision_for
 from test_solid_funding_transition_boundaries import paid_funding_evidence
 from test_solid_kit_acquisition import kit_loop
 from solid_routes_fixtures import row
@@ -37,6 +37,7 @@ def test_kit_plan_proof_requires_current_exact_event(change):
         records[3]['history'].append(deepcopy(plan))
     for record in records[3:]:
         record['solid_funding'] = deepcopy(proof)
+        decision_for(record, proof)
     final['solid_funding'] = deepcopy(proof)
     assert_rejected(data)
 
@@ -89,10 +90,13 @@ def test_identical_plan_event_values_can_describe_new_occurrences_at_same_tick()
     plan = plan_event(initial['solid_funding'], tick)
     initial['history'] = [previous, deepcopy(plan)]
     proof = deepcopy(initial['solid_funding'])
+    history = deepcopy(initial['history'])
     for record in records:
         proof['actions'] += 1
-        record['history'] = [previous, deepcopy(plan), event('solid_kit_committed', proof, tick), deepcopy(plan)]
+        history.extend([event('solid_kit_committed', proof, tick), deepcopy(plan)])
+        record['history'] = deepcopy(history[-8:])
         record['solid_funding'] = deepcopy(proof)
+        decision_for(record, proof)
         previous = record['history'][-2]
     final['solid_funding'] = deepcopy(proof)
     assert not funding_history_issues(initial, records, final)
