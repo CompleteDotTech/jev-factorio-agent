@@ -201,9 +201,14 @@ class HierarchicalLoop(AgentLoop):
                              result=lambda _: {"checkpoint_io": deepcopy(self.memory._checkpoint_metrics)})
         except BaseException:
             self._persistence_failed = True
+            self._trace.checkpoint_metrics(self._performance, self.memory._checkpoint_metrics,
+                                           preserve_error=True)
             raise
-        finally:
-            self._performance.checkpoint(self.memory._checkpoint_metrics)
+        try:
+            self._trace.checkpoint_metrics(self._performance, self.memory._checkpoint_metrics)
+        except BaseException:
+            self._persistence_failed = True
+            raise
 
     def _clear_plan(self) -> None:
         attempt = self.memory.attempt

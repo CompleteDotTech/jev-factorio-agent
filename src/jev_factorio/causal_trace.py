@@ -105,10 +105,20 @@ class CausalTrace:
         """
         if self.metrics is None:
             return
+        self._guard_metrics(
+            lambda: self.metrics.call(
+                event_type, time.perf_counter_ns() - began if elapsed is None else elapsed,
+                failed=failed, cpu_ns=time.process_time_ns() - cpu_began),
+            preserve_error=preserve_error,
+        )
+
+    def checkpoint_metrics(self, counters, metrics: dict, *, preserve_error: bool = False) -> None:
+        """Account for a checkpoint without reopening an uncertain audit state."""
+        self._guard_metrics(lambda: counters.checkpoint(metrics), preserve_error=preserve_error)
+
+    def _guard_metrics(self, operation: Callable[[], None], *, preserve_error: bool) -> None:
         try:
-            self.metrics.call(event_type,
-                              time.perf_counter_ns() - began if elapsed is None else elapsed,
-                              failed=failed, cpu_ns=time.process_time_ns() - cpu_began)
+            operation()
         except BaseException as error:
             self._failed = True
             if preserve_error:

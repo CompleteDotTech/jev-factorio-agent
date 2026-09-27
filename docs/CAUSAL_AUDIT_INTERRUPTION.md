@@ -39,7 +39,10 @@ retain their exact exception instance. This applies to metrics-only calls too.
 If an operation, result capture, or sink write already failed, a secondary metric
 failure cannot replace that primary error or its storage-pressure classification.
 Likewise, malformed diagnostic details cannot mask the original operation failure.
-Partially updated counters are neither retried nor represented as complete samples.
+Partially updated counters, including checkpoint counters, are neither retried
+nor represented as complete samples. A checkpoint counter failure also closes
+the controller's persistence gate; a secondary counter interruption cannot mask
+the primary checkpoint or audit failure.
 The successful clock/count contract is unchanged. This is a tested callback-boundary
 contract, not signal masking or an atomic guarantee at every Python instruction.
 

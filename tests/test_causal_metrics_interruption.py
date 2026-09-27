@@ -159,6 +159,86 @@ def test_disabling_metrics_does_not_reopen_a_failed_trace():
     assert effects == []
 
 
+@pytest.mark.parametrize('error_type', [RuntimeError, KeyboardInterrupt])
+def test_checkpoint_counter_failure_retains_written_pending_state(error_type, tmp_path, monkeypatch):
+    import json
+    import jev_factorio.performance as performance
+    from jev_factorio.controller import HierarchicalLoop
+    from jev_factorio.jev_client import MockJevClient
+    from test_causal_trace_interruption import CountingBackend
+
+    backend = CountingBackend()
+    original = error_type('private checkpoint counter')
+    raised = []
+
+    class Counters(PerformanceCounters):
+        def checkpoint(self, metrics):
+            super().checkpoint(metrics)
+            if metrics.get('status') == 'written' and backend.calls.count('act') == 1 and not raised:
+                raised.append(True)
+                raise original
+
+    monkeypatch.setattr(performance, 'PerformanceCounters', Counters)
+    checkpoint = tmp_path / 'checkpoint.json'
+    loop = HierarchicalLoop(backend, MockJevClient(), checkpoint=str(checkpoint),
+                            research_log=RecordingSink(), factory_scheduling='ready-work')
+    with pytest.raises(BaseException) as caught:
+        loop.step()
+    assert raised == [True]
+    assert isinstance(caught.value, ResearchLogError if error_type is RuntimeError else error_type)
+    if error_type is KeyboardInterrupt:
+        assert caught.value is original
+    assert loop._trace._failed and loop._persistence_failed
+    saved = checkpoint.read_bytes()
+    assert json.loads(saved)['pending']['dispatch'] == 'prepared'
+    prior_calls = list(backend.calls)
+    with pytest.raises(ResearchLogError):
+        loop.step()
+    assert backend.calls == prior_calls and checkpoint.read_bytes() == saved
+
+
+def test_primary_checkpoint_audit_failure_survives_secondary_counter_interruption(tmp_path, monkeypatch):
+    import errno
+    import json
+    import jev_factorio.performance as performance
+    from jev_factorio.controller import HierarchicalLoop
+    from jev_factorio.jev_client import MockJevClient
+    from test_causal_trace_interruption import CountingBackend
+
+    backend = CountingBackend()
+    secondary = KeyboardInterrupt('private checkpoint counter')
+    raised = []
+
+    class Counters(PerformanceCounters):
+        def checkpoint(self, metrics):
+            super().checkpoint(metrics)
+            if backend.calls.count('act') == 1 and not raised:
+                raised.append(True)
+                raise secondary
+
+    class FailingSink(RecordingSink):
+        def emit(self, event_type, payload):
+            super().emit(event_type, payload)
+            if event_type == 'checkpoint_written' and backend.calls.count('act') == 1:
+                raise OSError(errno.ENOSPC, 'private sink path')
+
+    monkeypatch.setattr(performance, 'PerformanceCounters', Counters)
+    checkpoint = tmp_path / 'checkpoint.json'
+    loop = HierarchicalLoop(backend, MockJevClient(), checkpoint=str(checkpoint),
+                            research_log=FailingSink(), factory_scheduling='ready-work')
+    with pytest.raises(TraceStorageError) as caught:
+        loop.step()
+    assert caught.value.failure_class == 'storage_pressure'
+    assert 'private' not in str(caught.value)
+    assert raised == [True] and loop._trace._failed and loop._persistence_failed
+    saved = checkpoint.read_bytes()
+    assert json.loads(saved)['pending']['dispatch'] == 'prepared'
+    prior_calls = list(backend.calls)
+    with pytest.raises(ResearchLogError):
+        loop.step()
+    assert backend.calls == prior_calls and checkpoint.read_bytes() == saved
+
+
 @pytest.mark.parametrize('stage', ['action_returned', 'trace_capture', 'trace_emit'])
 @pytest.mark.parametrize('error_type', [RuntimeError, KeyboardInterrupt, SystemExit])
 def test_hierarchical_counter_failure_preserves_prepared_checkpoint(stage, error_type, tmp_path, monkeypatch):
