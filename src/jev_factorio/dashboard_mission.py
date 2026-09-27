@@ -69,6 +69,27 @@ def milestones(completed_goals, research_seen) -> list[dict]:
     return rows
 
 
+def catalog_milestones(completed_goals, target, research_rows, space_age=False) -> list[dict]:
+    """Controller goals around research milestones computed from the game's own tree.
+
+    Goal rows appear only when a controller reports goals; the rocket_launch goal
+    closes a base-game ladder. Only the first unreached row is marked "next".
+    """
+    goals = mapping(completed_goals)
+    done = lambda key: {'state': 'done', 'tick': goals[key]} if integer(goals.get(key)) else {'state': 'pending', 'tick': None}
+    rows = []
+    if target is not None or goals:
+        rows += [{'key': key, 'kind': 'goal', 'title': key, **done(key)} for key in ('stockpile_fuel', 'bootstrap_mining')]
+    rows += [dict(row) for row in research_rows]
+    if target == 'rocket_launch' and not space_age:
+        rows.append({'key': 'rocket_launch', 'kind': 'goal', 'title': 'rocket_launch', **done('rocket_launch')})
+    for row in rows:
+        if row['state'] != 'done':
+            row['state'] = 'next'
+            break
+    return rows
+
+
 def launch_summary(state: dict) -> dict:
     factory = mapping(state.get('factory'))
     raw = factory.get('launch_readiness')

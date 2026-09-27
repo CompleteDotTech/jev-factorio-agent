@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from . import dashboard_mission
+from . import dashboard_mission, research_catalog
 
 SCHEMA = "jev.dashboard.v1"
 MAX_LINE = 262144
@@ -93,6 +93,14 @@ def project_record(value: dict) -> dict:
     record = {"mission_record": dashboard_mission.project_record(value)}
     state = value.get("after_state") or value.get("state")
     if isinstance(state, dict):
+        if not isinstance(state.get("factory"), dict):
+            # Legacy records keep factory facts (current research) with the decision.
+            decision = value.get("decision")
+            facts = decision.get("state", {}).get("facts") if isinstance(decision, dict) else None
+            factory = facts.get("factory") if isinstance(facts, dict) else None
+            if isinstance(factory, dict):
+                state = dict(state, factory={key: factory[key] for key in ("research", "research_progress")
+                                             if key in factory})
         record["state"] = project_state(state)
     # Keep the bounded observation before potentially large model decision data.
     record.update({key: value[key] for key in RECORD_KEYS if key in value})
@@ -378,8 +386,14 @@ class Tail:
 class Monitor:
     """Single reader/reducer shared by all SSE clients; never imports gameplay."""
 
-    def __init__(self, path: Path, legacy: bool = False, supervisor: Path | None = None):
+    def __init__(self, path: Path, legacy: bool = False, supervisor: Path | None = None,
+                 research: Path | None = None):
         self.tail, self.legacy, self.supervisor = Tail(path), legacy, supervisor
+        self.research_path = research
+        self.research_identity = None
+        self.research_tree: research_catalog.Tree | None = None
+        self.research_state: dict | None = None
+        self.research_status = "not configured" if research is None else "waiting"
         self.lock = threading.RLock()
         self.stop = threading.Event()
         self.secrets = secret_values()
@@ -487,8 +501,9 @@ class Monitor:
             return
         first = self.research_seen is None
         seen = self.research_seen = {} if first else self.research_seen
-        for tech in researched:
-            if isinstance(tech, str) and tech in dashboard_mission.RESEARCH_MILESTONES:
+        for tech in researched[:research_catalog.MAX_TECHNOLOGIES]:
+            if (isinstance(tech, str) and research_catalog.NAME.match(tech)
+                    and len(seen) < research_catalog.MAX_TECHNOLOGIES):
                 seen.setdefault(tech, None if first else tick)
 
     def poll(self) -> None:
@@ -521,7 +536,55 @@ class Monitor:
                            "data": {"record": project_record(row), "record_timestamp": bool(recorded_at)}}
                 self.accept(sanitize(row, self.secrets))
             self._read_supervisor()
+            self._read_research()
             self.version += 1
+
+    def _read_research(self) -> None:
+        """Reload the research sidecar when it changes; drop it when it disappears."""
+        if self.research_path is None:
+            return
+        try:
+            info = os.stat(self.research_path)
+        except OSError:
+            self.research_identity, self.research_tree, self.research_state = None, None, None
+            self.research_status = "waiting"
+            return
+        identity = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+        if identity == self.research_identity:
+            return
+        self.research_identity = identity
+        try:
+            catalog = research_catalog.read(self.research_path)
+            self.research_tree, self.research_state = research_catalog.Tree(catalog), catalog["state"]
+            self.research_status = "ok"
+        except (OSError, ValueError, TypeError, KeyError, RecursionError):
+            self.research_tree, self.research_state = None, None
+            self.research_status = "invalid"
+
+    def _research(self) -> tuple[dict, list[dict] | None]:
+        """Research summary from the game's tree plus the freshest recorded research state."""
+        tree = self.research_tree
+        if tree is None:
+            return {"status": self.research_status}, None
+        state = self.view.get("state") if isinstance(self.view.get("state"), dict) else {}
+        researched, current, progress, source = None, None, None, "telemetry"
+        if isinstance(state.get("researched"), list):
+            researched = [t for t in state["researched"] if isinstance(t, str)]
+            now = dashboard_mission.mapping(dashboard_mission.mapping(state.get("mission")).get("research"))
+            current, progress = now.get("name"), now.get("progress")
+        elif self.research_state is not None:
+            researched, source = self.research_state["researched"], "catalog"
+            current, progress = self.research_state["current"], self.research_state["progress"]
+        if researched is None:
+            return {"status": "no research state", "version": tree.version}, None
+        unknown = [t for t in researched if t not in tree.catalog["technologies"]]
+        if unknown:
+            # Telemetry from another game version or mod set: never mix trees.
+            return {"status": "version mismatch", "version": tree.version, "unknown": unknown[:5]}, None
+        summary = tree.summary(set(researched), current if isinstance(current, str) else None,
+                               progress if type(progress) in (int, float) else None, self.research_seen or {})
+        milestones = summary.pop("milestones")
+        return dict(summary, status="ok", source=source), milestones
 
     def _read_supervisor(self) -> None:
         if self.supervisor is None:
@@ -547,8 +610,13 @@ class Monitor:
 
     def snapshot(self) -> dict:
         with self.lock:
-            view = dict(self.view, milestones=dashboard_mission.milestones(
-                self.view.get("completed_goals"), self.research_seen))
+            research, rows = self._research()
+            if rows is not None:
+                milestones = dashboard_mission.catalog_milestones(
+                    self.view.get("completed_goals"), self.view.get("target"), rows, research.get("space_age") is True)
+            else:
+                milestones = dashboard_mission.milestones(self.view.get("completed_goals"), self.research_seen)
+            view = dict(self.view, milestones=milestones, research=research)
             return copy.deepcopy({"version": self.version, "view": view, "events": list(self.events),
                                   "source": {"mode": "legacy" if self.legacy else "events", "status": self.tail.status,
                                              "invalid": self.tail.invalid + self.rejected,
@@ -638,8 +706,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
         """Serve one item icon from the operator's local game install, if configured."""
         match = ICON_NAME.fullmatch(path)
         folder = self.server.icon_dir
-        candidate = folder / f"{match.group(1)}.png" if match and folder else None
-        if candidate is None or candidate.is_symlink() or not candidate.is_file():
+        candidate = None
+        if match and folder:
+            tree = self.server.monitor.research_tree
+            # Icons differ between game versions: prefer <icon-dir>/<version>/, then <icon-dir>/.
+            for base in ((folder / tree.version,) if tree else ()) + (folder,):
+                option = base / f"{match.group(1)}.png"
+                if not base.is_symlink() and not option.is_symlink() and option.is_file():
+                    candidate = option
+                    break
+        if candidate is None:
             self._headers(404, "text/plain", 0)
             return
         raw = candidate.read_bytes()
@@ -673,6 +749,8 @@ def cli() -> None:
     source.add_argument("--log-file", type=Path, help="Existing legacy JSONL; completed-decision detail only")
     parser.add_argument("--supervisor-state", type=Path, help="Optional existing supervisor.json (read-only)")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--research-catalog", type=Path,
+                        help=f"Research tree sidecar (default: {research_catalog.FILENAME} next to the telemetry file)")
     parser.add_argument("--icon-dir", type=Path,
                         help="Optional Factorio data/base/graphics/icons directory for item icons (read-only)")
     args = parser.parse_args()
@@ -683,7 +761,8 @@ def cli() -> None:
         parser.error("Telemetry source must be a regular file")
     if args.icon_dir is not None and not args.icon_dir.is_dir():
         parser.error("--icon-dir must be an existing directory")
-    monitor = Monitor(path, legacy=args.log_file is not None, supervisor=args.supervisor_state)
+    research = args.research_catalog or path.with_name(research_catalog.FILENAME)
+    monitor = Monitor(path, legacy=args.log_file is not None, supervisor=args.supervisor_state, research=research)
     server = DashboardServer(args.port, monitor, args.icon_dir)
     follower = threading.Thread(target=monitor.follow, daemon=True)
     follower.start()

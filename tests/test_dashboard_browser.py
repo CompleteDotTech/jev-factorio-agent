@@ -16,7 +16,7 @@ def live(tmp_path):
     path = tmp_path / "events.jsonl"
     writer = EventWriter(path)
     writer.emit("run_started", 2, policy="hybrid", target="rocket_launch")
-    monitor = Monitor(path, supervisor=tmp_path / "supervisor.json")
+    monitor = Monitor(path, supervisor=tmp_path / "supervisor.json", research=tmp_path / "research-catalog.json")
     server = DashboardServer(0, monitor)
     follow = threading.Thread(target=monitor.follow, daemon=True)
     web = threading.Thread(target=server.serve_forever, daemon=True)
@@ -758,4 +758,99 @@ def test_run_time_ignores_a_supervisor_for_another_session(live):
     seed(writer)
     playwright.expect(page.locator("#thinking-status")).to_have_text("JEV is evaluating")
     playwright.expect(page.locator("#run-time")).to_have_text("Not connected")
+    assert not errors
+
+
+def research_seed(writer, researched, current=None, progress=None):
+    from jev_factorio.dashboard import project_state
+    writer.emit("observation", 2, state=project_state({
+        "session_id": "mock:browser-test", "world_kind": "mock", "tick": 400, "researched": researched,
+        "factory": {"research": current, "research_progress": progress} if current else {}}))
+
+
+def test_research_strip_shows_the_game_tree_and_fits_the_studio_header(live):
+    from jev_factorio import research_catalog
+    from test_research_catalog import DATA_20, raw_catalog
+    page, writer, url, errors = live
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    page.goto(url + "/?studio=1")
+    seed(writer)
+    playwright.expect(page.locator("#research-strip")).to_be_hidden()
+    research_catalog.write(writer.path.with_name(research_catalog.FILENAME), raw_catalog(DATA_20))
+    research_seed(writer, ["electronics", "automation-science-pack", "automation"], "logistic-science-pack", 0.42)
+    playwright.expect(page.locator("#research-strip")).to_be_visible()
+    playwright.expect(page.locator("#research-current")).to_have_text("Logistic science pack")
+    playwright.expect(page.locator("#research-progress")).to_have_text("42%")
+    playwright.expect(page.locator("#research-goal")).to_have_text("TO ROCKET SILO")
+    playwright.expect(page.locator("#research-tiers li")).to_have_count(3)
+    playwright.expect(page.locator("#research-tiers li.active")).to_have_attribute("data-pack", "automation-science-pack")
+    playwright.expect(page.locator('[data-milestone="rocket-silo"]')).to_contain_text("Not yet")
+    playwright.expect(page.locator('[data-milestone="automation-science-pack"]')).to_contain_text("Researched")
+    strip = page.locator("#research-strip").bounding_box()
+    context = page.locator(".top-context").first.bounding_box()
+    brand = page.locator(".brand").bounding_box()
+    assert brand["x"] + brand["width"] <= strip["x"] and strip["x"] + strip["width"] <= context["x"]
+    assert strip["y"] >= 0 and strip["y"] + strip["height"] <= 48
+    assert page.locator(".thinking").evaluate("node => node.scrollHeight <= node.clientHeight")
+    assert not errors
+
+
+def test_research_strip_describes_trigger_technologies_without_a_progress_bar(live):
+    from jev_factorio import research_catalog
+    from test_research_catalog import DATA_20, raw_catalog
+    page, writer, url, errors = live
+    page.goto(url + "/?studio=1")
+    seed(writer)
+    research_catalog.write(writer.path.with_name(research_catalog.FILENAME), raw_catalog(DATA_20))
+    research_seed(writer, ["electronics"], "automation-science-pack", 0)
+    playwright.expect(page.locator("#research-progress")).to_have_text("Craft 10 × iron gear wheel")
+    playwright.expect(page.locator("#research-bar-track")).to_be_hidden()
+    assert not errors
+
+
+def test_research_strip_stays_hidden_for_a_tree_from_another_version(live):
+    from jev_factorio import research_catalog
+    from test_research_catalog import DATA_20, raw_catalog
+    page, writer, url, errors = live
+    page.goto(url + "/?studio=1")
+    seed(writer)
+    research_catalog.write(writer.path.with_name(research_catalog.FILENAME), raw_catalog(DATA_20))
+    research_seed(writer, ["automation", "a-technology-this-tree-does-not-have"])
+    playwright.expect(page.locator("#thinking-status")).to_have_text("JEV is evaluating")
+    page.wait_for_timeout(800)
+    playwright.expect(page.locator("#research-strip")).to_be_hidden()
+    playwright.expect(page.locator('[data-milestone="steam-power"]')).to_be_visible()
+    assert not errors
+
+
+def test_long_space_age_ladders_fold_tiers_and_milestones(live):
+    from jev_factorio import research_catalog
+    page, writer, url, errors = live
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    page.goto(url + "/?studio=1")
+    seed(writer)
+    packs = [f"pack-{index:02d}" for index in range(12)]
+    technologies, previous = {}, []
+    for index, pack in enumerate(packs):
+        technologies[f"unlock-{pack}"] = {"prerequisites": previous, "essential": True, "unlocks": [pack],
+                                          "ingredients": [{"name": p, "amount": 1} for p in packs[:index]]}
+        technologies[f"use-{pack}"] = {"prerequisites": [f"unlock-{pack}"],
+                                       "ingredients": [{"name": p, "amount": 1} for p in packs[:index + 1]]}
+        previous = [f"unlock-{pack}"]
+    raw = {"schema": research_catalog.SCHEMA, "version": "2.0.77",
+           "mods": {"base": "2.0.77", "space-age": "2.0.77"}, "technologies": technologies,
+           "science_packs": {pack: {"from_start": False, "unlocked_by": [f"unlock-{pack}"]} for pack in packs}}
+    research_catalog.write(writer.path.with_name(research_catalog.FILENAME), raw)
+    done = [name for index, pack in enumerate(packs[:9]) for name in (f"unlock-{pack}", f"use-{pack}")]
+    writer.emit("goals", 3, goal="rocket_launch", target="rocket_launch",
+                completed_goals={"stockpile_fuel": 100, "bootstrap_mining": 200}, status="running")
+    research_seed(writer, done)
+    playwright.expect(page.locator("#research-strip")).to_be_visible()
+    assert page.locator("#research-tiers li").count() <= 9
+    playwright.expect(page.locator("#research-tiers li").first).to_contain_text("✓")
+    playwright.expect(page.locator("#goals .goal-summary")).to_contain_text("earlier")
+    assert page.locator("#goals .goal-node").count() <= 11
+    assert page.locator(".thinking").evaluate("node => node.scrollHeight <= node.clientHeight")
+    strip = page.locator("#research-strip").bounding_box()
+    assert strip["x"] + strip["width"] <= page.locator(".top-context").first.bounding_box()["x"]
     assert not errors
