@@ -8,6 +8,7 @@ import tempfile
 import time
 from dataclasses import asdict, fields
 from pathlib import Path
+from .iteration_timing import measured, span
 
 
 def _stamp(path: Path) -> tuple | None:
@@ -47,6 +48,7 @@ def _same_memory(memory, captured: dict) -> bool:
                     for name in names))
 
 
+@measured("checkpoint")
 def save_checkpoint(memory, path: Path | None) -> None:
     """Cache only successfully synced bytes in this memory object's lifetime.
 
@@ -73,18 +75,21 @@ def save_checkpoint(memory, path: Path | None) -> None:
         if (cache is not None and len(cache) == 4 and cache[0] == path
                 and cache[2] is not None):
             began = time.perf_counter_ns()
-            identical = _same_memory(memory, cache[3])
+            with span("checkpoint_compare"):
+                identical = _same_memory(memory, cache[3])
             metrics['compare_ns'] = time.perf_counter_ns() - began
             if identical and cache[2] == _stamp(path):
                 metrics.update(status='unchanged', bytes=len(cache[1]))
                 return
         began = time.perf_counter_ns()
         metrics['capture_calls'] = 1
-        data = asdict(memory)
+        with span("checkpoint_capture"):
+            data = asdict(memory)
         if data.get('capital_investment') is None:
             data.pop('capital_investment', None)
         metrics['serialization_calls'] = 1
-        payload = json.dumps(data, sort_keys=True, allow_nan=False).encode('utf-8')
+        with span("checkpoint_serialize"):
+            payload = json.dumps(data, sort_keys=True, allow_nan=False).encode('utf-8')
         metrics.update(bytes=len(payload), serialize_ns=time.perf_counter_ns() - began)
         cache = getattr(memory, '_checkpoint_cache', None)
         if (cache is not None and cache[0] == path and cache[1] == payload
@@ -95,18 +100,22 @@ def save_checkpoint(memory, path: Path | None) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=path.name + '.', dir=path.parent)
         with os.fdopen(fd, 'wb') as stream:
-            stream.write(payload)
-            stream.flush()
+            with span("checkpoint_write"):
+                stream.write(payload)
+                stream.flush()
             began = time.perf_counter_ns()
-            os.fsync(stream.fileno())
+            with span("checkpoint_file_sync"):
+                os.fsync(stream.fileno())
             metrics['file_sync_ns'] = time.perf_counter_ns() - began
-        os.replace(temporary, path)
+        with span("checkpoint_replace"):
+            os.replace(temporary, path)
         temporary = None
         if os.name == 'posix':
             descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
             try:
                 began = time.perf_counter_ns()
-                os.fsync(descriptor)
+                with span("checkpoint_directory_sync"):
+                    os.fsync(descriptor)
                 metrics['directory_sync_ns'] = time.perf_counter_ns() - began
             finally:
                 os.close(descriptor)

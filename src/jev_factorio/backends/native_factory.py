@@ -5,6 +5,7 @@ import json
 import math
 from importlib.resources import files
 from typing import Any
+from ..iteration_timing import native_io, decode_native, span, request_size
 
 from ..factory_contract import validate_command
 from ..planning.catalog import Catalog
@@ -17,13 +18,13 @@ class NativeFactory:
     def __init__(self, backend: Any) -> None:
         self.backend = backend
         raw = self.command(files("jev_factorio").joinpath("lua/catalog.lua").read_text())
-        self.catalog = Catalog.from_dict(json.loads(raw))
+        self.catalog = Catalog.from_dict(decode_native(raw))
         self.command(files("jev_factorio").joinpath("lua/factory.lua").read_text())
         self.command("do\n" + files("jev_factorio").joinpath("lua/launch_readiness.lua").read_text() + "\nend")
         self.command("storage.campaign.discover()")
 
     def command(self, script: str) -> str:
-        result = self.backend._instance.rcon_client.send_command("/sc " + script)
+        result = native_io("native_command", lambda: self.backend._instance.rcon_client.send_command("/sc " + script), request_bytes=request_size("/sc " + script))
         if result and result.startswith("Cannot execute command."):
             raise RuntimeError(result)
         return result or ""
@@ -42,7 +43,7 @@ class NativeFactory:
     def approach_role(self, role: str) -> None:
         from fle.env import Position
 
-        state = json.loads(self.command(
+        state = decode_native(self.command(
             "local entity = storage.campaign.entities[" + json.dumps(role) + "]; "
             "assert(entity and entity.valid); "
             "rcon.print(helpers.table_to_json({name=entity.name, position=entity.position}))"
@@ -53,7 +54,7 @@ class NativeFactory:
         from fle.env import Position, Resource
 
         raw = self.command("rcon.print(helpers.table_to_json(storage.campaign.observe()))")
-        factory = json.loads(raw)
+        factory = decode_native(raw)
         if self.backend._drill is not None:
             drop = self.backend._drill.drop_position
             for role, entity in factory["entities"].items():
@@ -130,7 +131,7 @@ class NativeFactory:
     def entity(self, role: str) -> Any:
         from fle.env import Position
 
-        state = json.loads(self.command(
+        state = decode_native(self.command(
             "local entity = storage.campaign.entities[" + json.dumps(role) + "]; "
             "assert(entity and entity.valid, 'Campaign entity disappeared'); "
             "rcon.print(helpers.table_to_json({name=entity.name, position=entity.position}))"
@@ -205,7 +206,7 @@ class NativeFactory:
             "table.insert(result,connection.target_position) end end end end; "
             "rcon.print(helpers.table_to_json({points=result}))"
         )
-        points = json.loads(raw)["points"]
+        points = decode_native(raw)["points"]
         if points == [] or points == {}:
             raise ConnectionPreflightRejected("missing_fluid_port")
         if not isinstance(points, list):
@@ -238,7 +239,7 @@ class NativeFactory:
             "assert(position, 'No collision-free factory site'); "
             "rcon.print(helpers.table_to_json(position))"
         )
-        return Position(**json.loads(raw))
+        return Position(**decode_native(raw))
 
     def execute(self, action: str, parameters: dict, *, trace: Trace | None = None) -> str:
         validate_command(action, parameters)
@@ -287,7 +288,7 @@ class NativeFactory:
             from fle.env import Position
 
             if parameters["kind"] == "pipe":
-                branch = json.loads(self.call("pipe_source", parameters["source"],
+                branch = decode_native(self.call("pipe_source", parameters["source"],
                                               parameters["target"], parameters["fluid"]))
                 if branch:
                     source = Position(**branch)

@@ -17,7 +17,8 @@ import re
 import statistics
 
 from .observation import LABELS
-from .performance import CALLS
+from .performance import CALLS, CHECKPOINT_STATUSES
+from .iteration_timing import validate_timing, CLOCKS
 from .telemetry import STAGES, validate_phase
 
 MAX_LINE = 8 * 1024 * 1024
@@ -55,6 +56,8 @@ def analyze(path: Path, *, max_records: int = MAX_RECORDS) -> dict:
     records = legacy = incomplete = 0
     identity = source = source_digest = source_dirty = previous_record_time = None
     profiles_seen = partitions_seen = 0
+    timed_iterations = incomplete_iterations = timed_gaps = missing_prior = 0
+    previous_iteration_index = None
     opener = gzip.open if path.suffix == '.gz' else open
     with opener(path, 'rt', encoding='utf-8') as stream:
         while raw := stream.readline(MAX_LINE + 1):
@@ -149,6 +152,41 @@ def analyze(path: Path, *, max_records: int = MAX_RECORDS) -> dict:
                             for key in ('request_bytes', 'response_bytes'):
                                 if key in entry:
                                     counts[prefix + ':' + key] += nonnegative(entry[key])
+                prior = row.get('previous_iteration_timing')
+                if prior is None:
+                    missing_prior += 1
+                else:
+                    prior = validate_timing(prior)
+                    index = prior['iteration_index']
+                    if previous_iteration_index is not None:
+                        if index <= previous_iteration_index:
+                            raise ValueError('Duplicate or regressed iteration timing')
+                        counts['iteration:unpublished_between_records'] += index - previous_iteration_index - 1
+                    previous_iteration_index = index
+                    for name, value in prior['native_io'].items():
+                        counts['iteration_native_io:' + name] += value
+                    if prior['partition_complete']:
+                        timed_iterations += 1
+                        for clock in CLOCKS:
+                            samples['iteration_total:' + clock].append(prior['totals_ns'][clock])
+                        for name, values in prior['phases'].items():
+                            counts['iteration_phase:' + name + ':calls'] += values['calls']
+                            counts['iteration_phase:' + name + ':failed'] += values['failed']
+                            for clock in CLOCKS:
+                                for scope in ('inclusive', 'exclusive'):
+                                    samples['iteration_phase_' + scope + ':' + name + ':' + clock].append(values[clock + '_' + scope + '_ns'])
+                    else:
+                        incomplete_iterations += 1
+                    gap = prior['gap']
+                    counts['loop_sleep:calls'] += gap['sleep_calls']
+                    counts['loop_sleep:failed'] += gap['sleep_failed']
+                    if gap['complete']:
+                        timed_gaps += 1
+                        for clock in CLOCKS:
+                            for name in ('total_ns', 'intentional_sleep_ns', 'other_gap_ns'):
+                                samples['iteration_gap:' + name + ':' + clock].append(gap[name][clock])
+                            if prior['partition_complete']:
+                                samples['iteration_and_following_gap:' + clock].append(prior['totals_ns'][clock] + gap['total_ns'][clock])
                 metrics = row.get('performance')
                 if metrics is not None:
                     if not isinstance(metrics, dict) or type(metrics.get('schema')) is not int or metrics['schema'] != 1:
@@ -160,6 +198,11 @@ def analyze(path: Path, *, max_records: int = MAX_RECORDS) -> dict:
                         for name, entry in table.items():
                             samples['per_record_' + group + ':' + name].append(nonnegative(entry['total_ns']))
                             counts['per_record_' + group + ':' + name + ':count'] += nonnegative(entry['count'])
+                    checkpoints = metrics.get('checkpoints', {})
+                    if not isinstance(checkpoints, dict) or set(checkpoints) - (CHECKPOINT_STATUSES | {'bytes_written'}):
+                        raise ValueError('Unknown checkpoint counter')
+                    for key, value in checkpoints.items():
+                        counts['checkpoint:' + key] += nonnegative(value)
                     for key in ('capture_calls', 'serialization_calls', 'measured_calls'):
                         value = metrics.get('checkpoint_operations', {}).get(key)
                         if value is not None:
@@ -170,19 +213,29 @@ def analyze(path: Path, *, max_records: int = MAX_RECORDS) -> dict:
         raise ValueError('Empty latency capture')
     return {'schema': 1, 'records': records, 'source_commit': source,
             'source_sha256': source_digest, 'source_dirty': source_dirty,
+            'iteration_timing': {'complete_iterations': timed_iterations,
+                'incomplete_iterations': incomplete_iterations, 'complete_following_gaps': timed_gaps,
+                'records_without_prior_timing': missing_prior,
+                'publication': 'one_record_lag; final_tail_not_inferred_or_assigned_zero'},
             'observation_profiles': profiles_seen, 'legacy_profiles_without_cpu_partition': legacy,
             'reconciled_partitions': partitions_seen, 'incomplete_partitions': incomplete,
             'distributions': {name: distribution(values) for name, values in sorted(samples.items())},
             'counts': dict(sorted(counts.items())),
             'quantiles': 'median_middle_pair_mean_and_p95_nearest_rank',
             'scopes': {
+                'iteration_exclusive': 'nonoverlapping_components_of_completed_decorated_step',
+                'iteration_inclusive': 'nested_totals_not_additive_not_individual_call_quantiles',
+                'iteration_gap': 'nonoverlapping_intentional_loop_sleep_and_other_gap; not watchdog cadence',
+                'thread_cpu': 'current_python_thread_not_native_server_cpu',
                 'observation_exclusive': 'within_each_single_ordered_observation_only',
                 'phase_inclusive': 'nested_phase_durations_not_additive',
                 'per_record': 'per_record_aggregates_not_individual_call_quantiles',
                 'gap': 'UTC_record_to_next_observation_includes_unmeasured_emission_and_sleep',
                 'process_cpu': 'whole_python_process_including_other_threads_not_native_or_host_cpu'},
             'unavailable': ['opaque_helper_transport_decomposition', 'helper_retry_and_backoff',
-                            'intentional_sleep_separation', 'full_record_construction_emission_partition'],
+                            'native_server_cpu', 'final_iteration_tail_without_following_record']
+                + ([] if timed_gaps else ['intentional_sleep_separation'])
+                + ([] if timed_iterations else ['full_record_construction_emission_partition']),
             'native_acceptance_proven': False, 'deployment_authorized': False}
 
 

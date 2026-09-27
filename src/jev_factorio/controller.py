@@ -15,6 +15,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 from .causal_trace import CausalTrace, traced_step
+from .iteration_timing import measured, span, previous_timing
 from .operational_safety import MaintenanceAdmissionClosed, StoragePressure
 from .provider_health import ProviderCircuit
 from .backends.errors import ConnectionPreflightRejected
@@ -258,6 +259,7 @@ class HierarchicalLoop(AgentLoop):
                                           "diagnostics": decision.diagnostics,
                                           "selection_support": getattr(self, "_selection_support", {})})
 
+    @measured("record")
     def _record(self, before: GameSnapshot, action: str, outcome: str,
                 after: GameSnapshot | None = None, verified: bool = False) -> dict:
         self._save()
@@ -266,51 +268,59 @@ class HierarchicalLoop(AgentLoop):
                 self.memory, after or before, process_id=self._process_id,
                 provenance=self.provenance, provider=self.jev.state if isinstance(self.jev, ProviderCircuit) else None,
                 verified=verified)
-        decision = self._decision
-        record = {
-            **self.provenance,
-            "schema_version": 2, "controller": "hierarchical", "policy": self.policy,
-            "tick": before.tick, "session_id": before.session_id,
-            "world_kind": before.world_kind, "goal": self.memory.active_goal,
-            "target": self.target, "status": self.memory.status, "reason": self.memory.reason,
-            "action": action, "outcome": outcome, "verified": verified,
-            "state": before.for_jev(), "after_state": (after or before).for_jev(),
-            "completed_goals": dict(self.memory.completed_goals),
-            "decision": asdict(decision) if decision else None,
-            "model_call": decision is not None and decision.model_called,
-            "requested_model": getattr(self.jev, "model", None),
-            "resolved_model": getattr(self.jev, "last_model", None) if decision and decision.model_called else None,
-            "usage": getattr(self.jev, "last_usage", None) if decision and decision.model_called else None,
-            "pending": deepcopy(self.memory.pending), "history": deepcopy(self.memory.history[-8:]),
-            "process_id": self._process_id, "recorded_at_utc": utc_now(),
-            "phases": deepcopy(self._phases), "attempt": deepcopy(self.memory.attempt),
-            "performance": self._performance.snapshot(),
-            "capacity_evidence": deepcopy(getattr(after or before, "_capacity_evidence", {})),
-            "attempt_outcomes": deepcopy(self.memory.attempt_outcomes[-8:]),
-            "planning_diagnostics": deepcopy(getattr(self, "_planning_diagnostics", {})),
-            "failure_budgets": dict(self.memory.failures),
-            "mining_outposts": bool(getattr(self, "_mining_outposts_enabled", False)),
-        }
-        if getattr(self, "factory_scheduling", "serial") != "serial":
-            record["factory_scheduling"] = self.factory_scheduling
-        fair = getattr(getattr(self, "backend", None), "_fair", None)
-        metrics = getattr(fair, "metrics", None)
-        if isinstance(metrics, dict):
-            record["fair_action_metrics"] = dict(metrics)
-        record.update(self._record_extras())
-        record["acceptance_configuration"] = {
-            "factory_scheduling": getattr(self, "factory_scheduling", "serial"),
-            **{name: record.get(name) is True for name in (
-                "background_work", "furnace_output_buffers", "furnace_input_belts",
-                "mining_outposts", "ore_side_successors")},
-        }
-        if getattr(self, "_solid_routes_enabled", False):
-            record["acceptance_configuration"]["solid_routes"] = True
+        with span("record_construct"):
+            decision = self._decision
+            record = {
+                **self.provenance,
+                "schema_version": 2, "controller": "hierarchical", "policy": self.policy,
+                "tick": before.tick, "session_id": before.session_id,
+                "world_kind": before.world_kind, "goal": self.memory.active_goal,
+                "target": self.target, "status": self.memory.status, "reason": self.memory.reason,
+                "action": action, "outcome": outcome, "verified": verified,
+                "state": before.for_jev(), "after_state": (after or before).for_jev(),
+                "completed_goals": dict(self.memory.completed_goals),
+                "decision": asdict(decision) if decision else None,
+                "model_call": decision is not None and decision.model_called,
+                "requested_model": getattr(self.jev, "model", None),
+                "resolved_model": getattr(self.jev, "last_model", None) if decision and decision.model_called else None,
+                "usage": getattr(self.jev, "last_usage", None) if decision and decision.model_called else None,
+                "pending": deepcopy(self.memory.pending), "history": deepcopy(self.memory.history[-8:]),
+                "process_id": self._process_id, "recorded_at_utc": utc_now(),
+                "phases": deepcopy(self._phases), "attempt": deepcopy(self.memory.attempt),
+                "performance": self._performance.snapshot(),
+                "capacity_evidence": deepcopy(getattr(after or before, "_capacity_evidence", {})),
+                "attempt_outcomes": deepcopy(self.memory.attempt_outcomes[-8:]),
+                "planning_diagnostics": deepcopy(getattr(self, "_planning_diagnostics", {})),
+                "failure_budgets": dict(self.memory.failures),
+                "mining_outposts": bool(getattr(self, "_mining_outposts_enabled", False)),
+            }
+            if getattr(self, "factory_scheduling", "serial") != "serial":
+                record["factory_scheduling"] = self.factory_scheduling
+            fair = getattr(getattr(self, "backend", None), "_fair", None)
+            metrics = getattr(fair, "metrics", None)
+            if isinstance(metrics, dict):
+                record["fair_action_metrics"] = dict(metrics)
+            record.update(self._record_extras())
+            record["acceptance_configuration"] = {
+                "factory_scheduling": getattr(self, "factory_scheduling", "serial"),
+                **{name: record.get(name) is True for name in (
+                    "background_work", "furnace_output_buffers", "furnace_input_belts",
+                    "mining_outposts", "ore_side_successors")},
+            }
+            if getattr(self, "_solid_routes_enabled", False):
+                record["acceptance_configuration"]["solid_routes"] = True
+        previous = previous_timing(self)
+        if previous is not None:
+            record["previous_iteration_timing"] = previous
         if self.log_file:
-            self.log_file.parent.mkdir(parents=True, exist_ok=True)
-            with self.log_file.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(_json_safe(record), allow_nan=False) + "\n")
-        print(f"[t={before.tick}] {self.memory.status}: {action} -> {outcome}", flush=True)
+            with span("legacy_encode"):
+                encoded = json.dumps(_json_safe(record), allow_nan=False) + "\n"
+            with span("legacy_write"):
+                self.log_file.parent.mkdir(parents=True, exist_ok=True)
+                with self.log_file.open("a", encoding="utf-8") as stream:
+                    stream.write(encoded)
+        with span("record_console"):
+            print(f"[t={before.tick}] {self.memory.status}: {action} -> {outcome}", flush=True)
         return record
 
     def _model_facts(self, snapshot: GameSnapshot) -> dict:
@@ -318,6 +328,8 @@ class HierarchicalLoop(AgentLoop):
         # Diagnostic-only additions must not grow/change model prompts.
         facts.get("factory", {}).pop("acceptance_runtime", None)
         facts.get("factory", {}).pop("consumed", None)
+        facts.get("factory", {}).pop("observation_snapshot_schema", None)
+        facts.get("factory", {}).pop("observation_query_bounds", None)
         return facts
 
     def _record_extras(self) -> dict:

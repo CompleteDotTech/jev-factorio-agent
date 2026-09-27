@@ -9,6 +9,7 @@ from uuid import uuid4
 from ..planning.catalog import Catalog
 from ..state import GameSnapshot
 from ..telemetry import Trace
+from ..iteration_timing import native_io, request_size
 
 
 class SessionRcon:
@@ -28,12 +29,14 @@ class SessionRcon:
         return command
 
     def send_command(self, command):
-        return self.client.send_command(self.scoped(command))
+        scoped = self.scoped(command)
+        return native_io("native_command", lambda: self.client.send_command(scoped),
+                         request_bytes=request_size(scoped))
 
     def send_commands(self, commands):
-        return self.client.send_commands({
-            key: self.scoped(command) for key, command in commands.items()
-        })
+        scoped = {key: self.scoped(command) for key, command in commands.items()}
+        return native_io("native_batch", lambda: self.client.send_commands(scoped),
+                         request_bytes=request_size(scoped))
 
 
 class FleBackend:

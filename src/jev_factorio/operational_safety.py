@@ -16,6 +16,7 @@ import tempfile
 import time
 from pathlib import Path
 from uuid import uuid4
+from .iteration_timing import measured, span
 
 
 class SafetyStateError(RuntimeError):
@@ -33,6 +34,7 @@ class StoragePressure(OSError):
         super().__init__(errno.ENOSPC, "Storage admission reserve unavailable")
 
 
+@measured("operational_state")
 def atomic_json(path: Path, value: dict) -> None:
     """Write private JSON with file and directory durability; never follow a leaf link."""
     path = Path(path)
@@ -55,22 +57,28 @@ def atomic_json(path: Path, value: dict) -> None:
         if os.name == "posix":
             handle = os.open(directory.parent, os.O_RDONLY | os.O_DIRECTORY)
             try:
-                os.fsync(handle)
+                with span("operational_directory_sync"):
+                    os.fsync(handle)
             finally:
                 os.close(handle)
-    payload = json.dumps(value, sort_keys=True, allow_nan=False).encode()
+    with span("operational_encode"):
+        payload = json.dumps(value, sort_keys=True, allow_nan=False).encode()
     fd, temporary = tempfile.mkstemp(prefix=".safety-", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
+            with span("operational_write"):
+                stream.write(payload)
+                stream.flush()
+            with span("operational_file_sync"):
+                os.fsync(stream.fileno())
+        with span("operational_replace"):
+            os.replace(temporary, path)
         temporary = None
         if os.name == "posix":
             directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
             try:
-                os.fsync(directory)
+                with span("operational_directory_sync"):
+                    os.fsync(directory)
             finally:
                 os.close(directory)
     finally:

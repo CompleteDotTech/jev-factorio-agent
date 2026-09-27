@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Callable, Iterator
 from uuid import uuid4
+from .iteration_timing import span
 
 DISPATCH_STAGES = {"dispatch", "entity_lookup", "approach", "transfer_rpc"}
 STAGES = DISPATCH_STAGES | {"observe", "pre_dispatch_observe", "post_dispatch_observe",
@@ -44,24 +45,25 @@ def error_code(error: BaseException) -> str:
 def phase(stage: str, trace: Trace | None = None) -> Iterator[None]:
     if stage not in STAGES:
         raise ValueError("Unknown diagnostic stage")
-    if trace is None:
-        yield
-        return
-    event = {"stage": stage, "status": "started", "at_utc": utc_now(),
-             "seconds": None, "error_code": None}
-    trace(dict(event))  # A failed write prevents entering the operation.
-    start = time.perf_counter()
-    try:
-        yield
-    except BaseException as error:
+    with span(stage):
+        if trace is None:
+            yield
+            return
+        event = {"stage": stage, "status": "started", "at_utc": utc_now(),
+                 "seconds": None, "error_code": None}
+        trace(dict(event))  # A failed write prevents entering the operation.
+        start = time.perf_counter()
         try:
-            trace({**event, "status": "failed", "seconds": time.perf_counter() - start,
-                   "error_code": error_code(error)})
-        except BaseException:
-            pass
-        raise
-    else:
-        trace({**event, "status": "returned", "seconds": time.perf_counter() - start})
+            yield
+        except BaseException as error:
+            try:
+                trace({**event, "status": "failed", "seconds": time.perf_counter() - start,
+                       "error_code": error_code(error)})
+            except BaseException:
+                pass
+            raise
+        else:
+            trace({**event, "status": "returned", "seconds": time.perf_counter() - start})
 
 
 def fingerprint(step: dict) -> str:
