@@ -70,6 +70,13 @@ def _validate_transition(event: dict, minimum: int, maximum: int, intents: list,
             or not minimum <= event['tick'] <= maximum):
         raise ValueError('Invalid funding transition schema')
     solid_funding.validate_state(event['funding'], event['tick'], intents)
+    proof = event['funding']
+    if kind == 'solid_kit_committed' and proof['actions'] == 1 and proof['started_tick'] != event['tick']:
+        raise ValueError('First funding commit must establish its own start tick')
+    if kind == 'solid_kit_abandoned' and (
+            event.get('reason') == 'kit_deadline' and event['tick'] < proof['deadline_tick']
+            or event.get('reason') == 'kit_action_budget' and proof['actions'] != solid_funding.MAX_ACTIONS):
+        raise ValueError('Abandonment contradicts its intrinsic budget proof')
     key = event['funding']['key'] + ('' if kind == 'solid_kit_paid_handoff' else ':kit')
     if event['key'] != key or kind == 'solid_kit_abandoned' and event['reason'] not in REASONS:
         raise ValueError('Invalid funding transition identity')
@@ -167,6 +174,28 @@ def _new_history(previous: list, current: list) -> list:
     return current[overlap:]
 
 
+def _selection_matches(record: dict, plan_id: str, expected_source=None) -> bool:
+    decision = record.get('decision')
+    fields = {'plan_id', 'source', 'reason', 'state', 'questions', 'answers', 'utilities',
+              'model_called', 'diagnostics'}
+    if (not isinstance(plan_id, str) or not plan_id
+            or not isinstance(decision, dict) or set(decision) != fields
+            or decision.get('plan_id') != plan_id
+            or not isinstance(decision.get('reason'), str) or type(decision.get('model_called')) is not bool
+            or any(not isinstance(decision.get(key), dict) for key in
+                   ('state', 'questions', 'answers', 'utilities', 'diagnostics'))):
+        return False
+    source, called, policy = decision['source'], decision['model_called'], record.get('policy')
+    if record.get('model_call') is not called or expected_source is not None and source != expected_source:
+        return False
+    if not ((policy == 'deterministic' and source == 'deterministic' and not called)
+            or policy in {'jev', 'hybrid'} and source in {'jev', 'mock'} and called
+            or policy == 'hybrid' and (source == 'deterministic-singleton' and not called
+                                      or source == 'deterministic-fallback')):
+        return False
+    return True
+
+
 def _kit_plan_observed(proof: dict, record: dict, tick: int, fresh: list,
                        seen_attempts: set[str], budgets: dict, reservations: dict,
                        outcomes: list, bindings: dict) -> bool:
@@ -175,19 +204,7 @@ def _kit_plan_observed(proof: dict, record: dict, tick: int, fresh: list,
         action == 'observe' and record.get('verified') is False) or (
         action == 'verify' and record.get('verified') is True)
     decision = record.get('decision')
-    fields = {'plan_id', 'source', 'reason', 'state', 'questions', 'answers', 'utilities',
-              'model_called', 'diagnostics'}
-    if (not isinstance(decision, dict) or set(decision) != fields
-            or decision.get('plan_id') != proof['key'] + ':kit'
-            or not isinstance(decision.get('reason'), str) or type(decision.get('model_called')) is not bool
-            or any(not isinstance(decision.get(key), dict) for key in
-                   ('state', 'questions', 'answers', 'utilities', 'diagnostics'))):
-        return False
-    source, called, policy = decision['source'], decision['model_called'], record.get('policy')
-    if not ((policy == 'deterministic' and source == 'deterministic' and not called)
-            or policy in {'jev', 'hybrid'} and source in {'jev', 'mock'} and called
-            or policy == 'hybrid' and (source == 'deterministic-singleton' and not called
-                                      or source == 'deterministic-fallback')):
+    if not _selection_matches(record, proof['key'] + ':kit'):
         return False
     commit = next((value for value in fresh if value.get('kind') == 'solid_kit_committed'
                    and _same(value.get('funding'), proof) and value.get('tick') == tick), {})
@@ -394,22 +411,30 @@ def _dispatch_crossed_deadline(record: dict, before: int, deadline: int, now: in
             and isinstance(decision, dict) and candidates[0]['plan_id'] == decision.get('plan_id'))
 
 
-def _initial_history_state(events: list[dict], working: dict | None) -> bool:
+def _initial_history_state(events: list[dict], working: dict | None, budgets: dict) -> bool:
     # A bounded ring may begin mid-project. Its first proof anchors that
     # suffix, but all following transitions and its final ownership must agree.
     state = None
     last_tick = -1
+    abandoned = set()
     for index, event in enumerate(events):
         proof = event['funding']
         if event['tick'] < last_tick:
             return False
         last_tick = event['tick']
         if event['kind'] == 'solid_kit_committed':
+            if proof['key'] in abandoned:
+                return False
             if index and (state is None and proof['actions'] != 1 or state is not None and (
                     not _same(_identity(state), _identity(proof)) or proof['actions'] != state['actions'] + 1)):
                 return False
             state = proof
         else:
+            if event['kind'] == 'solid_kit_abandoned':
+                count = _budget(budgets, proof['key'] + ':kit')
+                if count is None or count < 2:
+                    return False
+                abandoned.add(proof['key'])
             if index and not _same(state, proof):
                 return False
             state = None
@@ -463,8 +488,12 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
         solid_funding.validate_catalog_declarations(final_bindings, final['last_tick'])
         if any(not _same(value, final_bindings.get(key)) for key, value in bindings.items()):
             issues.add('solid_funding_final_catalog_declaration_mismatch')
-        if any(value['observed_tick'] < previous_tick for key, value in final_bindings.items() if key not in bindings):
-            issues.add('solid_funding_new_catalog_declaration_backdated')
+        if any(key not in bindings for key in final_bindings):
+            # Retained observations do not carry an independently anchored
+            # runtime catalog from which to derive a new declaration. A new
+            # project requires a separately captured baseline, not a final
+            # checkpoint that declares its own future acquisition authority.
+            issues.add('solid_funding_new_catalog_declaration_unproven')
         if working is not None:
             solid_funding.validate_state(working, previous_tick, intents)
         # The ring repeats old events. Seed it from the initial checkpoint and
@@ -475,7 +504,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
         for event in initial_events:
             _validate_transition(event, 0, previous_tick, intents)
             seen.add(hashlib.sha256(_encoded(event)).digest())
-        if not _initial_history_state(initial_events, working):
+        if not _initial_history_state(initial_events, working, initial.get('failures', {})):
             issues.add('solid_funding_initial_history_mismatch')
         previous_budgets = initial.get('failures', {})
         previous_pending = initial.get('pending')
@@ -529,6 +558,11 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 if ordinary_plan is not None or active_kit or previous_pending is not None or len(ordinary_commits) != 1:
                     issues.add('solid_funding_ordinary_plan_replaced')
                 event = ordinary_commits[0]
+                if (set(event) != {'kind', 'plan', 'source', 'tick', 'definition'}
+                        or not isinstance(event.get('source'), str)
+                        or not _tick(event.get('tick')) or event['tick'] != before_tick
+                        or not _selection_matches(record, event.get('plan'), event.get('source'))):
+                    issues.add('solid_funding_ordinary_selection_unproven')
                 ordinary_plan = deepcopy(event.get('definition'))
                 ordinary_index = 0
                 if not isinstance(ordinary_plan, dict) or ordinary_plan.get('id') != event.get('plan'):
@@ -757,7 +791,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
             _validate_transition(event, 0, final['last_tick'], intents)
             if hashlib.sha256(_encoded(event)).digest() not in seen:
                 issues.add('solid_funding_final_history_unobserved')
-        if not _initial_history_state(final_events, final.get('solid_funding')):
+        if not _initial_history_state(final_events, final.get('solid_funding'), final.get('failures', {})):
             issues.add('solid_funding_final_history_mismatch')
         if not _same(working, final.get('solid_funding')) or not _same(
                 rows[-1].get('solid_funding'), final.get('solid_funding')):

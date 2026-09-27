@@ -140,6 +140,13 @@ new independently captured measurement baseline; changing event hashes cannot
 declare its own authority. These are consistency anchors, not log authentication.
 Research progress uses the same immutable declaration. The final checkpoint must
 retain every initial declaration exactly, including its original observation tick.
+New declarations in a final checkpoint are unproven: retained observations do not
+provide independently anchored catalog definitions from which to derive them.
+Such a window fails measurement and needs a separately captured baseline after
+the new project is observed; copying or inventing digests cannot grant authority.
+Initial and final history suffixes retain exhausted project identities across
+abandonment. The checkpoint kit budget must be at least two, and a later commit
+for that abandoned identity is forbidden even when its action count restarts at one.
 New verified service outcomes require a matching fresh dispatch or completion of
 the exact retained pending attempt before contributing to admission payback.
 Kit attempts bind the captured step's receipt and observed endpoint, including
@@ -150,7 +157,9 @@ existing-effect verification, dispatched attempt or proven failure can clear it,
 and final checkpoint activity must agree with the tracked plan.
 Ordinary plans also block new kit selection until a causal completion or failure.
 Policy-enabled ordinary `plan_committed` events retain detached plan definitions
-for this replay; those definitions are removed from model-facing history.
+for this replay; those definitions are removed from model-facing history. Every
+fresh ordinary commit must match the same record's complete selection decision,
+policy, model-call flag, plan identity, source and initial observation tick.
 
 Detailed funding audit proofs stay in checkpoint/gameplay history. Model-facing
 history contains only compact event identity, tick and reason; unrelated research
