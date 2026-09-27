@@ -169,6 +169,12 @@ then binds the selected step to its exact dispatch/completion. Pending completio
 retains its original index; an observation barrier cannot advance progress. Final
 ordinary step indexes must match replay. Clearing a failed ordinary plan requires
 one fully shaped failure event and the exact prior-plus-one failure count.
+This ordinary-plan replay applies only to policy-enabled evidence. Policy-off
+paid construction does not emit funding plan definitions and remains measurable
+without them. Every new outcome inserted into the policy's bounded payback
+history needs owned dispatch/completion evidence, including nonservice outcomes:
+even a craft, expired wait or rejected connection can evict older service samples.
+Outcomes whose completion cause cannot be reconciled make the window unmeasurable.
 
 Detailed funding audit proofs stay in checkpoint/gameplay history. Model-facing
 history contains only compact event identity, tick and reason; unrelated research
@@ -222,3 +228,16 @@ For source rollback, omit this unpublished unit or use a reviewed revert after a
 future merge. Retain checkpoint ownership; do not manufacture legacy logs by
 stripping the new fields. Log enrichment has bounded nonzero serialization cost
 and must be included in eventual native CPU/wall/byte/write attribution.
+
+Every retained record outcome suffix and the final bounded outcome ring must
+match replay exactly, including order and payload. Fresh ordinary dispatches
+require observed preconditions, carried stock and durable solid/coal reservation
+coverage before they can supply payback samples or defer a funding deadline.
+Deadline deferrals also require an observed active plan and exact current step;
+a retained plan can dispatch without making a new model decision. Pending
+completions retain their original admission boundary. Catalog-dependent capacity
+admission, capital-held admission, and background-job admission without a
+complete captured before-boundary remain unproven rather than receiving forecast
+or missing-catalog credit. Deferred release diagnostics retain the first cause
+for the exact funding proof until cleanup; this does not turn an uncaptured
+demand/catalog change into a measurable audit trigger.
