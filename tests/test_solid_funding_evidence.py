@@ -15,8 +15,24 @@ from jev_factorio.planning import solid_funding
 from test_solid_kit_acquisition import kit_loop
 
 
+def funding_catalog():
+    from test_solid_investment import catalog
+    value = catalog()
+    value.technologies['fluid-handling'] = deepcopy(value.technologies['study'])
+    return value
+
+
 def funded_evidence():
     rows, trial, initial, final = evidence()
+    def shift(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in {'tick', 'first_tick', 'last_tick', 'last_positive_tick'} and type(item) is int:
+                    value[key] += 30000
+                else: shift(item)
+        elif isinstance(value, list):
+            for item in value: shift(item)
+    for value in (rows, initial, final): shift(value)
     trial['configuration']['solid_science_policy'] = True
     for cp in (initial, final):
         cp['solid_science_policy'] = True
@@ -34,38 +50,57 @@ def funded_evidence():
             corner['y'] += 60
         entity.update(unit_number=unit, position=deepcopy(endpoint['position']), products_finished=0)
         entities[role] = entity
+    entities['fixture:kit-source']['output']['iron-gear-wheel'] = 120
+    entities['fixture:kit-target']['input']['copper-plate'] = 120
     for step in route['steps']:
         step['position']['y'] += 60
     intent = solid_funding.intent(route)
     trial['solid_intents'].append(deepcopy(intent))
-    from test_solid_investment import catalog
-    funding = solid_funding.start(route, {'catalog_sha256': solid_funding.catalog_digest(route, base, catalog())}, initial['last_tick'])
+    data = funding_catalog()
+    funding = solid_funding.start(route, {'catalog_sha256': solid_funding.catalog_digest(route, base, data)}, initial['last_tick'])
+    from test_solid_investment import service_history
+    from jev_factorio.telemetry import fingerprint
+    outcomes = service_history(base)
+    for value in outcomes:
+        endpoint = route['source'] if value['action'] == 'factory_extract' else route['target']
+        parameters = {'role': endpoint['role'], 'item': route['item'], 'quantity': 20,
+                      'receipt': f"{value['started_tick']}:{value['action']}:{endpoint['role']}:{route['item']}"}
+        value.update(plan_id=f"factory:{value['action']}:{endpoint['role']}", receipt=parameters['receipt'],
+                     expected_unit_number=endpoint['unit_number'],
+                     step_sha256=fingerprint(asdict(Step(value['action'], 'transfer', parameters=parameters))))
     for cp in (initial, final):
         cp['solid_intents'].append(deepcopy(intent))
         cp['solid_funding'] = deepcopy(funding)
+        cp['attempt_outcomes'] = deepcopy(outcomes)
+        cp['solid_funding_catalogs'] = {funding['key']: {'schema': 1, 'observed_tick': initial['last_tick'],
+            'version': data.version, 'catalog_sha256': funding['catalog_sha256']}}
     for record in rows:
         record['acceptance_configuration']['solid_science_policy'] = True
         record.update(solid_funding_schema=1, solid_funding=deepcopy(funding), history=[])
+        record['attempt_outcomes'] = deepcopy(outcomes)
         for label in ('state', 'after_state'):
             record[label]['inventory'].update({'iron-plate': 200, 'copper-plate': 100, 'transport-belt': 0})
             factory = record[label]['factory']
+            factory['acceptance_runtime']['mods']['base'] = data.version
             factory['entities'].update(deepcopy(entities))
             factory['solid_routes']['routes'][route['route']] = deepcopy(route)
             factory['solid_routes']['diagnostics'].append(
                 {'intent_index': 4, 'state': 'proposed', 'reason': 'ready_layout'})
+    declaration = solid_funding.acquisition_evidence(route, GameSnapshot(**rows[0]['state']), data, {})
+    for cp in (initial, final):
+        cp['solid_funding_catalogs'][funding['key']]['acquisition_sha256'] = solid_funding.digest(
+            {k: v for k, v in declaration.items() if k != 'reserved'})
     return rows, trial, initial, final
 
 
 @lru_cache(maxsize=1)
 def acquisition_fixture():
-    from test_solid_investment import catalog
     records, _, initial, _ = funded_evidence()
     snapshot = GameSnapshot(**records[0]['state'])
     row = snapshot.factory['solid_routes']['routes'][initial['solid_funding']['route']]
-    data = catalog()
+    data = funding_catalog()
     plan, _ = solid_funding.acquire(row, snapshot, data)
-    return asdict(plan.steps[0]), {'catalog': solid_funding.catalog_evidence(row, snapshot, data),
-                                 'reserved': {}, 'technologies': {}}
+    return asdict(plan.steps[0]), solid_funding.acquisition_evidence(row, snapshot, data, {})
 
 
 def event(kind, funding, tick, **extras):
@@ -310,6 +345,9 @@ def test_commit_increment_needs_an_exact_new_proof_and_retains_identity():
     next_state = deepcopy(initial['solid_funding']); next_state['actions'] = 2
     rows[3]['history'] = [event('solid_kit_committed', next_state, rows[3]['state']['tick']),
                           plan_event(next_state, rows[3]['state']['tick'])]
+    rows[3].update(action='verify', verified=True)
+    selected = rows[3]['history'][0]['step']
+    rows[3]['after_state']['inventory'][selected['item']] = selected['threshold']
     decision_for(rows[3], next_state)
     for record in rows[3:]:
         record['solid_funding'] = deepcopy(next_state)
@@ -474,6 +512,9 @@ def test_repeated_history_commit_does_not_consume_current_record_commit_limit():
     new['actions'] = 2
     history = [old, event('solid_kit_committed', new, rows[3]['state']['tick']),
                plan_event(new, rows[3]['state']['tick'])]
+    rows[3].update(action='verify', verified=True)
+    selected = history[1]['step']
+    rows[3]['after_state']['inventory'][selected['item']] = selected['threshold']
     decision_for(rows[3], new)
     for record in rows[3:]:
         record['history'] = deepcopy(history)

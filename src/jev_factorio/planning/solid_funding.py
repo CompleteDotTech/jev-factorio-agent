@@ -78,6 +78,31 @@ def catalog_evidence(row: dict, snapshot: GameSnapshot, catalog: Catalog) -> dic
             'hand_categories': catalog.hand_categories, 'version': catalog.version}
 
 
+def acquisition_evidence(row: dict, snapshot: GameSnapshot, catalog: Catalog, reserved: dict) -> dict:
+    """Capture only recipes/unlocks needed to replay kit and research admission."""
+    kit = catalog_evidence(row, snapshot, catalog)
+    research = snapshot.factory.get('research', '')
+    technology = catalog.technologies.get(research, {})
+    roots = {value['name']: 1 for value in technology.get('ingredients', [])}
+    bill = catalog.material_demands(roots, {}, snapshot.researched or [])
+    names = set(kit['recipes']) | set(bill.batches)
+    names.update(value.get('recipe') for value in snapshot.factory.get('entities', {}).values()
+                 if value.get('recipe') in catalog.recipes)
+    if len(names) > 512:
+        raise ValueError('Admission recipe evidence exceeds bound')
+    technologies = {}
+    for name, value in catalog.technologies.items():
+        effects = [effect for effect in value.get('effects', [])
+                   if effect.get('type') == 'unlock-recipe' and effect.get('recipe') in names]
+        if name == research or name in (snapshot.researched or []) and effects:
+            technologies[name] = {'effects': effects}
+            if name == research:
+                technologies[name].update({key: value[key] for key in ('count', 'ingredients', 'trigger') if key in value})
+    return {'catalog': kit, 'reserved': reserved, 'technologies': technologies,
+            'recipes': {name: catalog.recipes[name] for name in sorted(names - set(kit['recipes']))},
+            'stack_sizes': {row['item']: catalog.stack_sizes.get(row['item'], 20)}}
+
+
 def _positive(value: object) -> bool:
     return type(value) in {int, float} and math.isfinite(value) and value > 0 and value == int(value)
 

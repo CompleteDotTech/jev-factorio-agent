@@ -11,6 +11,7 @@ from copy import deepcopy
 import hashlib
 import json
 from dataclasses import asdict
+from collections import Counter
 
 from .planning import solid_funding
 from .telemetry import fingerprint, validate_attempt
@@ -83,20 +84,49 @@ def _kit_step(value: dict) -> Step:
     return step
 
 
-def _acquisition_matches(commit: dict, record: dict, proof: dict) -> bool:
+def _acquisition_matches(commit: dict, record: dict, proof: dict, budgets: dict,
+                         reservations: dict, outcomes: list, bindings: dict) -> bool:
     from .planning.catalog import Catalog
+    from .planning import solid_investment
+    from . import solid_routes
     value = commit.get('acquisition')
-    if not isinstance(value, dict) or set(value) != {'catalog', 'reserved', 'technologies'}:
+    if not isinstance(value, dict) or set(value) != {'catalog', 'reserved', 'technologies', 'recipes', 'stack_sizes'}:
         return False
     data = value['catalog']
     if (not isinstance(data, dict) or set(data) != {'recipes', 'hand_categories', 'version'}
             or solid_funding.digest(data) != proof['catalog_sha256']
             or len(data['recipes']) > solid_funding.MAX_EXPANSIONS):
         return False
-    catalog = Catalog.from_dict({**data, 'technologies': value['technologies'], 'machines': {}})
+    binding = bindings.get(proof['key'])
+    if (not isinstance(binding, dict) or binding.get('catalog_sha256') != proof['catalog_sha256']
+            or binding.get('version') != data['version']
+            or binding.get('acquisition_sha256') != solid_funding.digest({k: v for k, v in value.items() if k != 'reserved'})):
+        return False
+    runtime = record['state'].get('factory', {}).get('acceptance_runtime', {})
+    if runtime and runtime.get('mods', {}).get('base') != data['version']:
+        return False
+    if set(value['recipes']) & set(data['recipes']) or len(value['recipes']) + len(data['recipes']) > 512:
+        return False
+    catalog = Catalog.from_dict({**data, 'recipes': {**data['recipes'], **value['recipes']},
+        'technologies': value['technologies'], 'machines': {}, 'stack_sizes': value['stack_sizes']})
     snapshot = GameSnapshot(**record['state'])
     row = snapshot.factory['solid_routes']['routes'][proof['route']]
-    expected, _ = solid_funding.acquire(row, snapshot, catalog, reserved=value['reserved'])
+    reserved = Counter()
+    for held in reservations.values(): reserved.update(held)
+    for route in solid_routes.routes(snapshot).values():
+        if route.get('parts'): reserved.update(solid_routes.remaining(route))
+    if not _same(dict(reserved), value['reserved']):
+        return False
+    if (snapshot.factory.get('crafting_queue', 0)
+            or any(route['pending'] or route['state'] == 'building' and route['target']['inventory'] == 'input'
+                   for route in solid_routes.routes(snapshot).values())):
+        return False
+    demand, _ = solid_investment.requirements(snapshot, catalog, reserved=dict(reserved))
+    offer = solid_investment.offer_value(row, snapshot, catalog, demand, outcomes)
+    if not offer.get('eligible'):
+        return False
+    expected, _ = solid_investment._kit_offer(row, snapshot, catalog, offer,
+                                             reserved=dict(reserved), failures=budgets)
     return expected is not None and _same(asdict(expected.steps[0]), commit['step'])
 
 
@@ -137,7 +167,8 @@ def _new_history(previous: list, current: list) -> list:
 
 
 def _kit_plan_observed(proof: dict, record: dict, tick: int, fresh: list,
-                       seen_attempts: set[str]) -> bool:
+                       seen_attempts: set[str], budgets: dict, reservations: dict,
+                       outcomes: list, bindings: dict) -> bool:
     action = record.get('action')
     compatible = action in {'factory_craft', 'factory_extract'} or (
         action == 'observe' and record.get('verified') is False) or (
@@ -155,7 +186,7 @@ def _kit_plan_observed(proof: dict, record: dict, tick: int, fresh: list,
                    and _same(value.get('funding'), proof) and value.get('tick') == tick), {})
     step_value = commit.get('step')
     step = _kit_step(step_value)
-    if not _acquisition_matches(commit, record, proof) or step.satisfied(GameSnapshot(**record['state'])) or (
+    if not _acquisition_matches(commit, record, proof, budgets, reservations, outcomes, bindings) or step.satisfied(GameSnapshot(**record['state'])) or (
             action == 'verify' and not step.satisfied(GameSnapshot(**record['after_state']))):
         return False
     if action in {'factory_craft', 'factory_extract'}:
@@ -346,6 +377,30 @@ def _initial_history_state(events: list[dict], working: dict | None) -> bool:
     return not events or _same(state, working)
 
 
+def _kit_clear_observed(record, proof, step_value, previous_pending, previous_attempt, seen):
+    if record.get('verified') is not True or not _kit_step(step_value).satisfied(GameSnapshot(**record['after_state'])):
+        return False
+    key = proof['key'] + ':kit'
+    now = record['after_state']['tick']
+    if record.get('action') == 'verify' and previous_pending is None:
+        decision = record.get('decision')
+        return (record.get('pending') is None and record.get('attempt') is None
+                and (decision is None or isinstance(decision, dict) and decision.get('plan_id') == key))
+    if previous_pending is not None:
+        values = [value for value in record.get('attempt_outcomes', []) if isinstance(value, dict)
+                  and isinstance(previous_attempt, dict) and value.get('id') == previous_attempt.get('id')
+                  and value.get('outcome') == 'verified' and value.get('finished_tick') == now
+                  and all(_same(value.get(field), previous_attempt.get(field)) for field in
+                          ('origin', 'process_id', 'action', 'plan_id', 'step_index', 'step_sha256',
+                           'started_tick', 'expected_unit_number', 'receipt'))]
+        for value in values: validate_attempt(value, finished=True)
+    elif record.get('action') == step_value['action']:
+        values = _current_dispatch_attempts(record, record['state']['tick'], now, seen)
+    else:
+        return False
+    return len(values) == 1 and values[0].get('plan_id') == key and values[0].get('step_index') == 0 and values[0].get('step_sha256') == fingerprint(step_value)
+
+
 def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list[str]:
     """Check retained kit ownership and every observed transition, without I/O.
 
@@ -372,6 +427,14 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
         if not _tick(previous_tick):
             return ['solid_funding_initial_tick_invalid']
         working = deepcopy(initial.get('solid_funding'))
+        bindings = deepcopy(initial.get('solid_funding_catalogs', {}))
+        if not isinstance(bindings, dict):
+            raise ValueError('Invalid catalog declarations')
+        for value in bindings.values():
+            if (not isinstance(value, dict) or set(value) != {'schema', 'observed_tick', 'version', 'catalog_sha256', 'acquisition_sha256'}
+                    or type(value['schema']) is not int or value['schema'] != 1
+                    or not _tick(value['observed_tick']) or value['observed_tick'] > previous_tick):
+                raise ValueError('Invalid initial catalog declaration')
         if working is not None:
             solid_funding.validate_state(working, previous_tick, intents)
         # The ring repeats old events. Seed it from the initial checkpoint and
@@ -389,6 +452,9 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
         previous_attempt = initial.get('attempt')
         previous_routes = initial.get('solid_commitments', {})
         previous_history = initial.get('history', [])
+        reservations = deepcopy(initial.get('reservations', {}))
+        outcomes = deepcopy(initial.get('attempt_outcomes', []))
+        initial_plan = initial.get('active_plan')
         seen_attempts = {value['id'] for value in initial.get('attempt_outcomes', [])
                          if isinstance(value, dict) and isinstance(value.get('id'), str)}
         if isinstance(previous_attempt, dict) and isinstance(previous_attempt.get('id'), str):
@@ -473,7 +539,8 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                             or proof['key'] in abandoned_keys
                             or not _tick(before_tick) or event_tick != before_tick
                             or event_tick >= proof['deadline_tick']
-                            or not _kit_plan_observed(proof, record, before_tick, fresh, seen_attempts)
+                            or not _kit_plan_observed(proof, record, before_tick, fresh, seen_attempts,
+                                                     previous_budgets, reservations, outcomes, bindings)
                             or not _native_bound(proof, record, observation='state')):
                         issues.add('solid_funding_commit_not_reconciled')
                     else:
@@ -579,20 +646,52 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
             if not policy and (current is not None or working is not None
                                or _funding_events(record.get('history', []))):
                 issues.add('solid_funding_disabled_policy_has_state')
+            if current is None:
+                active_kit = False
+            elif active_kit and active_step is not None and _kit_clear_observed(
+                    record, current, active_step, previous_pending, previous_attempt, seen_attempts):
+                active_kit = False
+                reservations.pop(current['key'] + ':kit', None)
             previous_tick = now
             previous_budgets = current_budgets
             previous_pending = record.get('pending')
             previous_attempt = record.get('attempt')
             previous_routes = record.get('after_state', {}).get('factory', {}).get('solid_routes', {}).get('routes', {})
             previous_history = history
+            if isinstance(initial_plan, dict):
+                from .skills import Plan
+                plan = Plan.from_dict(initial_plan)
+                last_step = plan.steps[-1]
+                completed = [value for value in record.get('attempt_outcomes', []) if isinstance(value, dict)
+                    and value.get('plan_id') == plan.id and value.get('outcome') == 'verified'
+                    and value.get('finished_tick') == now and value.get('step_index') == len(plan.steps) - 1
+                    and value.get('step_sha256') == fingerprint(asdict(last_step))
+                    and (value.get('id') not in seen_attempts and value.get('process_id') == record.get('process_id')
+                         or isinstance(initial.get('attempt'), dict) and all(_same(value.get(field), initial['attempt'].get(field))
+                            for field in ('id', 'origin', 'process_id', 'action', 'step_sha256', 'started_tick', 'receipt')))]
+                for value in completed: validate_attempt(value, finished=True)
+                if (record.get('verified') is True and (
+                        record.get('action') == 'verify' and all(step.satisfied(GameSnapshot(**record['after_state'])) for step in plan.steps)
+                        or len(completed) == 1 and last_step.satisfied(GameSnapshot(**record['after_state'])))):
+                    reservations.pop(plan.id, None)
+                    initial_plan = None
+                elif (record.get('verified') is False
+                      and not plan.steps[initial.get('step_index', 0)].allowed(GameSnapshot(**record['after_state']))
+                      and any(value.get('kind') == 'plan_failed' and value.get('plan') == plan.id
+                              and value.get('tick') == now for value in fresh)):
+                    reservations.pop(plan.id, None)
+                    initial_plan = None
+            for value in record.get('attempt_outcomes', []):
+                if isinstance(value, dict) and not any(previous.get('id') == value.get('id') for previous in outcomes):
+                    outcomes.append(deepcopy(value))
+            outcomes = outcomes[-64:]
             for value in [record.get('attempt'), *record.get('attempt_outcomes', [])]:
                 if isinstance(value, dict) and isinstance(value.get('id'), str):
                     seen_attempts.add(value['id'])
-            if current is None:
-                active_kit = False
-            elif (active_kit and record.get('verified') is True and active_step is not None
-                  and _kit_step(active_step).satisfied(GameSnapshot(**record['after_state']))):
-                active_kit = False
+        final_active = (working is not None and isinstance(final.get('active_plan'), dict)
+                        and final['active_plan'].get('id') == working['key'] + ':kit')
+        if final_active != active_kit:
+            issues.add('solid_funding_final_active_plan_mismatch')
         final_events = _funding_events(final.get('history', []))
         if not _same(final.get('history', [])[-8:], rows[-1].get('history', [])):
             issues.add('solid_funding_final_history_record_mismatch')

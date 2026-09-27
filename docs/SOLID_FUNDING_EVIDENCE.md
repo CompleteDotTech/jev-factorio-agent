@@ -14,8 +14,11 @@ Solid-controller records now contain `solid_funding_schema: 1` and a detached
 retains a detached, schema-validated funding proof on each `solid_kit_committed`,
 `solid_kit_abandoned`, and `solid_kit_paid_handoff` event. Each subsequent kit plan
 commit records its incremented action count, rather than silently advancing it.
-Funding and selected-step fields already exist in controller checkpoints; no additional
-checkpoint schema, native command, actor mutation or persistence barrier is added.
+Funding and selected-step fields already exist in controller checkpoints. A new
+optional diagnostic `solid_funding_catalogs` map declares catalog and admission
+digests before acquisition. It never authorizes an action. Legacy checkpoints
+load with an empty map; a measurement window lacking the initial declaration
+cannot prove a new acquisition. No native command or persistence barrier is added.
 
 The read-only `solid_funding_evidence.funding_history_issues` helper checks initial
 and final checkpoints, every recorded state, stable physical/project bindings,
@@ -125,6 +128,23 @@ Action-budget release waits until the active kit plan has cleared. Final
 checkpoint history must match the last record's suffix and replay to its funding
 state; invented, omitted or contradictory final transitions fail measurement.
 
+Acquisition replay uses the preceding durable reservation owners, observed paid
+commitments and failure counters for the entire simulated kit, not just its first
+step. Compact current-research and relevant unlock/recipe facts support demand,
+payback and global queue/building admission checks. Both catalog and admission
+facts must match the starting checkpoint's declarations, with runtime base-version
+agreement when that evidence is present. A changed or undeclared catalog needs a
+new independently captured measurement baseline; changing event hashes cannot
+declare its own authority. These are consistency anchors, not log authentication.
+Verified observation labels cannot clear an active kit. Only its matching
+existing-effect verification, dispatched attempt or proven failure can clear it,
+and final checkpoint activity must agree with the tracked plan.
+
+Detailed funding audit proofs stay in checkpoint/gameplay history. Model-facing
+history contains only compact event identity, tick and reason; unrelated research
+definitions are excluded from captured admission evidence. Catalog capture and
+serialization overhead still require native measurement.
+
 New commits check receive/send/belt project budgets as well as the kit budget.
 Ordinary acquisition failure counts also matter. New commit events capture a
 detached selected `step`, allowing its exact recipe/role counter to be checked.
@@ -151,7 +171,8 @@ remain tied to their original owner across verification or process resumption.
 Deferred cleanup retains the observer's original deadline/layout reason instead
 of replacing it with `kit_failure_budget`. The cause is detached, process-local
 diagnostic state, matched to the current funding proof and tick; a fresh observer
-reconstructs it after restart. No checkpoint field or durability barrier is added.
+reconstructs it after restart. That deferred cause adds no checkpoint field or
+durability barrier; the catalog declarations above are separate audit metadata.
 
 ## Evidence boundary and rollout
 

@@ -333,6 +333,9 @@ class HierarchicalLoop(AgentLoop):
             print(f"[t={before.tick}] {self.memory.status}: {action} -> {outcome}", flush=True)
         return record
 
+    def _model_history(self) -> list:
+        return self.memory.history[-8:]
+
     def _model_facts(self, snapshot: GameSnapshot) -> dict:
         facts = snapshot.for_jev()
         # Diagnostic-only additions must not grow/change model prompts.
@@ -959,7 +962,7 @@ class HierarchicalLoop(AgentLoop):
                     facts["factory"].pop("connectors", None)
                     facts["factory"]["native_transfer_receipt_count"] = len(receipts)
                 state = {"facts": facts, "active_goal": asdict(GOALS[self.memory.active_goal]),
-                         "history": self.memory.history[-8:], **self._selection_support}
+                         "history": self._model_history(), **self._selection_support}
                 if self.factory_scheduling == "ready-work":
                     state["production_scheduling"] = {
                         "objective": "Advance the next production batch identified in plan descriptions",

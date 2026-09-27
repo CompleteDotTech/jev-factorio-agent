@@ -229,6 +229,18 @@ class SolidRouteMixin:
             self.memory.reason = ("Solid-route evidence invalid; preserve pending state and ownership"
                                   if self.memory.solid_epoch else UNBOUND_FAULT)
         if not self._solid_fault:
+            if self._solid_science_policy:
+                for value in routes.routes(snapshot).values():
+                    key = solid_funding.project_key(value)
+                    if key not in self.memory.solid_funding_catalogs:
+                        try:
+                            declaration = solid_funding.acquisition_evidence({**value, 'parts': {}}, snapshot, self.catalog, {})
+                            self.memory.solid_funding_catalogs[key] = {
+                                'schema': 1, 'observed_tick': snapshot.tick, 'version': self.catalog.version,
+                                'catalog_sha256': solid_funding.digest(declaration['catalog']),
+                                'acquisition_sha256': solid_funding.digest({k: v for k, v in declaration.items() if k != 'reserved'})}
+                        except (ValueError, KeyError, TypeError, AttributeError):
+                            pass  # Missing audit declaration cannot authorize or block a native action.
             self._reconcile_solid_funding(snapshot)
         self._solid_evidence = deepcopy(snapshot.factory.get("solid_routes", {}))
         self._save()  # Exact paid prefix is durable before another actor mutation.
@@ -245,6 +257,7 @@ class SolidRouteMixin:
                     job=getattr(self, "_job", lambda: None)(), funding=state, failures=self.memory.failures)):
             raise ValueError("Cannot commit an unqualified solid kit")
         row = routes.routes(snapshot)[marker["route"]]
+        acquisition = solid_funding.acquisition_evidence(row, snapshot, self.catalog, self._solid_reservations())
         if state is None:
             self.memory.solid_funding = solid_funding.start(row, marker, snapshot.tick)
         else:
@@ -253,11 +266,7 @@ class SolidRouteMixin:
             state["actions"] += 1
         self.memory.event("solid_kit_committed", key=plan.id, tick=snapshot.tick,
                           funding=deepcopy(self.memory.solid_funding), step=asdict(plan.steps[0]),
-                          acquisition=deepcopy({
-                              "catalog": solid_funding.catalog_evidence(row, snapshot, self.catalog),
-                              "reserved": self._solid_reservations(),
-                              "technologies": {name: value for name, value in self.catalog.technologies.items()
-                                  if name in (snapshot.researched or [])}}))
+                          acquisition=deepcopy(acquisition))
         # The ordinary plan-commit save follows before fresh observation and the
         # prepared mutation save. No asynchronous or new durability path exists.
 
@@ -461,6 +470,12 @@ class SolidRouteMixin:
                 "solid_funding_schema": 1, "solid_funding": deepcopy(self.memory.solid_funding),
                 "solid_investment_evidence": deepcopy(self._solid_policy_evidence)}
 
+    def _model_history(self):
+        return [{key: value for key, value in event.items()
+                 if key in {'kind', 'key', 'tick', 'reason'}}
+                if event.get('kind', '').startswith('solid_kit_') else deepcopy(event)
+                for event in super()._model_history()]
+
     def _model_facts(self, snapshot):
         facts = super()._model_facts(snapshot)
         summary = {}
@@ -485,6 +500,7 @@ def solid_loop_type(base):
         solid_epoch: dict = field(default_factory=dict)
         solid_commitments: dict = field(default_factory=dict)
         solid_funding: dict | None = None
+        solid_funding_catalogs: dict = field(default_factory=dict)
 
         @classmethod
         def _from_data(cls, data, session_id, target):
@@ -496,6 +512,19 @@ def solid_loop_type(base):
             if type(memory.solid_science_policy) is not bool:
                 raise ValueError("Invalid solid policy binding")
             validate_intents(memory.solid_intents)
+            if not isinstance(memory.solid_funding_catalogs, dict) or len(memory.solid_funding_catalogs) > routes.MAX_ROUTES:
+                raise ValueError('Invalid funding catalog declarations')
+            for key, value in memory.solid_funding_catalogs.items():
+                if (not isinstance(key, str) or not key.startswith('solid-project:')
+                        or not isinstance(value, dict) or set(value) != {'schema', 'observed_tick', 'version', 'catalog_sha256', 'acquisition_sha256'}
+                        or type(value['schema']) is not int or value['schema'] != 1
+                        or not routes.integer(value['observed_tick'], 0, memory.last_tick)
+                        or not isinstance(value['version'], str) or not value['version'].startswith('2.0.')
+                        or not isinstance(value['catalog_sha256'], str) or len(value['catalog_sha256']) != 64
+                        or any(c not in '0123456789abcdef' for c in value['catalog_sha256'])
+                        or not isinstance(value['acquisition_sha256'], str) or len(value['acquisition_sha256']) != 64
+                        or any(c not in '0123456789abcdef' for c in value['acquisition_sha256'])):
+                    raise ValueError('Invalid funding catalog declaration')
             if memory.solid_funding is not None:
                 if not memory.solid_science_policy or memory.capital_investment is not None:
                     raise ValueError("Solid funding conflicts with immutable policy or capital")
