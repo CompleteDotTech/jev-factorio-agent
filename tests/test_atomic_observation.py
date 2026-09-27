@@ -29,7 +29,8 @@ def envelope():
                       'iron_ore_collected': 0, 'query_limit': 129},
         'targets': [], 'anchors': [], 'cache': {'hits': 0, 'misses': 5},
         'bounds': {'anchor_radius': 256, 'anchor_limit': 129,
-                   'bootstrap_radius': 1000, 'bootstrap_limit': 129},
+                   'bootstrap_radius': 1000, 'bootstrap_limit': 129,
+                   'bootstrap_output_radius': .15, 'bootstrap_output_limit': 2},
     }
 
 

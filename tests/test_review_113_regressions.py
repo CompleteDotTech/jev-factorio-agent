@@ -326,3 +326,49 @@ def test_legacy_rows_do_not_fabricate_missing_timing_counts(tmp_path):
     result = analyze(path)
     assert result['iteration_timing']['records_without_prior_timing'] == 2
     assert 'iteration:unpublished_between_records' not in result['counts']
+
+
+def test_first_timing_index_is_bounded_before_counting_missing_prefix(monkeypatch, tmp_path):
+    loop, _ = setup_loop(monkeypatch)
+    loop.step()
+    row = loop.step()
+    row['iteration_index'] = 2**63
+    with pytest.raises(ValueError, match='identity'):
+        timing.validate_timing(row)
+    path = tmp_path / 'oversized-prefix.jsonl'
+    path.write_text(json.dumps({'previous_iteration_timing': row}) + '\n')
+    with pytest.raises(ValueError, match='Invalid latency record'):
+        analyze(path)
+
+
+@pytest.mark.parametrize('key,bad', [
+    ('bootstrap_output_radius', .2), ('bootstrap_output_limit', 3),
+    ('bootstrap_output_limit', 2.0),
+])
+def test_endpoint_query_bounds_are_attested_and_type_checked(monkeypatch, key, bad):
+    backend, _, payload, _ = atomic_setup(monkeypatch)
+    payload['bounds'][key] = bad
+    with pytest.raises(ValueError, match='query bounds'):
+        backend.observe()
+
+
+def test_lua_endpoint_query_bounds_match_decoder_contract():
+    lua = runtime()
+    lua.execute('add_drill(51,0,0);add_chest(52,2,0);storage.campaign.observation_snapshot_v2(0,51)')
+    bounds = converted(lua.globals().captured)['bounds']
+    assert bounds['bootstrap_output_radius'] == .15
+    assert bounds['bootstrap_output_limit'] == 2
+
+
+@pytest.mark.parametrize('kind', [FairActions, NativeFactory])
+def test_nested_session_counts_scoped_request_bytes_once(kind):
+    sent = []
+    client = SessionRcon(NS(send_command=lambda command: sent.append(command) or 'ok'))
+    adapter = kind.__new__(kind)
+    adapter.backend = NS(_instance=NS(rcon_client=client))
+    with recording() as ledger:
+        assert adapter.command('fixture') == 'ok'
+    assert sent == [SessionRcon.scoped('/sc fixture')]
+    assert ledger.io['command_calls'] == 1
+    assert ledger.io['request_bytes'] == len(sent[0].encode('utf-8'))
+    assert ledger.io['unknown_request_size_calls'] == 0

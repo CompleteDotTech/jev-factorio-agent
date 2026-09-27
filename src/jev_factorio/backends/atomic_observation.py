@@ -14,7 +14,8 @@ from ..state import GameSnapshot
 
 RAW_ITEMS = frozenset({'wood', 'coal', 'iron-ore', 'copper-ore', 'stone'})
 BOUNDS = {'anchor_radius': 256, 'anchor_limit': 129,
-          'bootstrap_radius': 1000, 'bootstrap_limit': 129}
+          'bootstrap_radius': 1000, 'bootstrap_limit': 129,
+          'bootstrap_output_radius': .15, 'bootstrap_output_limit': 2}
 
 
 def _map(value: Any, label: str, limit: int = 4096) -> dict:
@@ -129,7 +130,7 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
         raise ValueError('Atomic launch counter regressed')
     bounds = result.get('bounds')
     if (not isinstance(bounds, dict) or bounds != BOUNDS
-            or any(type(v) is not int for v in bounds.values())):
+            or any(type(value) is not type(BOUNDS[key]) for key, value in bounds.items())):
         raise ValueError('Invalid atomic query bounds')
     bootstrap = result.get('bootstrap')
     if (not isinstance(bootstrap, dict) or type(bootstrap.get('query_limit')) is not int

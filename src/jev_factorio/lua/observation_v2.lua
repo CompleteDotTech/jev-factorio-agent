@@ -209,7 +209,8 @@ campaign.observation_snapshot_v2=function(generation,expected_drill)
         controls=controls,position=point(player.position),bootstrap=initial,targets=targets,anchors=witness,
         session_id=storage.jev_session_id,actor_unit=player.character.unit_number,
         surface_index=player.surface.index,force_index=player.force.index,cache={hits=hits,misses=misses},
-        bounds={anchor_radius=256,anchor_limit=129,bootstrap_radius=1000,bootstrap_limit=129}})
+        bounds={anchor_radius=256,anchor_limit=129,bootstrap_radius=1000,bootstrap_limit=129,
+            bootstrap_output_radius=.15,bootstrap_output_limit=2}})
     assert(#encoded<=8*1024*1024,"Native observation payload budget exceeded")
     finish(timer,"serialize")
     rcon.print("JEV_SNAPSHOT|"..encoded)
