@@ -216,7 +216,7 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
     observed_flows, pending_routes = {}, {}
     previous_failures = _failure_counter(initial.get('failures', {}))
     final_failures = _failure_counter(final.get('failures', {}))
-    route_history, route_statistics = {}, {}
+    route_history, route_statistics, observed_products = {}, {}, {}
     committed = deepcopy(initial.get('solid_commitments', {}))
     researched_before = set()
     progress_highwater = {}
@@ -257,7 +257,7 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                or record.get('campaign_treatment') != trial['campaign_treatment'], 'configuration_mismatch')
         reject(record.get('requested_model') != trial['requested_model'], 'requested_model_mismatch')
         reject(type(record.get('model_call')) is not bool, 'invalid_model_call_flag')
-        reject(record.get('status') in {'blocked', 'uncertain'} or record.get('solid_route_fault') is True,
+        reject(record.get('status') not in {'running', 'completed'} or record.get('solid_route_fault') is True,
                'controller_or_route_failure')
         reject(record.get('policy') not in {'hybrid', 'jev'}, 'actual_jev_policy_not_demonstrated')
         if index and record.get('model_call') is True:
@@ -323,6 +323,15 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                 reject((route['source']['role'], route['target']['role'], route['item'], route['target']['inventory'])
                        not in allowed_intents, 'unrequested_solid_route')
                 reject(not solid_routes.current(route, view), 'stale_or_faulted_route')
+                if route['target']['inventory'] != 'fuel':
+                    target = factory['entities'].get(route['target']['role'])
+                    products = target.get('products_finished') if isinstance(target, dict) else None
+                    reject(not _integer(products), 'invalid_downstream_production_counter')
+                    previous = observed_products.get(key)
+                    reject(previous is not None and _integer(products) and products < previous,
+                           'downstream_production_counter_regressed')
+                    if _integer(products):
+                        observed_products[key] = products
                 if route['parts'] or route['pending']:
                     committed[key] = solid_routes.commitment(route)
                 pending = pending_routes.get(key)
@@ -525,6 +534,8 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
         'schema': SCHEMA, 'trial_sha256': sha256(canonical(trial)),
         'evidence_sha256': evidence_hash.hexdigest(),
         'invocation_sha256': sha256(canonical(_identity(rows[0]))),
+        'runtime_mods_sha256': sha256(canonical(runtime_identity['mods'])) if runtime_identity is not None
+                               and isinstance(runtime_identity['mods'], dict) else None,
         'source_commit': trial['expected_commit'], 'source_sha256': trial['expected_source_sha256'],
         'working_tree_cleanliness': 'explicitly_reported_clean' if all(
             row.get('code_revision', {}).get('dirty') is False for row in rows) else 'not_reported',
@@ -598,6 +609,9 @@ def compare(baseline: dict, treatment: dict, baseline_trial: dict, treatment_tri
         issues.add('uncontrolled_pair_difference')
     if baseline['evidence_sha256'] == treatment['evidence_sha256'] or baseline['invocation_sha256'] == treatment['invocation_sha256']:
         issues.add('reused_capture_or_invocation')
+    if (not _digest(baseline.get('runtime_mods_sha256'))
+            or baseline.get('runtime_mods_sha256') != treatment.get('runtime_mods_sha256')):
+        issues.add('uncontrolled_runtime_mods')
     if baseline.get('integrity_checks_passed') is not True or treatment.get('measurement_checks_passed') is not True:
         issues.add('ineligible_pair_arm')
     rates = [r.get('science', {}).get('consumed_per_wall_minute') for r in (baseline, treatment)]

@@ -193,7 +193,9 @@ report-composition helper, not an authenticity validator.
 
 Arms must have different invocation and capture hashes, but the same declared
 experiment, workload/save, configuration, intent set, model, outcome definitions,
-windows and regression limits. Algorithm comparisons hold capacity profile fixed;
+windows and regression limits. The observed native mod sets must also have the same
+sanitized `runtime_mods_sha256` binding across arms. Algorithm comparisons hold
+capacity profile fixed;
 capacity comparisons hold source commit and fingerprint fixed. This narrow schema
 does not compare a legacy no-solid controller with a solid-enabled controller or
 permit arbitrary feature-flag changes. `unmatched` production trends are not

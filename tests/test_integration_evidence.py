@@ -28,6 +28,27 @@ def test_reconciled_fixture_is_still_not_native_acceptance():
     assert 'private-fixture' not in json.dumps(value)
 
 
+@pytest.mark.parametrize('status', ['failed', None, 'unexpected'])
+def test_unrecognized_controller_status_cannot_pass(status):
+    args = evidence()
+    args[0][4]['status'] = status
+    value = report.analyze_rows(*args)
+    assert 'controller_or_route_failure' in value['issues']
+    assert not value['integrity_checks_passed']
+
+
+@pytest.mark.parametrize('boundary', ['state', 'after_state'])
+def test_downstream_production_reset_cannot_be_hidden_by_later_growth(boundary):
+    args = evidence()
+    state = args[0][4][boundary]
+    downstream = next(route for route in state['factory']['solid_routes']['routes'].values()
+                      if route['target']['inventory'] != 'fuel')
+    state['factory']['entities'][downstream['target']['role']]['products_finished'] = 0
+    value = report.analyze_rows(*args)
+    assert 'downstream_production_counter_regressed' in value['issues']
+    assert not value['integrity_checks_passed']
+
+
 def test_nested_timing_not_added_to_iteration():
     value = report.analyze_rows(*evidence())
     measured = value['timing']['distributions']
@@ -190,6 +211,20 @@ def test_matched_pair_and_zero_baseline_remain_distinct_from_acceptance():
     assert result['treatment_science_per_wall_minute'] == 2
     assert result['science_rate_ratio'] is None
     assert result['iteration_p95_ratio'] == 1
+
+
+def test_pair_rejects_different_observed_mod_sets():
+    args = paired()
+    for record in args[1][0]:
+        for boundary in ('state', 'after_state'):
+            record[boundary]['factory']['acceptance_runtime']['mods'] = {'base': 'other-fixture'}
+    baseline = report.analyze_rows(*args[0])
+    treatment = report.analyze_rows(*args[1])
+    assert baseline['measurement_checks_passed'] and treatment['measurement_checks_passed']
+    assert baseline['runtime_mods_sha256'] != treatment['runtime_mods_sha256']
+    result = report.compare(baseline, treatment, args[0][1], args[1][1])
+    assert 'uncontrolled_runtime_mods' in result['issues']
+    assert not result['paired_measurement_checks_passed']
 
 
 @pytest.mark.parametrize('field,value', [
