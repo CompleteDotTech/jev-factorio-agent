@@ -103,6 +103,11 @@ Deletion requires separate explicit authorization by adding `--prune`, within th
 
 ## 7. Escalation, cutover failure and rollback
 
+For user-triggered status checks and live presentation, follow
+[Status checks, recovery, and the live overlay](STATUS_RECOVERY.md). It covers
+proactive recovery within the existing authority and verifying OBS Program
+instead of mistaking a Preview selection for a broadcast change.
+
 Exit 2 means deliberately blocked; `RestartPreventExitStatus=2` must prevent the wrapper's restart loop while leaving the failure visible. Unknown exits are not code-defect evidence. Preserve incident IDs, audit outboxes, budgets, repair reports and source/effect provenance. Do not edit away `repair_account_blocked`, `incident_repair_attempts`, pending state or reservations as an unlock procedure.
 
 Rollback triggers include wrong session/character/deadline, unverifiable receipt, duplicate effect, broken trace/checkpoint durability, schema mismatch, failed service identity/publication gate, or lost stream/audio invariants. Keep maintenance displayed. Do not automatically restart an older revision across an active/ambiguous action. First reach or evidence a safe boundary, confirm old-version checkpoint compatibility (including new safety sidecars), then restore only the reviewed source/environment and authorized deployment pointer while preserving current gameplay state. If rollback would destroy or reinterpret ownership evidence, stop and escalate instead.
