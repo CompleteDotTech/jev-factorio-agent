@@ -370,11 +370,14 @@ function refreshStatus() {
   set("model-detail", recorded ? `${text(v.goal, "no goal").replaceAll("_", " ")} · tick ${text(object(v.state).tick, text(v.tick))}${ago ? " · " + ago : ""}${stale ? " · no newer step yet" : ""}`
     : legacy ? "Completed decision only · no in-flight telemetry" : thinking ? "Provider call in flight · no tokens invented" : v.response ? "Provider response captured · inspect acceptance" : "No model response in this cycle");
   const supervision = object(data.supervisor);
-  const cutoff = supervision.session_match ? object(supervision.state).cutoff : null;
-  if (typeof cutoff === "number" && Number.isFinite(cutoff)) {
-    const remaining = Math.max(0, Math.floor(cutoff - now));
-    set("deadline", `${String(Math.floor(remaining / 3600)).padStart(2, "0")}:${String(Math.floor(remaining / 60) % 60).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")}`);
-  } else set("deadline", "Not connected");
+  // Elapsed time since the supervisor started this run; it stops at the cutoff.
+  const run = supervision.session_match ? object(supervision.state) : {};
+  const finite = (value) => typeof value === "number" && Number.isFinite(value);
+  if (finite(run.started_at) && run.started_at <= now) {
+    const end = finite(run.cutoff) && run.cutoff >= run.started_at ? Math.min(now, run.cutoff) : now;
+    const elapsed = Math.floor(end - run.started_at);
+    set("run-time", `${String(Math.floor(elapsed / 3600)).padStart(2, "0")}:${String(Math.floor(elapsed / 60) % 60).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`);
+  } else set("run-time", "Not connected");
 }
 
 function setBroadcast(value) {

@@ -1,6 +1,7 @@
 """Real Chromium UI/capture tests. Synthetic media is injected by tests only."""
 import json
 import os
+import re
 import threading
 import time
 
@@ -211,18 +212,19 @@ def test_untrusted_text_is_inert_and_export_is_display_only(live, tmp_path):
 def test_frozen_evidence_clock_keeps_advancing(live):
     page, writer, url, errors = live
     writer.path.with_name("supervisor.json").write_text(json.dumps({
-        "session_id": "mock:browser-test", "phase": "gameplay", "cutoff": time.time() + 90,
-        "repair_required": False, "attempt": 0,
+        "session_id": "mock:browser-test", "phase": "gameplay", "started_at": time.time() - 90,
+        "cutoff": time.time() + 90, "repair_required": False, "attempt": 0,
     }))
     page.goto(url)
     seed(writer)
-    playwright.expect(page.locator("#deadline")).not_to_have_text("Not connected")
+    playwright.expect(page.locator("#run-time")).not_to_have_text("Not connected")
     page.locator("#freeze").click()
-    before = page.locator("#deadline").inner_text()
+    before = page.locator("#run-time").inner_text()
     page.wait_for_timeout(2300)
-    after = page.locator("#deadline").inner_text()
+    after = page.locator("#run-time").inner_text()
     seconds = lambda value: sum(int(part) * scale for part, scale in zip(value.split(":"), (3600, 60, 1)))
-    assert seconds(before) - seconds(after) >= 2
+    assert seconds(before) >= 90
+    assert seconds(after) - seconds(before) >= 2
     assert not errors
 
 
@@ -725,4 +727,35 @@ def test_studio_objective_milestones_are_compact_and_fit(live):
         assert node.locator("strong").evaluate("el => el.scrollWidth <= el.clientWidth")
     thinking = page.locator(".thinking")
     assert thinking.evaluate("node => node.scrollHeight <= node.clientHeight")
+    assert not errors
+
+
+@pytest.mark.parametrize("state,expected", [
+    ({"started_at": -7200, "cutoff": -3600}, "01:00:00"),  # clock stops at the cutoff
+    ({"started_at": -(50 * 3600 + 61)}, re.compile(r"^50:01:0\d$")),  # no cutoff: still counting, hours may exceed 24
+    ({"cutoff": 3600}, "Not connected"),                  # a cutoff alone is not a run start
+    ({"started_at": 3600}, "Not connected"),              # a future start is not elapsed time
+    ({"started_at": "yesterday"}, "Not connected"),
+])
+def test_run_time_counts_up_from_the_supervisor_start(live, state, expected):
+    page, writer, url, errors = live
+    now = time.time()
+    values = {key: now + value if isinstance(value, (int, float)) else value for key, value in state.items()}
+    writer.path.with_name("supervisor.json").write_text(json.dumps({
+        "session_id": "mock:browser-test", "phase": "gameplay", "attempt": 0, **values}))
+    page.goto(url)
+    seed(writer)
+    playwright.expect(page.locator(".top-context.run-time .eyebrow")).to_have_text("RUN TIME")
+    playwright.expect(page.locator("#run-time")).to_have_text(expected)
+    assert not errors
+
+
+def test_run_time_ignores_a_supervisor_for_another_session(live):
+    page, writer, url, errors = live
+    writer.path.with_name("supervisor.json").write_text(json.dumps({
+        "session_id": "another-session", "phase": "gameplay", "started_at": time.time() - 60}))
+    page.goto(url)
+    seed(writer)
+    playwright.expect(page.locator("#thinking-status")).to_have_text("JEV is evaluating")
+    playwright.expect(page.locator("#run-time")).to_have_text("Not connected")
     assert not errors
