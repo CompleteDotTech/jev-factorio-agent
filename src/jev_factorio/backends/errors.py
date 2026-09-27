@@ -1,9 +1,7 @@
 """Explicit rejections proven to precede connection actuation."""
 
 
-CONNECTION_PREFLIGHT_CODES = frozenset({
-    "missing_fluid_port", "no_connection_route", "insufficient_connection_materials",
-})
+from ..preflight_codes import CONNECTION_PREFLIGHT_CODES
 
 
 class ConnectionPreflightRejected(ValueError):
