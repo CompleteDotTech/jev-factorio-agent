@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections import Counter
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 import json
 from pathlib import Path
 
@@ -32,6 +32,7 @@ class SolidRouteMixin:
             raise ValueError("Solid science policy must be an explicit boolean")
         self._solid_science_policy = solid_science_policy
         self._solid_policy_evidence = {}
+        self._solid_funding_release = None
         self._solid_intents = validate_intents(solid_intents)
         self._solid_fault = False
         self._solid_resume_observing = False
@@ -251,11 +252,12 @@ class SolidRouteMixin:
                 raise ValueError("Solid kit action budget exhausted")
             state["actions"] += 1
         self.memory.event("solid_kit_committed", key=plan.id, tick=snapshot.tick,
-                          funding=deepcopy(self.memory.solid_funding))
+                          funding=deepcopy(self.memory.solid_funding), step=asdict(plan.steps[0]))
         # The ordinary plan-commit save follows before fresh observation and the
         # prepared mutation save. No asynchronous or new durability path exists.
 
     def _reconcile_solid_funding(self, snapshot):
+        self._solid_funding_release = None
         state = self.memory.solid_funding
         if state is None or self.memory.pending:
             return  # Ambiguous native work is reconciled before any release.
@@ -290,6 +292,9 @@ class SolidRouteMixin:
             except (ValueError, KeyError, TypeError):
                 reason = "kit_evidence_unavailable"
         if reason:
+            # Preserve this observation's cause through deferred plan cleanup.
+            # It is diagnostic process-local state, never checkpoint authority.
+            self._solid_funding_release = (deepcopy(state), reason, snapshot.tick)
             key = state["key"] + ":kit"
             prior = self.memory.failures.get(key, 0)
             self.memory.failures[key] = max(2, prior)
@@ -305,10 +310,14 @@ class SolidRouteMixin:
         super()._clear_plan()
         state = getattr(self.memory, "solid_funding", None)
         if state and self.memory.failures.get(state["key"] + ":kit", 0) >= 2:
+            observed = self._solid_funding_release
+            reason = (observed[1] if observed and observed[0] == state
+                      and observed[2] == self.memory.last_tick else "kit_failure_budget")
             self.memory.event("solid_kit_abandoned", key=state["key"] + ":kit",
-                              reason="kit_failure_budget", tick=self.memory.last_tick,
+                              reason=reason, tick=self.memory.last_tick,
                               funding=deepcopy(state))
             self.memory.solid_funding = None
+            self._solid_funding_release = None
 
     def _execution_barrier(self, snapshot):
         return (self._persistence_failed or self._solid_resume_observing or self._solid_fault

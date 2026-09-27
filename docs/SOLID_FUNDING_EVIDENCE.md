@@ -14,7 +14,7 @@ Solid-controller records now contain `solid_funding_schema: 1` and a detached
 retains a detached, schema-validated funding proof on each `solid_kit_committed`,
 `solid_kit_abandoned`, and `solid_kit_paid_handoff` event. Each subsequent kit plan
 commit records its incremented action count, rather than silently advancing it.
-All fields are already part of the funding checkpoint contract; no additional
+Funding and selected-step fields already exist in controller checkpoints; no additional
 checkpoint schema, native command, actor mutation or persistence barrier is added.
 
 The read-only `solid_funding_evidence.funding_history_issues` helper checks initial
@@ -104,10 +104,11 @@ with an incomplete carried kit requires release at the first eligible observatio
 without an active kit plan; a complete carried kit can still be commissioned.
 
 New commits check receive/send/belt project budgets as well as the kit budget.
-Ordinary acquisition failure counts also matter, but retained commit events omit
-the selected recipe/role parameters. If those counts could exhaust the selected
-action, its eligibility is unproven and the window fails measurement. This
-conservative evidence rule does not change the controller's exact budget scope.
+Ordinary acquisition failure counts also matter. New commit events capture a
+detached selected `step`, allowing its exact recipe/role counter to be checked.
+Older events without that field remain conservative: if an ordinary count could
+exhaust the selected action, eligibility is unproven and measurement fails.
+The controller's exact budget scope is unchanged.
 
 Each new commit also binds to the complete recorded decision and selection
 source. Craft/extract records need a uniquely new, schema-valid pending or
@@ -116,6 +117,19 @@ including its dispatch phase; a verified action cannot omit its outcome.
 Observation-only commits are unverified, while an already-satisfied `verify`
 record remains valid. If one record releases a project and funds another, paid
 growth is checked for every distinct funding identity, not just the old lock.
+
+For a new `verify`-only commit, the captured step must be unsatisfied in `state`
+and satisfied in `after_state`; a boolean verified flag cannot establish the
+effect. New craft/extract attempts also bind their step hash and observed effect
+to that captured step. Older verify-only events lacking it are unprovable.
+Fresh build attempts must belong to the current process, have unseen IDs and
+start within the current observation boundary. Explicit carried pending builds
+remain tied to their original owner across verification or process resumption.
+
+Deferred cleanup retains the observer's original deadline/layout reason instead
+of replacing it with `kit_failure_budget`. The cause is detached, process-local
+diagnostic state, matched to the current funding proof and tick; a fresh observer
+reconstructs it after restart. No checkpoint field or durability barrier is added.
 
 ## Evidence boundary and rollout
 
