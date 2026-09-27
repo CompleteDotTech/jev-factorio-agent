@@ -475,3 +475,72 @@ def test_qualified_successor_does_not_block_coal_funding(tmp_path):
     loop._commit_solid(plan, snapshot)
     assert loop.memory.coal_funding is not None
     assert not backend.calls
+
+
+@pytest.mark.parametrize('item,blocked', [('transport-belt', True), ('electric-mining-drill', True),
+                                        ('electronic-circuit', False)])
+def test_background_outputs_cannot_lock_existing_coal_hold(tmp_path, item, blocked):
+    from jev_factorio.background import BackgroundWorkLoop
+    from jev_factorio.coal_controller import coal_loop_type
+    from jev_factorio.solid_controller import solid_loop_type
+    from test_solid_route_integration import FoundationScenario
+
+    class Production(FoundationScenario):
+        def _compile_candidates(self, snapshot):
+            return [Plan('ordinary:craft', 'rocket_launch', 'Ordinary production',
+                         (Step('factory_craft', 'inventory', item=item,
+                               threshold=1000, parameters={'recipe': item, 'batches': 1}),))], ''
+
+    class BackgroundProduction(BackgroundWorkLoop, Production):
+        pass
+
+    backend = Backend('craft')
+    backend.craft_jobs_supported = True
+    backend.state.factory['craft_jobs_protocol'] = 1
+    loop = controller(backend, tmp_path,
+                      kind=coal_loop_type(solid_loop_type(BackgroundProduction)))
+    snapshot, plans = offers(loop)
+    ordinary = next(p for p in plans if p.id == 'ordinary:craft')
+    assert ordinary.steps[0].action == 'factory_craft_job'
+    assert loop._step_allowed(ordinary.steps[0], snapshot)
+    kit = next(p for p in plans if funding.MARKER in (p.materials or {}))
+    loop._commit_solid(kit, snapshot)
+    held = deepcopy(loop.memory.coal_funding['held'])
+    assert (item in loop.memory.coal_funding['kit']) == blocked
+    _, plans = offers(loop)
+    assert any(p.id == ordinary.id for p in plans) == (not blocked)
+    # Revalidate an already-selected job too, before any paid dispatch.
+    assert loop._step_allowed(ordinary.steps[0], snapshot) == (not blocked)
+    assert loop.memory.coal_funding['held'] == held
+    assert loop.memory.status != 'uncertain' and not backend.calls
+
+
+@pytest.mark.parametrize('kind', ['source', 'corridor'])
+@pytest.mark.parametrize('pending', [False, True])
+def test_inherited_build_budget_releases_funding_only_after_pending_reconciliation(tmp_path, kind, pending):
+    from jev_factorio.planning.coal_supply import source_project
+    from jev_factorio.planning.solid_funding import project_key
+    backend = Backend(); backend.lose_kit_ack = pending
+    loop = controller(backend, tmp_path)
+    assert loop.step()['verified'] == (not pending)
+    state = deepcopy(loop.memory.coal_funding)
+    row = coal.sources(backend.state)['alpha']
+    if kind == 'source':
+        key = source_project('alpha', 'chest')
+    else:
+        stub = {'source': {'role': coal.role('alpha', 'chest')}, 'target': row['target'], 'item': 'coal'}
+        key = project_key(stub) + ':send'
+    loop.memory.failures[key] = 2
+    loop._observe()
+    if pending:
+        assert loop.memory.coal_funding['key'] == state['key']
+        assert all(loop.memory.coal_funding['held'][item] >= n for item, n in state['held'].items())
+        assert loop.memory.pending is not None
+        backend.lose_kit_ack = False
+        assert loop.step()['verified']
+        loop._observe()
+    assert loop.memory.coal_funding is None
+    assert loop.memory.failures[key] == 2 and loop.memory.failures[state['key']] >= 2
+    assert len(backend.calls) == 1
+    _, plans = offers(loop)
+    assert not any(funding.MARKER in (p.materials or {}) for p in plans)

@@ -144,3 +144,10 @@ Coal checkpoint loading rejects simultaneous conflicting project ownership.
 Fresh permission compares the complete acquisition cost evidence as well as the
 first step and binding; a later-bill change cannot retain stale dispatch estimates
 merely because the immediate command is unchanged.
+
+Tracked background crafts whose products overlap the retained coal kit are
+excluded both from offers and fresh dispatch permission. A background job locks
+its baseline output inventory, so admitting one must not hide existing or newly
+acquired kit components. Unrelated background crafting remains available.
+Exhausted source or corridor construction budgets abandon retained kit funding
+after pending actions reconcile, without resetting component failure history.

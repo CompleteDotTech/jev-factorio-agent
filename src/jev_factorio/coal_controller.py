@@ -140,7 +140,8 @@ class CoalSupplyMixin:
         return self._coal_fault or super()._execution_barrier(snapshot)
 
     def _step_allowed(self, step, snapshot):
-        if self._execution_barrier(snapshot) or not coal.permits(step.action, step.parameters or {}, snapshot):
+        if (self._execution_barrier(snapshot) or self._coal_job_conflict(step)
+                or not coal.permits(step.action, step.parameters or {}, snapshot)):
             return False
         try:
             rows = coal.sources(snapshot)
@@ -184,6 +185,17 @@ class CoalSupplyMixin:
         reserved.update(coal.reserved_components(self.memory.coal_commitments, self.memory.solid_commitments))
         return dict(reserved)
 
+    def _coal_job_conflict(self, step):
+        state = self.memory.coal_funding
+        if state is None or step.action != "factory_craft_job":
+            return False
+        recipe = self.catalog.recipes.get((step.parameters or {}).get("recipe"))
+        # A tracked job locks its entire output inventory, including baseline
+        # stock. Include newly acquired kit components: post-action observation
+        # may hold partial output before the background job is admitted.
+        return recipe is None or any(product["name"] in state["kit"]
+                                     for product in recipe.get("products", []))
+
     def _compile_candidates(self, snapshot):
         plans, blocker = super()._compile_candidates(snapshot)
         if self.memory.active_goal == "bootstrap_mining" or self._execution_barrier(snapshot):
@@ -195,7 +207,8 @@ class CoalSupplyMixin:
         state = self.memory.coal_funding
         if state:
             plans = [p for p in plans if "capital_investment" not in (p.materials or {})
-                     and (p.materials or {}).get(solid_investment.MARKER, {}).get("stage") != "kit"]
+                     and (p.materials or {}).get(solid_investment.MARKER, {}).get("stage") != "kit"
+                     and not self._coal_job_conflict(p.steps[0])]
         extra = candidates(snapshot, self.memory.active_goal, failures=self.memory.failures)
         if self._coal_kit_policy and not self.memory.coal_commitments:
             try:
@@ -281,6 +294,8 @@ class CoalSupplyMixin:
             reason = "kit_deadline"
         elif self.memory.failures.get(state["key"], 0) >= 2:
             reason = "kit_failure_budget"
+        elif coal_funding.build_budget_exhausted(rows, self.memory.failures):
+            reason = "kit_build_failure_budget"
         elif state["actions"] >= coal_funding.MAX_ACTIONS and self.memory.active_plan is None:
             if any(held.get(k, 0) < v for k, v in state["kit"].items()):
                 reason = "kit_action_budget"
