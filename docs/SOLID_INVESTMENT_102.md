@@ -12,7 +12,9 @@ The existing explicit-intent composition gains `solid_science_policy=True`.
 With its default `False`, explicit-intent foundation behavior is retained. With
 `True`, configured intents are an allowlist, not unconditional construction
 orders. The controller computes demand and payback before adding at most two
-new offers. At most one paid construction project progresses at a time.
+new offers. At most one paid construction project progresses at a time. A selected kit
+prerequisite also binds one optional funding intent, with a fixed deadline and
+action/failure bounds; ready science and urgent work remain eligible.
 
 The policy only considers the current research's automation/logistic science
 requirements, capped at 120 packs per type. The owned lab must be observed and
@@ -62,11 +64,14 @@ admitted only when the estimated manual burden exceeds this build estimate by
 25%. This margin is a policy parameter in code, not a measured performance result.
 Unknown recipe costs or unsupported material shortages reject the offer.
 
-The complete unreserved remaining kit must already be carried. This version
-explicitly defers with `insufficient_unreserved_kit` otherwise; it does not
-implement automatic kit acquisition, source mining, new endpoint placement,
-power bootstrap, shared endpoints, or arbitrary routing. Those are real scope
-limits, not native accomplishments hidden behind a flag.
+The complete unreserved remaining kit must be carried before the first paid
+placement. When it is incomplete, the [bounded kit funding extension](SOLID_KIT_ACQUISITION_102.md)
+can acquire the next prerequisite through an existing paid hand-craft or owned-output
+extraction, but only if the entire bounded bill is fundable from current stock.
+It reprices acquisition handling and the source items consumed by that bill.
+It does not mine raw materials, finance future production, place new endpoints,
+bootstrap power, share endpoints, or discover arbitrary routing. Those are real
+scope limits, not native accomplishments hidden behind a flag.
 
 ## Composition, ranking and fresh dispatch
 

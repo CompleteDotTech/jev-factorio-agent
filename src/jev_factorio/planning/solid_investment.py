@@ -7,7 +7,7 @@ this policy and the ordinary native/receipt guards still authorize the mutation.
 """
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 import math
 from statistics import median
 
@@ -16,6 +16,7 @@ from ..skills import Plan
 from ..telemetry import validate_attempt
 from .demand import SupplyLedger
 from .solid_routes import candidates as build_candidates
+from . import solid_funding
 from .scheduling import SERVICE_TICKS, TRAVEL_TICKS_PER_TILE
 
 MARKER = "solid_investment"
@@ -199,8 +200,32 @@ def offer_value(row, snapshot, catalog, demand, outcomes=()) -> dict:
         return {"eligible": False, "reason": "cost_or_supply_unavailable"}
 
 
+
+def _kit_offer(row, snapshot, catalog, value, *, reserved=None, job=None, failures=None):
+    """Price one current intent, independently of unrelated optional offers."""
+    plan, acquisition = solid_funding.acquire(row, snapshot, catalog, reserved=reserved, job=job, failures=failures)
+    if plan is None:
+        return None, {**value, "eligible": False, "reason": "complete_carried_kit"}
+    units = min(value["demand_units"], acquisition["source_units_after_kit"])
+    trips = math.ceil(units / min(20, catalog.stack_sizes.get(row["item"], 20)))
+    manual = trips * value["service_game_ticks"]
+    # Kit process cost is already in build cost; add only the previously absent
+    # acquisition handling/travel allowance. Never count one cost twice.
+    total = value["build_game_ticks_estimate"] + acquisition["acquisition_service_ticks_estimate"]
+    value = {**value, **acquisition, "stage": "kit", "valued_units": units,
+             "manual_trips_estimate": trips, "manual_game_ticks_estimate": manual,
+             "total_investment_game_ticks_estimate": total,
+             "eligible": manual > total * value["cost_margin"],
+             "reason": "bounded_observed_stock_kit"}
+    if not value["eligible"]:
+        return None, {**value, "reason": "kit_acquisition_not_profitable"}
+    marker = {"schema": 1, "route": row["route"], "layout": row["layout"],
+              "observed_tick": snapshot.tick, "research": snapshot.factory.get("research", ""), **value}
+    return replace(plan, materials={**(plan.materials or {}), MARKER: marker}), value
+
+
 def candidates(snapshot, catalog, goal, *, outcomes=(), reserved=None, job=None,
-               capital_active=False) -> tuple[list[Plan], dict]:
+               capital_active=False, funding=None, failures=None) -> tuple[list[Plan], dict]:
     """At most two offers and one paid construction project, retaining manual work."""
     rows = contract.routes(snapshot)
     diagnostics = {"reason": "current_research_recipe_bill", "routes": {}}
@@ -211,11 +236,15 @@ def candidates(snapshot, catalog, goal, *, outcomes=(), reserved=None, job=None,
     active = sorted(key for key, row in rows.items() if row["state"] == "building")
     demand, diagnostics["reason"] = requirements(snapshot, catalog, reserved=reserved, job=job)
     offers = []
+    failures = failures or {}
     for key, row in sorted(rows.items()):
         if not contract.current(row, snapshot) or row["state"] not in {"proposed", "building"}:
             continue
         if active and key != active[0]:
             diagnostics["routes"][key] = {"eligible": False, "reason": "existing_paid_project"}
+            continue
+        if funding is not None and not solid_funding.bound(funding, row):
+            diagnostics["routes"][key] = {"eligible": False, "reason": "existing_kit_project"}
             continue
         value = ({"eligible": True, "reason": "preserve_paid_commitment", "remaining_kit": contract.remaining(row)}
                  if row["state"] == "building" else offer_value(row, snapshot, catalog, demand, outcomes))
@@ -227,8 +256,28 @@ def candidates(snapshot, catalog, goal, *, outcomes=(), reserved=None, job=None,
             # The controller excludes this project's own lock at final dispatch;
             # new offers must be wholly fundable before the first paid placement.
             if row["state"] == "proposed" and any(ledger.carried.get(k, 0) < v for k, v in contract.remaining(row).items()):
-                diagnostics["routes"][key] = {**value, "eligible": False, "reason": "insufficient_unreserved_kit"}
-                continue
+                if (failures.get(solid_funding.project_key(row) + ":kit", 0) >= 2
+                        or funding is not None and (funding["actions"] >= solid_funding.MAX_ACTIONS
+                                                   or snapshot.tick >= funding["deadline_tick"])):
+                    diagnostics["routes"][key] = {**value, "eligible": False, "reason": "kit_budget_exhausted"}
+                    continue
+                try:
+                    plan, value = _kit_offer(row, snapshot, catalog, value, reserved=reserved, job=job, failures=failures)
+                    diagnostics["routes"][key] = value
+                    if plan is None:
+                        continue
+                    offers.append(plan)
+                    # One stable-intent acquisition alternative, not competing
+                    # prerequisites that consume one another's kit.
+                    break
+                except solid_funding.KitBudgetExhausted:
+                    diagnostics["routes"][key] = {**value, "eligible": False,
+                                                  "reason": "kit_existing_failure_budget"}
+                    continue
+                except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
+                    diagnostics["routes"][key] = {**value, "eligible": False,
+                                                  "reason": "kit_observed_stock_or_recipe_unavailable"}
+                    continue
         except (ValueError, KeyError, TypeError):
             diagnostics["routes"][key] = {"eligible": False, "reason": "reservation_or_supply_invalid"}
             continue
@@ -244,10 +293,15 @@ def candidates(snapshot, catalog, goal, *, outcomes=(), reserved=None, job=None,
     return offers, diagnostics
 
 
-def fresh_permission(plan, step, snapshot, catalog, *, outcomes=(), reserved=None, job=None) -> bool:
+def fresh_permission(plan, step, snapshot, catalog, *, outcomes=(), reserved=None, job=None, funding=None, failures=None) -> bool:
     """Recompute policy at the fresh precondition; never trust a ranking annotation."""
     marker = (plan.materials or {}).get(MARKER)
-    if not isinstance(marker, dict) or step.action != contract.COMMAND or len(plan.steps) != 1:
+    if not isinstance(marker, dict) or len(plan.steps) != 1:
+        return False
+    if marker.get("stage") == "kit":
+        return _fresh_kit_permission(plan, step, snapshot, catalog, outcomes=outcomes,
+                                     reserved=reserved, job=job, funding=funding, failures=failures)
+    if step.action != contract.COMMAND:
         return False
     try:
         row = contract.routes(snapshot).get(marker.get("route"))
@@ -281,3 +335,39 @@ def ranking_marker(plan, snapshot) -> bool:
     approved = getattr(snapshot, "_solid_investment_annotations", {})
     return (isinstance(marker, dict) and marker == approved.get(plan.id)
             and marker.get("observed_tick") == snapshot.tick and marker.get("eligible") is True)
+
+
+def _fresh_kit_permission(plan, step, snapshot, catalog, *, outcomes, reserved, job, funding, failures):
+    marker = plan.materials[MARKER]
+    try:
+        row = contract.routes(snapshot).get(marker.get("route"))
+        if (plan.goal != "rocket_launch" or not row or not contract.current(row, snapshot)
+                or row["state"] != "proposed" or row["layout"] != marker.get("layout")
+                or type(marker.get("schema")) is not int or marker["schema"] != 1
+                or not contract.integer(marker.get("observed_tick")) or marker["observed_tick"] > snapshot.tick
+                or marker.get("research") != snapshot.factory.get("research")
+                or marker.get("catalog_sha256") != solid_funding.catalog_digest(row, snapshot, catalog)
+                or funding is not None and (not solid_funding.bound(funding, row)
+                    or funding["catalog_sha256"] != marker["catalog_sha256"]
+                    or snapshot.tick >= funding["deadline_tick"])):
+            return False
+        if (job is not None or snapshot.factory.get("crafting_queue", 0)
+                or any(other["pending"] or other["state"] == "building"
+                       for other in contract.routes(snapshot).values())):
+            return False
+        demand, _ = requirements(snapshot, catalog, reserved=reserved, job=job)
+        value = offer_value(row, snapshot, catalog, demand, outcomes)
+        if not value.get("eligible"):
+            return False
+        expected, _ = _kit_offer(row, snapshot, catalog, value, reserved=reserved, job=job, failures=failures)
+        if expected is None or expected.id != plan.id:
+            return False
+        a, b = asdict(step), asdict(expected.steps[0])
+        if step.action == "factory_extract":
+            p = a["parameters"]
+            if p.get("receipt") != f'{marker["observed_tick"]}:factory_extract:{p["role"]}:{p["item"]}':
+                return False
+            a["parameters"].pop("receipt"); b["parameters"].pop("receipt")
+        return a == b and step.allowed(snapshot)
+    except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
+        return False

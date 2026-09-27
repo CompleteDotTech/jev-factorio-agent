@@ -987,6 +987,8 @@ class HierarchicalLoop(AgentLoop):
                     return self._record(snapshot, "observe", self.memory.reason)
             from .capital_controller import commit as commit_capital
             commit_capital(self, chosen, snapshot)
+            if getattr(self, "_commit_solid", None):
+                self._commit_solid(chosen, snapshot)
             if getattr(self, "_commit_successor", None):
                 self._commit_successor(chosen, snapshot)
             self.memory.active_plan = chosen.to_dict()

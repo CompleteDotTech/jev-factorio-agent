@@ -112,3 +112,57 @@ by the development fixtures for this patch.
 The audit/proposal code and fixtures are not a reviewed infrastructure change.
 Canonical infrastructure ownership, live ancestor readback, headroom assessment,
 authorized remediation and matched native before/after measurements remain open.
+
+## Malformed-input, epoch and quota-rounding gates
+
+Known memory fields, pressure-row fields and CPU accounting rows must be
+unambiguous. Duplicate fields are rejected even when the duplicate values are
+equal; the public report marks the affected measurement unavailable rather than
+using the last value. Unrelated, unrecognized proc fields are still ignored.
+A malformed pressure sample therefore cannot be mistaken for measured zero
+pressure, and a duplicate `MemAvailable` cannot inflate the available-memory
+readout. No extra runtime/game/transport calls are introduced.
+
+Counter comparison requires the same observed, non-missing boot epoch. Cgroup
+CPU accounting additionally requires the same observed directory identity and
+a positive per-level local sampling interval. Missing epoch/window evidence is
+`unknown`; an observed changed identity/boot is `epoch_changed`; a decreasing
+counter in a qualified epoch is `reset`. None emits an invented zero delta.
+The boot time and inode checks are local continuity guards, **not** host identity
+attestation or a cross-host sample-binding contract. They do not prove that a
+quota stayed unchanged between sequential reads. Existing schema-1 fields remain
+available; older/unqualified inputs can now yield `unknown` instead of a measured
+delta. Do not sum nested counters or divide a delta with no valid time window.
+
+The audit/proposal supports CFS periods from 1,000 through 1,000,000 microseconds
+and finite quotas of at least 1,000 microseconds. Invalid current settings cannot
+be used to promise a valid rollback. Requests whose rounded quota is below the
+supported minimum are rejected, not silently raised. Other scheduler classes,
+nonstandard controllers and external host restrictions still require operator
+qualification. See [CFS bandwidth control](https://docs.kernel.org/scheduler/sched-bwc.html)
+and [cgroup v2 CPU](https://docs.kernel.org/admin-guide/cgroup-v2.html#cpu).
+
+`allocation_plan` rounds the supplied decimal CPU request upward to an integer
+number of quota microseconds, then computes required additional capacity from
+that **actual proposed quota**. It compares exact rational quantities for the
+headroom gate rather than a rounded floating-point approximation. For example,
+with current quota/period `200000/100000`, a request for `2.000001` CPUs needs
+quota `200001`, an increase of `0.00001` CPUs. Declared headroom `0.000002` is
+insufficient, even though it exceeds the unquantized requested increase. Exact
+headroom `0.00001` passes the numeric check only. The original current/rollback
+values are detached copies and remain unchanged; `apply_authorized` stays false.
+The additive `requested_cpu_equivalents`, `proposed_cpu_equivalents` and
+`quota_rounding` fields make this distinction explicit. This is not an authorized
+infrastructure change or a claim that declared host headroom was measured.
+
+Regression command (temporary proc/cgroup fixtures, no native game):
+
+```sh
+PYTHONPATH=src python -m pytest \
+  tests/test_capacity_audit.py tests/test_capacity_audit_integrity.py -q
+```
+
+These corrections do not implement or qualify the separately reported detailed
+host-audit continuation, perform active/persistent libvirt readback, or finish
+#97/#92 operational acceptance. Keep those source and infrastructure-owner gates
+separate from this bounded correction to the merged audit API.
