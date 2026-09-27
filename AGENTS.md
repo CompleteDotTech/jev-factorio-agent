@@ -1,5 +1,29 @@
 # Repository Guidelines
 
+## Recover stopped runs and keep the live overlay truthful
+
+When the user asks whether an expected ongoing agent or campaign is running,
+verify live state. If it unexpectedly stopped, stalled, or became blocked, treat
+the question as authorization to diagnose, repair, and safely resume that run.
+Do not stop at a status report or ask whether routine recovery should proceed.
+Verify fresh useful progress after recovery.
+
+Update the live overlay during recovery and verify it after resumption. In OBS
+Studio Mode, selecting a scene changes Preview; verify the actual Program output
+before claiming the broadcast changed. Preserve streaming and audio settings.
+
+Coordinate with the existing supervisor and service owner. Preserve original
+identity/cutoff, pending actions, receipts, ownership, failure history, and
+unrelated work. Never launch a duplicate controller, blindly retry an ambiguous
+mutation, or bypass reconciliation, durability, review, or deployment gates.
+An intentional user stop, completion, or expired authorized window does not
+authorize a restart or extension. Finish independent authorized work and report
+the precise blocker if required evidence, access, or authority is unavailable.
+
+Never run `wsl --shutdown`, `wsl --terminate`, or `wsl -t` on the shared machine.
+Diagnose the affected service without restarting shared hosts or disrupting
+other sessions. See [the recovery runbook](docs/STATUS_RECOVERY.md).
+
 ## Project Structure & Module Organization
 
 This Python 3.10+ project uses a `src` layout. Application code lives in
