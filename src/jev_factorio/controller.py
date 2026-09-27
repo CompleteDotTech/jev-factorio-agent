@@ -608,6 +608,8 @@ class HierarchicalLoop(AgentLoop):
         except (MaintenanceAdmissionClosed, StoragePressure):
             return self._record(snapshot, "observe", "Retained transfer admission closed", snapshot)
         except Exception as error:
+            if self._persistence_failed:
+                raise  # Preserve the primary checkpoint failure and durable pending.
             self.memory.pending["dispatch"] = "ambiguous"
             self.memory.event("recovery_dispatch_error", error_type=error_code(error),
                               tick=snapshot.tick)
@@ -1093,6 +1095,8 @@ class HierarchicalLoop(AgentLoop):
             self._trace.clear_pending()
             return self._record(snapshot, "observe", reason, fresh)
         except Exception as error:
+            if self._persistence_failed:
+                raise  # A phase checkpoint failure is not a backend acknowledgement.
             if step.action == "factory_connect" and type(error) is ConnectionPreflightRejected:
                 # Only this explicit backend contract proves the connection
                 # mutator was never entered. Generic errors, lost replies and

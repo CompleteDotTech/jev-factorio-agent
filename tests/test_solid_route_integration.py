@@ -161,12 +161,13 @@ def test_precondition_observation_rejects_missing_kit_before_dispatch(tmp_path):
 
 def test_lost_checkpoint_after_paid_placement_reconciles_native_receipt(tmp_path):
     backend = Backend(); loop = controller(backend, tmp_path)
+    primary = OSError("fixture sync failure")
     def fault():
-        loop.memory.save = lambda path: (_ for _ in ()).throw(OSError("fixture sync failure"))
+        loop.memory.save = lambda path: (_ for _ in ()).throw(primary)
     backend.post_dispatch = fault
-    with pytest.raises(RuntimeError, match="persistence") as caught:
+    with pytest.raises(OSError, match="fixture sync failure") as caught:
         loop.step()
-    assert isinstance(caught.value.__context__, OSError)
+    assert caught.value is primary
     with pytest.raises(RuntimeError, match="persistence"): loop.step()
     backend.post_dispatch = lambda: None
     resumed = controller(backend, tmp_path, resume=True)

@@ -483,6 +483,8 @@ class SolidRouteMixin:
                 except ResearchLogError:
                     raise
                 except Exception:
+                    if self._persistence_failed:
+                        raise
                     pending["dispatch"] = "ambiguous"
                     self._save()
                     return self._record(snapshot, "observe", "Exact solid replay remains ambiguous; preserve pending receipt")
