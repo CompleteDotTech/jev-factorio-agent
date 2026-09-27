@@ -128,6 +128,8 @@ def validate_catalog_declarations(values: dict, tick: int) -> None:
         raise ValueError('Invalid funding catalog declarations')
     for key, value in values.items():
         if (not isinstance(key, str) or not key.startswith('solid-project:')
+                or len(key) != len('solid-project:') + 64
+                or any(c not in '0123456789abcdef' for c in key[len('solid-project:'):])
                 or not isinstance(value, dict) or set(value) != {
                     'schema', 'observed_tick', 'version', 'catalog_sha256', 'acquisition_sha256'}
                 or type(value['schema']) is not int or value['schema'] != 1

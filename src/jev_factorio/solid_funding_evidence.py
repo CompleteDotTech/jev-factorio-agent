@@ -497,6 +497,7 @@ def _terminal_outcomes(record, plan, index, pending, attempt, seen, fresh, budge
              'connection_preflight_rejected', 'wait_replanned', 'wait_expired'}
     values = [value for value in record.get('attempt_outcomes', [])
               if value.get('outcome') in kinds and value.get('finished_tick') == record['after_state']['tick']
+              and (value.get('id') == (attempt or {}).get('id') if pending is not None else value.get('id') not in seen)
               and value.get('plan_id') == plan.id and value.get('step_index') == index
               and value.get('action') == step.action and value.get('step_sha256') == fingerprint(asdict(step))]
     if len(values) != 1:
@@ -964,6 +965,12 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 issues.add('solid_funding_kit_admission_unproven')
             completed = _completed_dispatches(record, previous_pending, previous_attempt, seen_attempts)
             proven_outcomes = list(background_completed)
+            if active_kit and current is not None and active_step is not None:
+                from .skills import Plan
+                kit = Plan(current['key'] + ':kit', 'rocket_launch', 'Retained kit', (_kit_step(active_step),))
+                terminal, _ = _terminal_outcomes(record, kit, 0, previous_pending, previous_attempt,
+                    seen_attempts, fresh, previous_budgets, reservations, dispatch_job)
+                proven_outcomes.extend(terminal)
             if current is None:
                 active_kit = False
             elif active_kit and active_step is not None and _kit_clear_observed(

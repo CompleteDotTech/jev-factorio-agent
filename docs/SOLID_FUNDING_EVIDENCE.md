@@ -247,3 +247,12 @@ as successful service. New kit commitments are forbidden while a background job
 is active, including verify-only commits. Deferred release diagnostics retain the first cause
 for the exact funding proof until cleanup; this does not turn an uncaptured
 demand/catalog change into a measurable audit trigger.
+
+Kit plans retain ownership through storage or maintenance preflight rejection,
+including repeated rejections at one game tick. The new attempt ID distinguishes
+each terminal event from older outcomes in the bounded ring. Catalog declaration
+keys require the exact lowercase 64-hex project suffix; a full declaration cache
+preserves its prior entries rather than saving an oversized map. A new project
+without an independent declaration remains unmeasurable. Hybrid request rejection
+can legitimately fall back before calling a model; its false call flags do not
+claim a provider evaluation.

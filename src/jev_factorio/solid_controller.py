@@ -232,7 +232,8 @@ class SolidRouteMixin:
             if self._solid_science_policy:
                 for value in routes.routes(snapshot).values():
                     key = solid_funding.project_key(value)
-                    if key not in self.memory.solid_funding_catalogs:
+                    if (key not in self.memory.solid_funding_catalogs
+                            and len(self.memory.solid_funding_catalogs) < routes.MAX_ROUTES):
                         try:
                             declaration = solid_funding.acquisition_evidence({**value, 'parts': {}}, snapshot, self.catalog, {})
                             self.memory.solid_funding_catalogs[key] = {
