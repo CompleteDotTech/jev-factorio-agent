@@ -59,6 +59,10 @@ def run(samples: int = 100) -> dict:
                 counts[metrics['status']] += 1
                 if metrics['status'] == 'written':
                     counts['bytes_written'] += metrics['bytes']
+                for key in ('file_sync_calls', 'directory_sync_calls',
+                            'parent_directory_sync_calls', 'verification_read_calls',
+                            'verification_read_bytes'):
+                    counts[key] += metrics.get(key, 0)
             final_digest = hashlib.sha256(destination.read_bytes()).hexdigest()
     finally:
         checkpoint.asdict, checkpoint.json.dumps, checkpoint.os.fsync = original_capture, original_dumps, original_sync
