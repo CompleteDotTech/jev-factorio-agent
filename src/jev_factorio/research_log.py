@@ -42,7 +42,7 @@ _CORRELATION_KEYS = {"decision_id", "model_call_id", "plan_id", "action_id"}
 _TREATMENT_FIELDS = {"factory_scheduling", "background_work",
                      "furnace_output_buffers", "furnace_input_belts", "mining_outposts",
                      "campaign_diagnostics", "profile_observations", "consolidated_observations",
-                     "lead_time_supply", "coverage_margin_lookahead"}
+                     "lead_time_supply", "coverage_margin_lookahead", "solid_routes"}
 
 
 class ResearchLogError(RuntimeError):
@@ -104,6 +104,7 @@ class RunConfiguration:
     consolidated_observations: bool = False
     lead_time_supply: bool = False
     coverage_margin_lookahead: bool = False
+    solid_routes: bool = False
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -462,6 +463,7 @@ class ResearchLog:
             "durability": "file-fsync-only" if os.name == "nt" else "file-and-directory-fsync",
         }
         validate_manifest(manifest)
+        self._configuration = configuration
         self._manifest_hash = digest(manifest)
         self._previous_hash = self._manifest_hash
         _make_parents(self.run_dir.parent)
@@ -476,6 +478,11 @@ class ResearchLog:
         except BaseException:
             self.close()
             raise
+
+    @property
+    def configuration(self) -> RunConfiguration:
+        """The frozen, validated configuration written to this run's manifest."""
+        return self._configuration
 
     def _timestamp(self) -> str:
         value = self._utc_now()

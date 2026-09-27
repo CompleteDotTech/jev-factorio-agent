@@ -98,6 +98,8 @@ class HierarchicalLoop(AgentLoop):
         from .planning.capacity_evidence import CapacityHistory
         self._performance = PerformanceCounters()
         self._capacity_history = CapacityHistory()
+        from .planning.fuel_history import FuelHistory
+        self._fuel_history = FuelHistory()
         self.catalog = None
         self._trace = CausalTrace(research_log, "hierarchical", jev, provenance=self.provenance)
         self._trace.metrics = self._performance if self.factory_scheduling == "ready-work" else None
@@ -151,6 +153,8 @@ class HierarchicalLoop(AgentLoop):
 
     def _observe_snapshot(self) -> GameSnapshot:
         snapshot = self._trace.observe(self.backend, self._trace.observation_phase)
+        if 'solid_routes' in snapshot.factory and not getattr(self, '_solid_routes_enabled', False):
+            raise ValueError('Existing solid-route runtime requires its explicit controller capability')
         if 'successors' in snapshot.factory and not getattr(self, '_successors_enabled', False):
             raise ValueError('Existing successor runtime requires its explicit controller capability')
         if 'mining_outposts' in snapshot.factory and not getattr(self, '_mining_outposts_enabled', False):
@@ -173,7 +177,13 @@ class HierarchicalLoop(AgentLoop):
         observe_capital(self, snapshot)
         evidence = (self._capacity_history.observe(snapshot, self.catalog)
                     if self.catalog is not None and self.factory_scheduling == "ready-work" else {})
-        self._trace.emit("observation_validated", {"accepted": True, "capacity_evidence": evidence})
+        fuel_evidence = {}
+        if self.catalog is not None and self.factory_scheduling == "ready-work":
+            pending = self.memory.pending or {}
+            fuel_evidence = self._fuel_history.observe(
+                snapshot, ambiguous=pending.get("dispatch") in {"prepared", "ambiguous"})
+        self._trace.emit("observation_validated", {"accepted": True, "capacity_evidence": evidence,
+                                                   "fuel_depletion_estimates": fuel_evidence})
         return snapshot
 
     def _save(self) -> None:
@@ -294,6 +304,8 @@ class HierarchicalLoop(AgentLoop):
                 "background_work", "furnace_output_buffers", "furnace_input_belts",
                 "mining_outposts", "ore_side_successors")},
         }
+        if getattr(self, "_solid_routes_enabled", False):
+            record["acceptance_configuration"]["solid_routes"] = True
         if self.log_file:
             self.log_file.parent.mkdir(parents=True, exist_ok=True)
             with self.log_file.open("a", encoding="utf-8") as stream:
@@ -712,7 +724,7 @@ class HierarchicalLoop(AgentLoop):
                 and step.action == "factory_wait" and step.effect == "machine_output"):
             candidates, _ = self._work_candidates(snapshot)
             ready = [candidate for candidate in candidates
-                     if self.memory.failures.get(candidate.id, 0) < 2
+                     if self._plan_failure_count(candidate) < 2
                      and candidate.steps[0].action != "factory_wait"
                      and candidate.steps[0].allowed(snapshot)
                      and not candidate.steps[0].satisfied(snapshot)]
@@ -790,7 +802,16 @@ class HierarchicalLoop(AgentLoop):
                 return replace(plan, id=f"{plan.id}:remainder-quantity:{requested}")
         return plan
 
+    def _plan_failure_count(self, plan: Plan) -> int:
+        from .planning.connection_identity import connection_failures
+        from .planning.fuel_failure_budget import acquisition_failures
+        return max(connection_failures(plan.id, self.memory.failures,
+                                       self.memory.connection_failure_attribution),
+                   acquisition_failures(plan, self.memory.failures))
+
     def _compile_candidates(self, snapshot: GameSnapshot) -> tuple[list[Plan], str]:
+        # Decision-local context only; never a second persistent ownership ledger.
+        snapshot._planner_failure_budgets = dict(self.memory.failures)
         if self.catalog is not None and self.memory.active_goal in {
             "rocket_launch", "iron_smelting", "steam_power", "automation_science", "bootstrap_mining"
         }:
@@ -860,10 +881,7 @@ class HierarchicalLoop(AgentLoop):
                     result=lambda value: {"plans": [plan.to_dict() for plan in value[0]],
                                           "blocker": value[1]})
             generated = list(plans)
-            from .planning.connection_identity import connection_failures
-            budget_counts = {p.id: connection_failures(
-                p.id, self.memory.failures, self.memory.connection_failure_attribution)
-                for p in generated}
+            budget_counts = {p.id: self._plan_failure_count(p) for p in generated}
             rejected = [{"plan_id": p.id, "reason": "plan_failure_budget",
                          "failures": budget_counts[p.id]}
                         for p in generated if budget_counts[p.id] >= 2]

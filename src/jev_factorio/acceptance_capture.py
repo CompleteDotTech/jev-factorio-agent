@@ -59,6 +59,20 @@ def validate_trial(trial: dict) -> None:
 
 
 def project_record(row: dict, redactor: Redactor, counts: Counter) -> dict:
+    # Experimental solid corridors are not a production acceptance treatment yet.
+    # Never strip their ownership/flow evidence and certify the remaining record
+    # under the older trial schema. A future capture version must preserve and
+    # validate the complete treatment, native identities and immutable intent.
+    unsupported = bool({'solid_routes', 'solid_route_evidence', 'solid_route_fault'} & row.keys())
+    for label in ('acceptance_configuration', 'campaign_treatment'):
+        configuration = row.get(label)
+        unsupported |= isinstance(configuration, dict) and 'solid_routes' in configuration
+    for label in ('state', 'after_state'):
+        observation = row.get(label)
+        factory = observation.get('factory') if isinstance(observation, dict) else None
+        unsupported |= isinstance(factory, dict) and 'solid_routes' in factory
+    if unsupported:
+        raise ValueError('Experimental solid-route evidence requires a qualified acceptance schema')
     result = {key: deepcopy(row[key]) for key in RECORD_FIELDS if key in row}
     counts.update('top:' + k for k in row.keys() - RECORD_FIELDS - {'state', 'after_state', 'decision'})
     for label in ('state', 'after_state'):

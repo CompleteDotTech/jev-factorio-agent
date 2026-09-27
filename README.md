@@ -237,3 +237,15 @@ changes. The [read-only capacity audit](docs/CAPACITY_AUDIT.md) and
 change or prove native progress. General solid transport and its coal/downstream
 consumers remain separate implementation work; keep #92/#103 open until their
 actual native requirements are met.
+
+The [grouped manual fuel policy](docs/GROUPED_FUEL_POLICY.md) documents bounded
+service/reserves, observation-only depletion estimates and unchanged failure/receipt
+authority. Its fixture results do not establish native throughput or coal automation.
+
+## Experimental solid-route foundation
+
+The [solid-corridor contract and qualification boundary](docs/SOLID_ROUTES_100.md)
+implements an opt-in Python composition API for paid straight corridors. It is
+not exposed as a production CLI/supervisor treatment. Python/Lua fixtures do not
+establish native transport, coal-network capability or campaign acceptance; see
+#100 and #92 for the remaining gates.
