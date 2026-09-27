@@ -12,6 +12,7 @@ import hashlib
 import json
 
 from .planning import solid_funding
+from .telemetry import validate_attempt
 
 SCHEMA = 1
 KINDS = frozenset({'solid_kit_committed', 'solid_kit_abandoned', 'solid_kit_paid_handoff'})
@@ -60,6 +61,43 @@ def _native_bound(state: dict, record: dict, *, paid: bool = False,
     if paid:
         return row.get('state') in {'building', 'ready'} and bool(row.get('parts'))
     return row.get('state') == 'proposed'
+
+
+def _kit_plan_observed(proof: dict, record: dict, tick: int) -> bool:
+    action = record.get('action')
+    compatible = action in {'factory_craft', 'factory_extract', 'observe'} or (
+        action == 'verify' and record.get('verified') is True)
+    return compatible and any(
+        event.get('kind') == 'plan_committed' and event.get('plan') == proof['key'] + ':kit'
+        and _tick(event.get('tick')) and event['tick'] == tick
+        for event in record.get('history', []))
+
+
+def _dispatch_crossed_deadline(record: dict, before: int, deadline: int, now: int) -> bool:
+    # Any ordinary controller action may run while optional funding is held;
+    # infrastructure does not replace the science/maintenance frontier. Mere
+    # action labels, or old outcomes repeated in the ring, do not prove dispatch.
+    action = record.get('action')
+    if not isinstance(action, str) or action in {'observe', 'verify'}:
+        return False
+    def started(value):
+        return (isinstance(value, dict) and value.get('action') == action
+                and _tick(value.get('started_tick'))
+                and before <= value['started_tick'] < deadline)
+    pending = record.get('pending')
+    if started(pending) and pending.get('dispatch') in {'returned', 'ambiguous'}:
+        attempt = record.get('attempt')
+        if started(attempt) and attempt['started_tick'] == pending['started_tick']:
+            validate_attempt(attempt)
+            return True
+    outcomes = record.get('attempt_outcomes', [])
+    if record.get('verified') is True and isinstance(outcomes, list):
+        for value in outcomes:
+            if (started(value) and value.get('outcome') == 'verified'
+                    and _tick(value.get('finished_tick')) and value['finished_tick'] == now):
+                validate_attempt(value, finished=True)
+                return True
+    return False
 
 
 def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list[str]:
@@ -117,6 +155,11 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     continue
             current_budgets = record.get('failure_budgets', {})
             before_tick = record.get('state', {}).get('tick')
+            prior = deepcopy(working)
+            prior_unbound = (prior is not None and previous_pending is None
+                             and not (_native_bound(prior, record, observation='state')
+                                      or _native_bound(prior, record, paid=True, observation='state')))
+            unbound_released = False
             handoff_due = (working is not None and previous_pending is None
                            and _native_bound(working, record, paid=True, observation='state'))
             handed_off = False
@@ -164,6 +207,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                             or proof['key'] in abandoned_keys
                             or not _tick(before_tick) or event_tick != before_tick
                             or event_tick >= proof['deadline_tick']
+                            or not _kit_plan_observed(proof, record, before_tick)
                             or not _native_bound(proof, record, observation='state')):
                         issues.add('solid_funding_commit_not_reconciled')
                     else:
@@ -175,12 +219,16 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     if kind == 'solid_kit_abandoned':
                         count = _budget(current_budgets, proof['key'] + ':kit')
                         reason = event.get('reason')
-                        if count is None or count < 2 or not isinstance(reason, str) or not 0 < len(reason) <= 128:
+                        if (count is None or count < 2 or not isinstance(reason, str)
+                                or not 0 < len(reason) <= 128 or not _tick(before_tick)
+                                or event_tick < before_tick):
                             issues.add('solid_funding_abandonment_not_reconciled')
                             continue
                         # Later events cannot reuse the pre-record budget after
                         # this transition established that the project is spent.
                         abandoned_keys.add(proof['key'])
+                        if prior_unbound and _same(prior, proof) and event_tick == before_tick:
+                            unbound_released = True
                     else:
                         if (new_commits or previous_pending is not None
                                 or not _tick(before_tick) or event_tick != before_tick
@@ -191,6 +239,8 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     working = None
             if handoff_due and not handed_off:
                 issues.add('solid_funding_paid_handoff_missing')
+            if prior_unbound and not unbound_released:
+                issues.add('solid_funding_initial_proposal_not_reconciled')
             if not _same(working, current):
                 issues.add('solid_funding_record_history_mismatch')
             # A receipt may clear pending only after the observer's funding
@@ -204,7 +254,9 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 if budget is None or budget >= 2:
                     issues.add('solid_funding_retained_budget_exhausted')
                 if (previous_pending is None and _tick(before_tick)
-                        and before_tick >= current['deadline_tick']):
+                        and (before_tick >= current['deadline_tick']
+                             or now >= current['deadline_tick'] and not _dispatch_crossed_deadline(
+                                 record, before_tick, current['deadline_tick'], now))):
                     issues.add('solid_funding_expired_state_retained')
             if not policy and (current is not None or working is not None
                                or _funding_events(record.get('history', []))):

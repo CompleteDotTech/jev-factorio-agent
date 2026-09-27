@@ -8,7 +8,7 @@ from jev_factorio.planning import solid_funding
 from jev_factorio.solid_funding_evidence import funding_history_issues
 from integration_evidence_fixtures import evidence
 from solid_routes_fixtures import row
-from test_solid_funding_evidence import funded_evidence, event, assert_rejected
+from test_solid_funding_evidence import funded_evidence, event, plan_event, assert_rejected
 from test_solid_kit_acquisition import kit_loop
 
 
@@ -23,7 +23,8 @@ def test_retained_funding_requires_unexhausted_current_budget(increment):
         record['failure_budgets'][key] = initial['failures'][key]
     if increment:
         proof['actions'] = 2
-        records[3]['history'] = [event('solid_kit_committed', proof, records[3]['state']['tick'])]
+        records[3]['history'] = [event('solid_kit_committed', proof, records[3]['state']['tick']),
+                                 plan_event(proof, records[3]['state']['tick'])]
     for record in records[3 if increment else 0:]:
         record['solid_funding'] = deepcopy(proof)
         record['failure_budgets'][key] = 2
@@ -46,7 +47,8 @@ def test_commit_tick_must_be_the_planning_observation(starting, offset):
         proof.update(started_tick=tick, deadline_tick=tick + solid_funding.MAX_TICKS)
     else:
         proof['actions'] = 2
-    records[3]['history'] = [event('solid_kit_committed', proof, tick)]
+    records[3]['history'] = [event('solid_kit_committed', proof, tick),
+                                 plan_event(proof, tick)]
     for record in records[3:]:
         record['solid_funding'] = deepcopy(proof)
     final['solid_funding'] = deepcopy(proof)
@@ -65,7 +67,8 @@ def test_commit_cannot_use_a_proposal_first_seen_after_the_action():
         for label in ('state', 'after_state'):
             record[label]['factory']['solid_routes']['routes'].pop(proof['route'])
     records[3]['state']['factory']['solid_routes']['routes'].pop(proof['route'])
-    records[3]['history'] = [event('solid_kit_committed', proof, tick)]
+    records[3]['history'] = [event('solid_kit_committed', proof, tick),
+                                 plan_event(proof, tick)]
     for record in records[3:]:
         record['solid_funding'] = deepcopy(proof)
     final['solid_funding'] = deepcopy(proof)
@@ -112,6 +115,7 @@ def test_one_step_cannot_commit_acquisition_then_handoff_new_payment():
     for record in records:
         record['solid_funding'] = None
     records[0]['history'] = [event('solid_kit_committed', proof, records[0]['state']['tick']),
+                             plan_event(proof, records[0]['state']['tick']),
                              event('solid_kit_paid_handoff', proof, records[0]['after_state']['tick'])]
     assert funding_history_issues(initial, records, final)
     assert_rejected(data)
@@ -154,7 +158,8 @@ def test_new_commit_cannot_choose_a_different_funding_horizon():
     initial['solid_funding'] = None
     for record in records[:3]:
         record['solid_funding'] = None
-    records[3]['history'] = [event('solid_kit_committed', proof, tick)]
+    records[3]['history'] = [event('solid_kit_committed', proof, tick),
+                                 plan_event(proof, tick)]
     for record in records[3:]:
         record['solid_funding'] = deepcopy(proof)
     final['solid_funding'] = deepcopy(proof)
@@ -199,7 +204,8 @@ def test_pending_verification_record_cannot_also_commit_another_kit_plan():
     proof['actions'] = 2
     records[2]['pending'] = {'action': 'factory_craft', 'dispatch': 'returned',
                              'started_tick': records[2]['state']['tick'], 'polls': 0}
-    records[3]['history'] = [event('solid_kit_committed', proof, records[3]['state']['tick'])]
+    records[3]['history'] = [event('solid_kit_committed', proof, records[3]['state']['tick']),
+                                 plan_event(proof, records[3]['state']['tick'])]
     for record in records[3:]:
         record['solid_funding'] = deepcopy(proof)
     final['solid_funding'] = deepcopy(proof)

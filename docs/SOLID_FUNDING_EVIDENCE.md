@@ -66,6 +66,17 @@ a new kit-plan commit.
 Expiry follows the same pending-reconciliation boundary. Neither missing handoff
 events nor overdue funding may be carried across an otherwise eligible window.
 
+An existing lock also binds to the pre-action observation. An absent or rebound
+proposal requires abandonment at that observation; restoring it in the later
+snapshot cannot hide the required release. Abandonment times cannot precede the
+record's initial observation, but may reflect an intermediate fresh observation.
+New kit commits require the matching `plan_committed` event and an acquisition
+action, an observation-only rejection, or a verified already-satisfied plan.
+Crossing a deadline without incoming pending work requires current dispatch
+evidence: a matching pending action or a verified attempt spanning the deadline.
+This applies to ordinary production as well as kit work. An action label or an
+old outcome repeated in history alone cannot defer reconciliation.
+
 ## Evidence boundary and rollout
 
 Tests exercise fabricated retained evidence and the actual Python controller with
