@@ -81,6 +81,10 @@ class CoalSupplyMixin:
             if (self.memory.coal_targets != self._coal_targets or data["targets"] != self._coal_targets
                     or self.memory.coal_epoch != epoch or any(not coal.current(row, snapshot) for row in rows.values())):
                 raise ValueError("Coal source binding or ownership changed")
+            from .construction_journal import require_owner
+            for target, row in rows.items():
+                require_owner(self.memory, action=coal.COMMAND, binding={"target": target},
+                              layout=row["layout"], journal=row["pending"])
             plan = Plan.from_dict(self.memory.active_plan) if self.memory.active_plan else None
             step = plan.steps[self.memory.step_index] if plan else None
             tracked = self.memory.coal_commitments

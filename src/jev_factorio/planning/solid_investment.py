@@ -15,7 +15,7 @@ from .. import solid_routes as contract
 from ..skills import Plan
 from ..telemetry import validate_attempt
 from .demand import SupplyLedger, uncommitted_input
-from .solid_routes import candidates as build_candidates
+from .solid_routes import candidates as build_candidates, next_component
 from . import solid_funding
 from .scheduling import SERVICE_TICKS, TRAVEL_TICKS_PER_TILE
 
@@ -321,8 +321,10 @@ def fresh_permission(plan, step, snapshot, catalog, *, outcomes=(), reserved=Non
                 or not contract.integer(marker.get("observed_tick")) or marker["observed_tick"] > snapshot.tick
                 or not contract.allowed(step.parameters, snapshot)):
             return False
-        expected = next((p for p in build_candidates(snapshot, plan.goal)
-                         if p.steps[0].parameters["route"] == row["route"]), None)
+        # Validate this retained operation, not the fresh candidate frontier:
+        # a native journal must never itself create a new controller attempt.
+        expected = next_component(row, snapshot, plan.goal,
+                                  receipt=step.parameters["receipt"])
         if expected is None or expected.id != plan.id:
             return False
         # The durable original receipt intentionally survives advancing ticks.
