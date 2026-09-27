@@ -316,6 +316,19 @@ def _observable_trigger(proof: dict, reason: str, tick: int, record: dict) -> bo
     return False
 
 
+def _deferred_release(proof, record, prior_budget, budget, active_kit, previous_pending, fresh):
+    """A top-level admission hold can defer cleanup, but cannot authorize work."""
+    return (active_kit and previous_pending is None and prior_budget is not None
+            and budget == max(2, prior_budget)
+            and record.get('action') == 'observe' and record.get('verified') is False
+            and record.get('outcome') in {'storage_pressure', 'quiescent', 'quiescing', 'quiescence_timeout'}
+            and record.get('decision') is None and record.get('model_call') is False
+            and record.get('attempt') is None and record.get('pending') is None
+            and not fresh and _same(record['state'], record['after_state'])
+            and (prior_budget >= 2 or any(_observable_trigger(proof, cause, record['state']['tick'], record)
+                 for cause in ('kit_deadline', 'kit_endpoint_or_layout_changed'))))
+
+
 def _failed_precondition(step_value: dict | None, record: dict) -> bool:
     return (step_value is not None and not _kit_step(step_value).satisfied(GameSnapshot(**record['after_state']))
             and not _kit_step(step_value).allowed(GameSnapshot(**record['after_state'])))
@@ -550,7 +563,9 @@ def _terminal_outcomes(record, plan, index, pending, attempt, seen, fresh, budge
         if kind == 'rejected_transfer_reconciled':
             # The immutable initial checkpoint carries the separately verified
             # sealed-log recovery reference. Do not reopen arbitrary log paths.
-            if not isinstance(recovery, dict) or step.action != 'factory_insert':
+            if (not isinstance(recovery, dict) or step.action != 'factory_insert'
+                    or not _attempt_endpoint(attempt, asdict(step), record['state'])
+                    or not _attempt_endpoint(attempt, asdict(step), record['after_state'])):
                 return [], False
             expected = dict(kind=kind, attempt_id=attempt['id'], events_sha256=recovery.get('events_sha256'),
                             sequences=recovery.get('sequences'), transferred_quantity=0, tick=now)
@@ -1019,7 +1034,10 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     working = None
             if handoff_due and not handed_off:
                 issues.add('solid_funding_paid_handoff_missing')
-            if prior_unbound and not unbound_released:
+            deferred_release = (current is not None and _same(prior, current) and _deferred_release(
+                current, record, _budget(previous_budgets, current['key'] + ':kit'),
+                _budget(current_budgets, current['key'] + ':kit'), active_kit, previous_pending, fresh))
+            if prior_unbound and not unbound_released and not deferred_release:
                 issues.add('solid_funding_initial_proposal_not_reconciled')
             if not _same(working, current):
                 issues.add('solid_funding_record_history_mismatch')
@@ -1050,7 +1068,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
             # A receipt may clear pending only after the observer's funding
             # reconciliation was deferred. Retaining the lock across that
             # boundary is safe; payment alone must not silently release it.
-            if current is not None and not (_native_bound(current, record)
+            if current is not None and not deferred_release and not (_native_bound(current, record)
                                             or _native_bound(current, record, paid=True)):
                 issues.add('solid_funding_owned_proposal_not_observed')
             if current is not None:
@@ -1067,9 +1085,9 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     and record.get('attempt') is None and active_step is not None
                     and _failed_precondition(active_step, record))
                 failed_once = failed_once or (kit_terminal_clear and prior_budget == 0 and budget == 1)
-                if budget is None or budget >= 2:
+                if (budget is None or budget >= 2) and not deferred_release:
                     issues.add('solid_funding_retained_budget_exhausted')
-                if budget != prior_budget and not failed_once:
+                if budget != prior_budget and not failed_once and not deferred_release:
                     issues.add('solid_funding_retained_budget_change_unproven')
                 if failures and not failed_once:
                     issues.add('solid_funding_failed_plan_not_reconciled')
@@ -1078,7 +1096,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     reservations.pop(current['key'] + ':kit', None)
                 if action_budget_due and prior['key'] not in abandoned_keys:
                     issues.add('solid_funding_action_budget_release_missing')
-                if (previous_pending is None and _tick(before_tick)
+                if (not deferred_release and previous_pending is None and _tick(before_tick)
                         and (before_tick >= current['deadline_tick']
                              or now >= current['deadline_tick'] and not _dispatch_crossed_deadline(
                                  record, before_tick, current['deadline_tick'], now, seen_attempts,

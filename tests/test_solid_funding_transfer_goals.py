@@ -88,7 +88,7 @@ def test_observed_native_goal_completion_clears_retained_plan(tmp_path, kind):
     assert funding_history_issues(initial, [record], final)
 
 
-@pytest.mark.parametrize('change', ['reference', 'sequence', 'missing'])
+@pytest.mark.parametrize('change', ['reference', 'sequence', 'missing', 'receipt', 'unit'])
 def test_rejected_transfer_uses_the_retained_sealed_recovery_reference(tmp_path, change):
     from jev_factorio.controller import HierarchicalLoop
     from test_transfer_recovery import _recovery_case, _NoActBackend
@@ -108,7 +108,12 @@ def test_rejected_transfer_uses_the_retained_sealed_recovery_reference(tmp_path,
     assert not funding_history_issues(initial, [record], final)
     if change == 'reference': initial['transfer_recovery']['events_sha256'] = 'f' * 64
     elif change == 'sequence': initial['transfer_recovery']['sequences'][0] += 1
-    else: initial['transfer_recovery'] = None
+    elif change == 'missing': initial['transfer_recovery'] = None
+    else:
+        field, value = ('receipt', 'unrelated-receipt') if change == 'receipt' else ('expected_unit_number', 999999)
+        initial['attempt'][field] = value
+        record['attempt_outcomes'][-1][field] = value
+        final['attempt_outcomes'][-1][field] = value
     assert funding_history_issues(initial, [record], final)
 
 

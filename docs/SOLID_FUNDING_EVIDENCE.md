@@ -271,3 +271,5 @@ or re-authenticates the external log. Uncaptured recovery authority is unknown.
 These outcomes never become verified service samples. Goal-driven plan clearing
 requires the actual goal predicate and ordered completion/activation events; it
 can occur before selection or after a verified foreground step.
+
+Top-level storage and maintenance admission holds may retain an invalidated active kit and its exact funding lock. Replay accepts the observer budget floor only with a captured deadline or endpoint change (or a previously exhausted anchored budget), no dispatch or selection, unchanged observations, and a recognized hold. Subsequent cleanup still needs its causal abandonment event. Rejected-transfer recovery also binds the retained receipt and observed endpoint before and after reconciliation; the sealed reference alone does not prove that identity.
