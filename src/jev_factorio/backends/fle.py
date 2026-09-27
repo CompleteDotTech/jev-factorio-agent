@@ -214,7 +214,13 @@ class FleBackend:
         )
         live = self._observation_profile.decode(raw) if self._observation_profile else json.loads(raw)
         position = tuple(live["position"])
-        inventory = dict(tools.inspect_inventory().items())
+        # The installed craft-job adapter requires and validates native inventory
+        # from the same observation as its receipt/tick. Unsupported configurations
+        # retain the legacy helper; failed validation never silently falls back.
+        from . import has_adapter
+        from .craft_jobs import CraftJobFactory
+        atomic_inventory = has_adapter(self._factory, CraftJobFactory)
+        inventory = {} if atomic_inventory else dict(tools.inspect_inventory().items())
         nearby = {}
         alerts = [self._error] if self._error else []
         self._resources = {}
@@ -251,6 +257,8 @@ class FleBackend:
             iron_ore_collected=collected,
         )
         snapshot = self._factory.observe(snapshot) if self._factory else snapshot
+        if atomic_inventory and getattr(snapshot, '_atomic_inventory_verified', None) != (snapshot.session_id, snapshot.tick):
+            raise ValueError("Atomic inventory provider did not validate this observation")
         snapshot._native_controls = native_controls
         return snapshot
 

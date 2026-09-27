@@ -795,9 +795,14 @@ class HierarchicalLoop(AgentLoop):
             "rocket_launch", "iron_smelting", "steam_power", "automation_science", "bootstrap_mining"
         }:
             if self.factory_scheduling == "ready-work":
-                from .planning.ready_work import compile_ready_factory
+                from .planning.ready_work import ReadyWorkPlanner, compile_ready_factory
 
-                plans, blocker = compile_ready_factory(self.memory.active_goal, snapshot, self.catalog)
+                kind = getattr(self, "planner_type", ReadyWorkPlanner)
+                if kind is ReadyWorkPlanner:
+                    plans, blocker = compile_ready_factory(self.memory.active_goal, snapshot, self.catalog)
+                else:
+                    plans, blocker = compile_ready_factory(
+                        self.memory.active_goal, snapshot, self.catalog, planner_type=kind)
             else:
                 from .planning.factory import compile_factory
 

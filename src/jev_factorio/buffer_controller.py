@@ -73,47 +73,21 @@ class OutputBufferMixin:
                 "buffer_evidence": deepcopy(self._buffer_evidence)}
 
     def _compile_candidates(self, snapshot):
-        original, blocker = super()._compile_candidates(snapshot)
+        # The base compiler now uses the effective planner_type exactly once.
+        # Keep background work/prefetch in the parent chain, then apply the
+        # ownership/lock barriers without recompiling or inventing a fallback.
+        plans, blocker = super()._compile_candidates(snapshot)
         if self.memory.active_goal == "bootstrap_mining":
-            return original, blocker
+            return plans, blocker
+        selected = [plan for plan in plans if self._step_allowed(plan.steps[0], snapshot)]
+        if selected:
+            return selected, blocker
         job = getattr(self, "_job", lambda: None)()
-        boiler = snapshot.factory.get("entities", {}).get("utility:boiler", {})
-        if boiler and boiler.get("fuel", {}).get("coal", 0) < 5:
-            return [plan for plan in original if self._step_allowed(plan.steps[0], snapshot)], blocker
-        planner = self.planner_type(self.catalog, snapshot, self.memory.active_goal)
-        # Burner maintenance is small and independent; background output locks
-        # still control whether this particular coal action can be dispatched.
-        for row in sources(snapshot).values():
-            part = row.get("parts", {}).get("inserter", {})
-            entity = snapshot.factory["entities"].get(part.get("role", ""), {})
-            fuel = entity.get("fuel", {}).get("coal", 0)
-            if entity and fuel < 2:
-                plan = (planner._prerequisite("coal", 5 - fuel, ())
-                        or planner._transfer(part["role"], "coal", 5 - fuel))
-                if self._step_allowed(plan.steps[0], snapshot):
-                    return [plan], ""
         if job is not None or snapshot.factory.get("crafting_queue", 0):
-            # Never build or spend job outputs during an acknowledged craft.
-            selected = [plan for plan in original if self._step_allowed(plan.steps[0], snapshot)]
-            if selected:
-                return selected, blocker
             return [Plan("buffer:crafting-wait", self.memory.active_goal,
                          "No independent buffer-safe work; observe native crafting",
                          (Step("factory_wait", "crafting_idle", timeout_ticks=1800),))], ""
-        try:
-            plans = planner.candidates()
-        except (KeyError, ValueError):
-            plans = original
-        # Preserve #29's research prefetch whenever normal progression is waiting
-        # for research, rather than replacing it with another serial wait.
-        if (plans and all(plan.steps[0].action == "factory_wait"
-                          and plan.steps[0].effect == "research_progress" for plan in plans)):
-            plans = original
-        selected = [plan for plan in plans if self._step_allowed(plan.steps[0], snapshot)]
-        tracked = getattr(self, "_tracked_plan", None)
-        if tracked:
-            selected = [tracked(plan, snapshot) for plan in selected]
-        return selected, "" if selected else blocker or "No buffer-safe production action"
+        return [], blocker or "No buffer-safe production action"
 
 
 def buffered_loop_type(base):

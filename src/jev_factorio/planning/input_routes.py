@@ -87,8 +87,8 @@ class InputRoutePlanner(OutputBufferPlanner):
             fuel = self.entities[part["role"]].get("fuel", {}).get("coal", 0)
             if fuel < 2 and row["topology"]:
                 self._buffer_service = True
-                return (self._acquire("coal", 5 - fuel, path)
-                        or self._transfer(part["role"], "coal", 5 - fuel))
+                from .fuel_service import service_plan
+                return service_plan(self, part["role"], row["source"], path, self._acquire)
         if not flow_complete(row["source"], row["layout"], self.snapshot):
             self._buffer_service = True
             fuel = self._fuel(row["source"], path)
@@ -105,6 +105,9 @@ class InputRoutePlanner(OutputBufferPlanner):
         if row and row["state"] != "fault":
             if self.focus is None:
                 self._set_focus(item, amount)
+            ready = self._ready_buffer_output(item, amount)
+            if ready is not None:
+                return ready
             proposed = row["state"] == "proposed"
             output = self.factory.get("output_buffers", {}).get("sources", {}).get(row["source"], {})
             recurring = (self.goal == "rocket_launch" and amount - self.snapshot.inventory.get(item, 0) >= 10

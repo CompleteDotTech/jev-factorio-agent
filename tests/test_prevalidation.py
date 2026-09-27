@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -183,9 +184,15 @@ def test_suite_timeout_kills_only_owned_group_including_child(tmp_path):
                         stderr=subprocess.DEVNULL)
     child_pid = int(pidfile.read_text())
     status = Path(f"/proc/{child_pid}/stat")
-    # A briefly unreaped orphan zombie cannot execute or consume test resources.
-    try:
-        state = status.read_text().rsplit(")", 1)[1].split()[0]
-    except (FileNotFoundError, ProcessLookupError):
-        return  # The orphan was reaped between open and read; avoid an exists/read race.
-    assert state == "Z"
+    # Waiting for the group leader does not wait for its orphaned child.
+    # Allow signal delivery to finish; a persistent live child still fails.
+    deadline = time.monotonic() + 2
+    while True:
+        try:
+            state = status.read_text().rsplit(")", 1)[1].split()[0]
+        except (FileNotFoundError, ProcessLookupError):
+            return  # The orphan was reaped between open and read.
+        if state == "Z":
+            return  # An unreaped zombie cannot execute or consume test resources.
+        assert time.monotonic() < deadline, f"Owned child remains live: {state}"
+        time.sleep(0.01)

@@ -27,6 +27,7 @@ class CraftJobFactory:
                        for item, amount in inventory.items())):
             raise ValueError("Invalid atomic crafting inventory observation")
         snapshot.inventory = dict(inventory)
+        snapshot._atomic_inventory_verified = (snapshot.session_id, snapshot.tick)
         return snapshot
 
     def execute(self, action: str, parameters: dict, *, trace: Trace | None = None) -> str:

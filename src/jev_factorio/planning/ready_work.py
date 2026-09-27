@@ -224,11 +224,13 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
 
 
 def compile_ready_factory(goal: str, snapshot: GameSnapshot,
-                          catalog: Catalog) -> tuple[list[Plan], str]:
+                          catalog: Catalog, *, planner_type=None) -> tuple[list[Plan], str]:
+    """Compile once with the negotiated capabilities, scoped to this decision."""
     if goal == "bootstrap_mining":
         return compile_factory(goal, snapshot, catalog)
     try:
-        plans = ReadyWorkPlanner(catalog, snapshot, goal).candidates()
+        kind = planner_type or ReadyWorkPlanner
+        plans = kind(catalog, snapshot, goal).candidates()
         return plans, "" if plans else "No remaining native production action"
     except (ValueError, KeyError) as error:
         return [], str(error)
