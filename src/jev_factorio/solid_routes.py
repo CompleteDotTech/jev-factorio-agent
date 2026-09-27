@@ -271,7 +271,7 @@ def flow_complete(route, layout, snapshot) -> bool:
 
 
 def permits(action, parameters, snapshot) -> bool:
-    """Exclusive item accounting: no manual transport or recipe edits on a route."""
+    """Lock connected flow; retain sequential manual service before sender takeover."""
     try:
         for row in routes(snapshot).values():
             if not current(row, snapshot):
@@ -285,7 +285,13 @@ def permits(action, parameters, snapshot) -> bool:
                 if action == "factory_configure":
                     return False
                 if action in {"factory_insert", "factory_extract"} and parameters.get("item") == row["item"]:
-                    return False
+                    # The sender is paid last. Before it exists, a partial route
+                    # cannot withdraw from the source and has no flow baseline.
+                    # Retain useful manual service without relaxing a pending
+                    # mutation, recipe lock, or connected-route accounting.
+                    if not (row["state"] == "building" and not row["pending"]
+                            and "send" not in row["parts"]):
+                        return False
         return True
     except (ValueError, KeyError, TypeError, AttributeError):
         return False

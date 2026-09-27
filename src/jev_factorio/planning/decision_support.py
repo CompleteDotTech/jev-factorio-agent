@@ -50,6 +50,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
         schedules = []  # Unsupported forecast is explicitly unknown below.
     due_packs = {row['item'] for row in schedules if row['due']}
     result = {}
+    from .solid_investment import ranking_marker
+    has_solid_offer = any(ranking_marker(plan, snapshot) for plan in plans)
     for index, plan in enumerate(plans):
         origin = _position(snapshot.player_position)
         travel, actor, unknown, reasons = 0.0, 0.0, [], []
@@ -139,6 +141,13 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                     reasons.append('justified_capital_stage:' + capital['stage'])
             except (ValueError, KeyError, TypeError):
                 pass  # Invalid or stale annotations cannot buy priority.
+        if has_solid_offer:
+            if outputs & due_packs:
+                urgency = max(urgency, 2)
+                reasons.append('ready_science_before_solid_investment')
+            if ranking_marker(plan, snapshot):
+                urgency = max(urgency, 1)
+                reasons.append('justified_downstream_investment')
         target = (plan.materials or {}).get('local_objective')
         if target is not None:
             target = deepcopy(target)

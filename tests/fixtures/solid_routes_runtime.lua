@@ -103,7 +103,7 @@ campaign.observe=function()
         player_connected=player.connected,crafting_queue=player.crafting_queue_size}
 end
 campaign.transfer=function(role,item,quantity,receipt,extracting)
-    assert(receipt=="transfer-fixture" and extracting==false,"Transfer argument order changed");transfers=transfers+1;return "forwarded"
+    assert(receipt==(expected_transfer_receipt or "transfer-fixture") and extracting==(expected_extracting or false),"Transfer argument order changed");transfers=transfers+1;return "forwarded"
 end
 campaign.configure=function(role,recipe) return recipe end
 fair={actor=function() assert(player.character==actor and player.connected);return player end}

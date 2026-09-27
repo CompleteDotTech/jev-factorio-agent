@@ -63,7 +63,7 @@ def project_record(row: dict, redactor: Redactor, counts: Counter) -> dict:
     # Never strip their ownership/flow evidence and certify the remaining record
     # under the older trial schema. A future capture version must preserve and
     # validate the complete treatment, native identities and immutable intent.
-    unsupported = bool({'solid_routes', 'solid_route_evidence', 'solid_route_fault'} & row.keys())
+    unsupported = bool({'solid_routes', 'solid_route_evidence', 'solid_route_fault', 'solid_science_policy', 'solid_investment_evidence'} & row.keys())
     for label in ('acceptance_configuration', 'campaign_treatment'):
         configuration = row.get(label)
         unsupported |= isinstance(configuration, dict) and 'solid_routes' in configuration
