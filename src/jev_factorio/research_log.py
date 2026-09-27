@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Protocol
+from .iteration_timing import measured, span
 
 EVENT_SCHEMA = "jev-factorio.event.v1"
 MANIFEST_SCHEMA = "jev-factorio.manifest.v1"
@@ -156,6 +157,7 @@ class Redactor:
                        REDACTED, value, flags=re.I)
         return value
 
+    @measured("research_redact_validate")
     def clean(self, value: object) -> object:
         _json_value(value)
         return self._clean_validated(value)
@@ -177,6 +179,7 @@ class Redactor:
         return value
 
 
+@measured("trace_normalize_redact")
 def safe_payload(value: object, secrets: Iterable[str] = ()) -> object:
     """Detach causal data and label unsupported values without stringifying them."""
     def normalize(item):
@@ -383,6 +386,43 @@ def validate_event(event: dict) -> None:
     _json_value(event)
 
 
+def _encode_event(event: dict) -> bytes:
+    """Encode one detached unsigned event without serializing its payload twice.
+
+    V1 validation is still performed on the complete envelope. Each validated
+    top-level value is encoded once with the same canonical JSON settings; the
+    unsigned hash input and final record reuse those exact immutable bytes.
+    The independent reader/verifier deliberately retains canonical_bytes().
+    This private function is used only while the writer owns its lock and local
+    detached event. No callback or asynchronous writer observes an interim hash.
+    """
+    if type(event) is not dict or 'event_hash' in event:
+        raise ValueError('Expected an unsigned research event')
+    event['event_hash'] = 'sha256:' + '0' * 64
+    with span("research_validate"):
+        validate_event(event)
+    chunks = {}
+    for key, value in event.items():
+        if key == 'event_hash':
+            continue
+        # validate_event checks all keys/types/finite nested values before this
+        # internal encoding. Envelope field names are fixed ASCII identifiers.
+        with span("research_serialize"):
+            encoded = json.dumps(value, sort_keys=True, separators=(',', ':'),
+                                 ensure_ascii=True, allow_nan=False).encode('ascii')
+        chunks[key] = b'"' + key.encode('ascii') + b'":' + encoded
+    with span("research_assemble"):
+        unsigned = b'{' + b','.join(chunks[key] for key in sorted(chunks)) + b'}'
+    with span("research_hash"):
+        event['event_hash'] = 'sha256:' + hashlib.sha256(unsigned).hexdigest()
+    with span("research_assemble"):
+        chunks['event_hash'] = b'"event_hash":"' + event['event_hash'].encode('ascii') + b'"'
+        data = b'{' + b','.join(chunks[key] for key in sorted(chunks)) + b'}\n'
+    if len(data) > MAX_RECORD_BYTES:
+        raise ValueError('Evidence event exceeds V1 size limit')
+    return data
+
+
 def _sync_directory(path: Path) -> None:
     # Windows does not expose POSIX directory fsync through this interface.
     if os.name == "nt":
@@ -412,10 +452,12 @@ def _exclusive_file(path: Path):
 
 
 def _write_durable(stream, data: bytes) -> None:
-    if stream.write(data) != len(data):
-        raise OSError("Incomplete research-log write")
-    stream.flush()
-    os.fsync(stream.fileno())
+    with span("research_write"):
+        if stream.write(data) != len(data):
+            raise OSError("Incomplete research-log write")
+        stream.flush()
+    with span("research_fsync"):
+        os.fsync(stream.fileno())
 
 
 def _write_document(path: Path, value: dict) -> None:
@@ -506,6 +548,7 @@ class ResearchLog:
         return self._append(event_type, payload, factorio_tick=factorio_tick,
                             session_id=session_id, correlation=correlation)
 
+    @measured("research_append")
     def _append(self, event_type: str, payload: dict, *, factorio_tick: int | None = None,
                 session_id: str | None = None, correlation: dict[str, str] | None = None) -> dict:
         with self._lock:
@@ -533,11 +576,7 @@ class ResearchLog:
                             if event_type == "run_finished" else self._redactor.clean(payload)),
                 "prev_hash": self._previous_hash,
             }
-            event["event_hash"] = digest(event)
-            validate_event(event)
-            data = canonical_bytes(event) + b"\n"
-            if len(data) > MAX_RECORD_BYTES:
-                raise ValueError("Evidence event exceeds V1 size limit")
+            data = _encode_event(event)
             try:
                 _write_durable(self._stream, data)
             except BaseException:

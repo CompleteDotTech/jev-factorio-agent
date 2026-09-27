@@ -12,6 +12,7 @@ from uuid import uuid4
 import requests
 
 from .research_log import EventSink, ResearchLogError, safe_payload
+from .iteration_timing import profiled_iteration, measured, span
 
 class TraceStorageError(ResearchLogError):
     failure_class = "storage_pressure"
@@ -58,7 +59,7 @@ def traced_step(method):
         trace.emit("step_finished", {key: result.get(key) for key in
                                     ("action", "source", "status", "verified")})
         return result
-    return wrapper
+    return profiled_iteration(wrapper)
 
 
 class CausalTrace:
@@ -94,6 +95,7 @@ class CausalTrace:
         self._tick = None
         self.emit("step_started", {})
 
+    @measured("trace_emit")
     def emit(self, event_type: str, payload: dict) -> None:
         if not self.enabled:
             return
@@ -138,12 +140,14 @@ class CausalTrace:
              details: dict | None = None,
              result: Callable[[T], dict] | None = None) -> T:
         if not self.enabled and self.metrics is None:
-            return operation()
+            with span(event_type):
+                return operation()
         if self._failed:
             raise ResearchLogError("Causal trace has failed")
         start, cpu_start = time.perf_counter_ns(), time.process_time_ns()
         try:
-            value = operation()
+            with span(event_type):
+                value = operation()
         except BaseException as error:
             elapsed = time.perf_counter_ns() - start
             if self.metrics is not None:
@@ -159,7 +163,8 @@ class CausalTrace:
         capture_start, capture_cpu = time.perf_counter_ns(), time.process_time_ns()
         capture_failed = False
         try:
-            captured = result(value) if result else {}
+            with span("trace_capture"):
+                captured = result(value) if result else {}
         except Exception:
             capture_failed = True
             self._failed = True

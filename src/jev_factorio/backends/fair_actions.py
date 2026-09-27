@@ -7,6 +7,7 @@ import time
 from importlib.resources import files
 from types import SimpleNamespace
 from typing import Any
+from ..iteration_timing import native_io, decode_native, span, request_size
 from .errors import ConnectionPreflightRejected
 
 
@@ -21,7 +22,7 @@ class FairActions:
         self.call("bind")
 
     def command(self, script: str) -> str:
-        result = self.backend._instance.rcon_client.send_command("/sc " + script) or ""
+        result = native_io("native_command", lambda: self.backend._instance.rcon_client.send_command("/sc " + script), request_bytes=request_size("/sc " + script)) or ""
         if result.startswith("Cannot execute command."):
             raise RuntimeError(result)
         return result
@@ -31,7 +32,7 @@ class FairActions:
             "helpers.json_to_table(" + json.dumps(json.dumps(value, allow_nan=False)) + ")"
             for value in arguments
         )
-        return json.loads(self.command(
+        return decode_native(self.command(
             f"rcon.print(helpers.table_to_json(storage.fair.{function}({encoded})))"
         ))
 
@@ -85,7 +86,8 @@ class FairActions:
                         # may already have had effects in earlier phases.
                         raise NativePathNotFound("No safe native path before movement")
                     raise RuntimeError(state.get("error", "Native controls failed"))
-                time.sleep(0.1)
+                with span("action_poll_wait"):
+                    time.sleep(0.1)
             raise TimeoutError("Native action exceeded its bounded observation window")
         finally:
             self.command("storage.fair.stop()")
@@ -111,7 +113,7 @@ class FairActions:
 
         center = self.position(position)
         self._note("approach_requests")
-        result = json.loads(self.command(
+        result = decode_native(self.command(
             "local player = storage.fair.actor(); "
             "local target = helpers.json_to_table(" + json.dumps(json.dumps(center)) + "); "
             "local entity = player.surface.find_entity(" + json.dumps(name) + ", target); "
@@ -255,7 +257,7 @@ class FairActions:
 
         center = self.position(position)
         self._note("approach_requests")
-        result = json.loads(self.command(
+        result = decode_native(self.command(
             "local player=storage.fair.actor(); local target=helpers.json_to_table("
             + json.dumps(json.dumps(center)) + "); "
             "local dx=player.position.x-target.x; local dy=player.position.y-target.y; "
@@ -309,13 +311,19 @@ class FairActions:
         result = self.call("place", name, target, direction_value)
         return SimpleNamespace(
             name=result["name"], position=Position(**result["position"]),
+            unit_number=result.get("unit_number"),
             drop_position=Position(**result["drop_position"]) if result.get("drop_position") else None,
         )
 
     def insert_item(self, prototype: Any, entity: Any, quantity: int) -> int:
         self.approach(entity.position, entity.name)
-        return self.call("insert", entity.name, self.position(entity.position),
-                         prototype.value[0], quantity)["quantity"]
+        arguments = [entity.name, self.position(entity.position), prototype.value[0], quantity]
+        expected_unit = getattr(entity, "unit_number", None)
+        if expected_unit is not None:
+            if type(expected_unit) is not int or expected_unit <= 0:
+                raise ValueError("Invalid native transfer target identity")
+            arguments.append(expected_unit)
+        return self.call("insert", *arguments)["quantity"]
 
     @staticmethod
     def _connection_corridor(start: dict, end: dict, *, horizontal_first: bool) -> list[tuple[int, int, int, int]]:
@@ -405,7 +413,7 @@ class FairActions:
                 "if entity.name=='pipe' then blocked[entity.position.x..':'..entity.position.y]=true end "
                 "end end end end end; " + areas
             )
-        cells = json.loads(self.command(
+        cells = decode_native(self.command(
             "local player = storage.fair.actor(); local result = {buildable={}, existing={}}; "
             "local blocked={}; " + fluid_scan
             + "local function blocked_cell(position) return blocked[position.x..':'..position.y] end; "
@@ -513,7 +521,7 @@ class FairActions:
         if name == "small-electric-pole":
             route = select_pole_positions(route, max_wire_distance=6)
         required = sum(point not in existing for point in route)
-        available = json.loads(self.command(
+        available = decode_native(self.command(
             "rcon.print(helpers.table_to_json({count=storage.fair.actor().get_item_count("
             + json.dumps(name) + ")}))"
         ))["count"]

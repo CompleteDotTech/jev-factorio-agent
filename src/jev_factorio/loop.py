@@ -20,6 +20,7 @@ from pathlib import Path
 import requests
 
 from .causal_trace import CausalTrace, traced_step
+from .iteration_timing import loop_sleep
 from .research_log import EventSink, validate_output_paths
 from .jev_client import make_client
 from .questions import build_questions
@@ -136,4 +137,4 @@ class AgentLoop:
                 delay = max(30, delay)
             if deadline is not None:
                 delay = min(delay, max(0, deadline - time.monotonic()))
-            time.sleep(delay)
+            loop_sleep(self, delay, lambda: time.sleep(delay))

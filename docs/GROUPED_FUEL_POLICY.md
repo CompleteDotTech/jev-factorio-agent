@@ -108,3 +108,8 @@ Independent review, configured SSH-signed publication, hosted matrix checks,
 native capacity/true travel measurements, wider production scheduling scenarios
 and matched native trip/science-throughput acceptance remain required. This
 small-burner policy is not the paid coal/distribution capability in #100/#101.
+
+Optional consumers with unknown primary or consumer geometry are deferred,
+not assigned zero travel cost. A regression retains only the known primary
+deficit when optional geometry is unavailable. This is a conservative bound,
+not measured pathfinding.

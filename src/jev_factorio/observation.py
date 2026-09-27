@@ -9,6 +9,7 @@ from collections import Counter
 from copy import deepcopy
 from contextlib import contextmanager
 from pathlib import Path
+from .iteration_timing import measured, span, native_io, request_size
 
 MAX_PAYLOAD_BYTES = 8 * 1024 * 1024
 LABELS = {"fair_state", "player_state", "inventory", "entities", "output_inventory",
@@ -96,6 +97,7 @@ class ObservationProfile:
             frame['response_bytes'] = sum(len(v.encode('utf-8')) for v in values if isinstance(v, str))
             return result
 
+    @measured("fle_helper")
     def subcall(self, name, operation):
         name = name if name in LABELS else 'other'
         with self._timed('helpers', name):
@@ -104,7 +106,7 @@ class ObservationProfile:
     def decode(self, raw):
         if not isinstance(raw, str) or len(raw.encode('utf-8')) > MAX_PAYLOAD_BYTES:
             raise ValueError('Observation payload exceeds the declared budget')
-        with self._timed('decode', 'other'):
+        with self._timed('decode', 'other'), span('native_decode'):
             return json.loads(raw)
 
     def summary(self):
@@ -163,13 +165,16 @@ class ProfiledRcon:
         return getattr(self.client, name)
 
     def send_command(self, command):
-        return self.profile.rpc(label(command), lambda: self.client.send_command(command),
-                                len(command.encode("utf-8")))
+        return native_io("native_command", lambda: self.profile.rpc(
+            label(command), lambda: self.client.send_command(command), len(command.encode("utf-8"))),
+            request_bytes=request_size(command))
 
     def send_commands(self, commands):
         # Preserve the delegate's batching and result keys exactly.
-        return self.profile.rpc("other", lambda: self.client.send_commands(commands),
-                                sum(len(v.encode("utf-8")) for v in commands.values()))
+        return native_io("native_batch", lambda: self.profile.rpc(
+            "other", lambda: self.client.send_commands(commands),
+            sum(len(v.encode("utf-8")) for v in commands.values())),
+            request_bytes=request_size(commands))
 
 
 @contextmanager
@@ -186,7 +191,7 @@ def profile_backend(backend):
         backend.last_observation_profile = profile.summary()
 
 
-def parse_snapshot(raw: str, profile: ObservationProfile) -> dict:
+def parse_snapshot(raw: str, profile: ObservationProfile, *, schemas: tuple[int, ...] = (1,)) -> dict:
     if not isinstance(raw, str) or len(raw.encode("utf-8")) > MAX_PAYLOAD_BYTES:
         raise ValueError("Invalid bounded native observation")
     payloads = []
@@ -204,7 +209,7 @@ def parse_snapshot(raw: str, profile: ObservationProfile) -> dict:
     if len(payloads) != 1:
         raise ValueError("Missing or ambiguous native observation envelope")
     result = profile.decode(payloads[0])
-    if not isinstance(result, dict) or type(result.get("schema")) is not int or result["schema"] != 1:
+    if not isinstance(result, dict) or type(result.get("schema")) is not int or result["schema"] not in schemas:
         raise ValueError("Unsupported native observation envelope")
     return result
 
