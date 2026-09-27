@@ -126,6 +126,14 @@ def _acquisition_matches(commit: dict, record: dict, proof: dict, budgets: dict,
     for held in reservations.values(): reserved.update(held)
     for route in solid_routes.routes(snapshot).values():
         if route.get('parts'): reserved.update(solid_routes.remaining(route))
+    if 'coal_supply' in snapshot.factory:
+        from . import coal_supply as coal
+        sources = coal.sources(snapshot)
+        if snapshot.factory['coal_supply']['committed']:
+            if not all(coal.current(source, snapshot) for source in sources.values()):
+                return False
+            paid_routes = {key: route for key, route in solid_routes.routes(snapshot).items() if route.get('parts')}
+            reserved.update(coal.reserved_components(sources, paid_routes))
     if not _same(dict(reserved), value['reserved']):
         return False
     if (snapshot.factory.get('crafting_queue', 0)
@@ -520,7 +528,7 @@ def _background_admitted(record, plan, index, previous_pending, previous_attempt
     elif (attempt['id'] in seen or attempt['origin'] != 'new' or attempt['process_id'] != record.get('process_id')
             or record.get('action') != step.action
             or not record['state']['tick'] <= attempt['started_tick'] <= record['after_state']['tick']
-            or not _dispatch_admitted(step, record, plan.id, reservations)):
+            or not _dispatch_admitted(step, record, plan.id, reservations, plan=plan)):
         return False
     if job.started_tick < attempt['started_tick'] or job.observe(GameSnapshot(**record['after_state'])):
         return False
@@ -617,7 +625,7 @@ def _terminal_outcomes(record, plan, index, pending, attempt, seen, fresh, budge
             or not record['state']['tick'] <= value['started_tick'] <= now
             or not _attempt_endpoint(value, asdict(step), record['state'])
             or value['dispatch_phases'].get('dispatch', {}).get('status') != 'failed'
-            or not _dispatch_admitted(step, record, plan.id, reservations, job)):
+            or not _dispatch_admitted(step, record, plan.id, reservations, job, plan)):
         return [], False
     events = [event for event in fresh if event.get('kind') == kind]
     if (len(events) != 1 or events[0].get('attempt_id') != value['id'] or events[0].get('tick') != now):
@@ -634,13 +642,22 @@ def _terminal_outcomes(record, plan, index, pending, attempt, seen, fresh, budge
     return ([value], False) if valid else ([], False)
 
 
-def _dispatch_admitted(step: Step, record: dict, owner: str, reservations: dict, job_data=None) -> bool:
+def _dispatch_admitted(step: Step, record: dict, owner: str, reservations: dict, job_data=None, plan=None) -> bool:
     """Replay observable admission; missing catalog/job authority stays unknown."""
     from types import SimpleNamespace
     from . import solid_routes as routes, coal_supply as coal
     from .planning.demand import SupplyLedger
     from .craft_jobs import CraftJob
     snapshot = GameSnapshot(**record['state'])
+    if record.get('ore_side_successors') is True:
+        from . import successors
+        projects = record.get('successor_projects')
+        if not isinstance(projects, dict) or set(projects) - successors.ROLES.keys():
+            return False
+        for source, project in projects.items():
+            successors.project_valid(project, source, snapshot.tick)
+        if not successors.investment_step_allowed(projects, plan, step, snapshot):
+            return False
     job = CraftJob.from_dict(job_data) if job_data is not None else None
     if (job is not None and not job.permits(step) or not step.allowed(snapshot) or record.get('capital_investment') is not None
             or step.action == 'factory_place' and
@@ -697,7 +714,7 @@ def _dispatch_crossed_deadline(record: dict, before: int, deadline: int, now: in
             and candidates[0]['step_sha256'] == fingerprint(asdict(step))
             and _attempt_endpoint(candidates[0], asdict(step), record['state'])
             and (decision is None or isinstance(decision, dict) and decision.get('plan_id') == owned.id)
-            and _dispatch_admitted(step, record, owned.id, reservations, job_data))
+            and _dispatch_admitted(step, record, owned.id, reservations, job_data, owned))
 
 
 def _initial_history_state(events: list[dict], working: dict | None, budgets: dict) -> bool:
@@ -848,6 +865,14 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
         previous_pending = initial.get('pending')
         previous_attempt = initial.get('attempt')
         recovery = deepcopy(initial.get('transfer_recovery'))
+        successor_projects = deepcopy(initial.get('successor_projects', {}))
+        successor_enabled = initial.get('successor_schema') == 1
+        if policy and successor_enabled:
+            from . import successors
+            if not isinstance(successor_projects, dict):
+                return ['solid_funding_initial_successor_state_invalid']
+            for source, project in successor_projects.items():
+                successors.project_valid(project, source, previous_tick)
         completed_goals = deepcopy(initial.get('completed_goals', {}))
         active_goal = initial.get('active_goal')
         background_job = deepcopy(initial.get('background_job'))
@@ -893,6 +918,13 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 except (ValueError, TypeError, KeyError, AttributeError):
                     issues.add('solid_funding_record_invalid')
                     continue
+            if policy and (successor_enabled or record.get('ore_side_successors') is True):
+                # The capture has no independently replayed successor lifecycle.
+                # A fixed initial binding can prove its kit gate; changed projects
+                # require a fresh baseline rather than self-declared release.
+                if (not successor_enabled or record.get('ore_side_successors') is not True
+                        or not _same(successor_projects, record.get('successor_projects'))):
+                    issues.add('solid_funding_successor_transition_unproven')
             current_budgets = record.get('failure_budgets', {})
             before_tick = record.get('state', {}).get('tick')
             history = record.get('history', [])
@@ -1155,7 +1187,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     and step is not None and value.get('step_index') == candidate_index and value.get('action') == step.action
                     and value.get('step_sha256') == fingerprint(asdict(step))
                     and _attempt_endpoint(value, asdict(step), record['state']) and step.satisfied(snapshot)
-                    and (previous_pending is not None or _dispatch_admitted(step, record, plan.id, reservations, dispatch_job))]
+                    and (previous_pending is not None or _dispatch_admitted(step, record, plan.id, reservations, dispatch_job, plan))]
                 if len(verified) == 1:
                     proven_outcomes.extend(verified)
                     ordinary_index = candidate_index + 1
@@ -1166,7 +1198,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                             and dispatched[0].get('step_index') == candidate_index
                             and dispatched[0].get('step_sha256') == fingerprint(asdict(step))
                             and _attempt_endpoint(dispatched[0], asdict(step), record['state'])
-                            and _dispatch_admitted(step, record, plan.id, reservations, dispatch_job)):
+                            and _dispatch_admitted(step, record, plan.id, reservations, dispatch_job, plan)):
                         ordinary_index = candidate_index
                         reservations[plan.id] = deepcopy(step.costs or {})
                     else:
@@ -1235,6 +1267,9 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
             previous_attempt = record.get('attempt')
             previous_routes = record.get('after_state', {}).get('factory', {}).get('solid_routes', {}).get('routes', {})
             previous_history = history
+        if policy and (not _same(initial.get('successor_schema'), final.get('successor_schema'))
+                       or not _same(successor_projects, final.get('successor_projects', {}))):
+            issues.add('solid_funding_final_successor_mismatch')
         if policy and not _same(recovery, final.get('transfer_recovery')):
             issues.add('solid_funding_final_transfer_recovery_mismatch')
         if policy and (not _same(background_job, final.get('background_job'))

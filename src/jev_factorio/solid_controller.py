@@ -480,7 +480,7 @@ class SolidRouteMixin:
     def _model_history(self):
         return [{key: value for key, value in event.items()
                  if key in {'kind', 'key', 'tick', 'reason'}}
-                if event.get('kind', '').startswith('solid_kit_') else
+                if isinstance(event.get('kind'), str) and event['kind'].startswith('solid_kit_') else
                 {key: deepcopy(value) for key, value in event.items() if key != 'definition'}
                 for event in super()._model_history()]
 

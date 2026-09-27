@@ -150,3 +150,38 @@ def project_valid(project, role, tick):
             or project['deadline_tick'] != project['started_tick'] + MAX_PROJECT_TICKS
             or project['status'] not in {'active', 'qualified', 'paused'}):
         raise ValueError('Invalid retained successor project')
+
+
+def investment_step_allowed(projects, plan, step, snapshot) -> bool:
+    """Protect carried successor kit parts from unrelated work."""
+    from .production_sites import sources as site_sources
+    marker = ((plan.materials or {}) if plan is not None else {}).get(MARKER, {})
+    for source, project in projects.items():
+        if project['status'] != 'active' or marker.get('source') == source and marker.get('anchor') == project['anchor']:
+            continue
+        try:
+            site = site_sources(snapshot).get(source, {})
+            if site.get('anchor') != project['anchor']:
+                return False
+            required = dict(site['bill'])
+            if project['source_unit']:
+                required['stone-furnace'] -= 1
+            output = snapshot.factory.get('output_buffers', {}).get('sources', {}).get(source, {})
+            for part in output.get('parts', {}):
+                name = 'wooden-chest' if part == 'chest' else 'burner-inserter'
+                required[name] -= 1
+            route = snapshot.factory.get('input_routes', {}).get('sources', {}).get(source, {})
+            for spec in route.get('steps', []):
+                if spec['part'] in route.get('parts', {}):
+                    required[spec['name']] -= 1
+            if any(v < 0 for v in required.values()):
+                return False
+            # Only pieces already carried are protected. Coal and seed ore
+            # are not locked away from predecessor/emergency maintenance.
+            for item, cost in (step.costs or {}).items():
+                have = snapshot.inventory.get(item, 0)
+                if have - cost < min(have, required.get(item, 0)):
+                    return False
+        except (KeyError, TypeError, ValueError):
+            return False
+    return True

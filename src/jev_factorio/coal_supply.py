@@ -330,6 +330,17 @@ def route_for(row, snapshot):
     return r
 
 
+def reserved_components(commitments, solid_commitments) -> dict[str, int]:
+    """Coal locks not already counted by committed solid corridors."""
+    bill = Counter()
+    corridor_sources = {saved["source"]["role"] for saved in solid_commitments.values()}
+    for target, saved in commitments.items():
+        bill.update(spec["name"] for spec in saved["steps"] if spec["part"] not in saved["parts"])
+        if role(target, "chest") not in corridor_sources:
+            bill.update(spec["name"] for spec in saved["corridor"])
+    return dict(bill)
+
+
 def remaining_kit(rows, snapshot) -> dict[str, int]:
     bill = Counter()
     for row in rows.values():

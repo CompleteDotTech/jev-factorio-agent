@@ -155,11 +155,7 @@ class CoalSupplyMixin:
         # Solid already accounts for each committed corridor. Source components
         # and not-yet-committed receiving corridors are part of the same durable
         # coal bundle, even before a chest has produced an observable route.
-        corridor_sources = {saved["source"]["role"] for saved in self.memory.solid_commitments.values()}
-        for target, saved in self.memory.coal_commitments.items():
-            reserved.update(spec["name"] for spec in saved["steps"] if spec["part"] not in saved["parts"])
-            if coal.role(target, "chest") not in corridor_sources:
-                reserved.update(spec["name"] for spec in saved["corridor"])
+        reserved.update(coal.reserved_components(self.memory.coal_commitments, self.memory.solid_commitments))
         return dict(reserved)
 
     def _compile_candidates(self, snapshot):
