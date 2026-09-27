@@ -16,8 +16,9 @@ merged/staged; they need not be closed before the shared native run. Current sou
 contains #100's narrow paid straight-corridor foundation and #102's explicit,
 kit-funded science-investment policy; neither establishes native acceptance or a
 complete production logistics network. #101 now has an experimental paid electric
-source/multi-consumer composition. Automatic coal-kit acquisition, coal investment
-policy, production handoff and native qualification remain unfinished. Check the current issues and reviewed source rather than
+source/multi-consumer composition, and default-off acquisition of an explicitly
+specified immutable coal kit. Autonomous demand/payback admission, production
+activation/capture and native qualification remain unfinished. Check the current issues and reviewed source rather than
 treating an older packet's status table as today's implementation state. Missing
 engineering is a real blocker, not just a native-evidence formality.
 
@@ -91,6 +92,9 @@ campaign is started. Even a valid matched manifest alone cannot qualify a causal
 speed claim; actual controlled observations are still required.
 
 ## Baseline and staged experiments
+
+Use the [component and capacity evidence matrix](NATIVE_COMPONENT_MATRIX_92_97_100.md)
+to record the native boundary and exact source/configuration binding for each arm.
 
 Before intervention, freeze a reviewable experiment specification: source/config
 digests, seed/save binding, action mix, contention class, warmup, window lengths,
