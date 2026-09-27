@@ -24,7 +24,7 @@ def benchmark(samples: int = 20) -> dict:
     if type(samples) is not int or not 10<=samples<=100:
         raise ValueError('samples must be between 10 and 100')
     sys.path.insert(0,str(ROOT/'tests'))
-    from test_solid_route_integration import RouteBackend,controller
+    from test_solid_route_integration import Backend,controller
     enabled,fsync=timing.enabled,os.fsync
     arms={name:{'wall':[],'cpu':[],'syncs':[],'legacy_bytes':[]} for name in ('off','on')}
     def episode(directory: Path, name: str):
@@ -35,7 +35,7 @@ def benchmark(samples: int = 20) -> dict:
             return fsync(fd)
         os.fsync=sync
         timing.enabled=enabled if name=='on' else lambda loop:False
-        backend=RouteBackend();loop=controller(backend,directory)
+        backend=Backend();loop=controller(backend,directory)
         loop.log_file=directory/'gameplay.jsonl'
         with ResearchLog(directory/'research',RunConfiguration('mock','hierarchical','deterministic'),
                          repo_dir=ROOT,environ={}) as sink:
