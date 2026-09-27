@@ -94,21 +94,46 @@ def test_summary_is_detached_from_later_profile_calls():
 
 
 def test_cpu_and_waiting_fixtures_have_different_cpu_accounting():
-    waiting = ObservationProfile()
-    waiting.subcall('other', lambda: time.sleep(0.04))
-    wait_result = waiting.summary()
-    working = ObservationProfile()
-    def busy():
-        until = time.process_time_ns() + 20_000_000
-        while time.process_time_ns() < until:
-            sum(range(50))
-    working.subcall('other', busy)
-    work_result = working.summary()
-    assert work_result['process_cpu_ns'] >= 20_000_000
-    assert wait_result['subcalls']['other']['total_ns'] >= 30_000_000
-    # Attribution, not a speed regression threshold: sleeping should not burn
-    # the 20 ms of process CPU intentionally consumed by the busy fixture.
-    assert wait_result['process_cpu_ns'] < work_result['process_cpu_ns']
+    # Isolate attribution semantics from process-global activity in other tests.
+    # A sleeping thread does not imply that its entire process consumed no CPU.
+    wait_clock, work_clock = Clocks(), Clocks()
+    waiting, working = profile_for(wait_clock), profile_for(work_clock)
+    waiting.subcall('other', lambda: wait_clock.advance(40_000_000, 0))
+    working.subcall('other', lambda: work_clock.advance(20_000_000, 20_000_000))
+    wait_result, work_result = waiting.summary(), working.summary()
+    assert wait_result['subcalls']['other']['total_ns'] == 40_000_000
+    assert wait_result['process_cpu_ns'] == 0
+    assert work_result['subcalls']['other']['total_ns'] == 20_000_000
+    assert work_result['process_cpu_ns'] == 20_000_000
+
+
+def test_process_cpu_can_advance_while_the_observed_helper_waits():
+    # Model other Python/native threads running during this helper's wait.
+    # Retain process cost without inventing a helper/network attribution.
+    clock = Clocks()
+    profile = profile_for(clock)
+    profile.subcall('other', lambda: clock.advance(40_000_000, 60_000_000))
+    result = profile.summary()
+    assert result['process_cpu_ns'] == 60_000_000
+    assert result['process_cpu_partition_ns']['helpers'] == 60_000_000
+    assert result['wall_partition_ns']['helpers'] == 40_000_000
+    assert result['transport_separation_available'] is False
+
+
+@pytest.mark.parametrize('operation', ['wait', 'work'])
+def test_real_clock_accounting_stays_within_external_process_bounds(operation):
+    # Real-clock wiring check without a cross-workload latency/CPU ranking.
+    wall_before, cpu_before = time.perf_counter_ns(), time.process_time_ns()
+    profile = ObservationProfile()
+    callback = (lambda: time.sleep(0.002)) if operation == 'wait' else (lambda: sum(range(20_000)))
+    profile.subcall('other', callback)
+    result = profile.summary()
+    cpu_after, wall_after = time.process_time_ns(), time.perf_counter_ns()
+    assert 0 <= result['total_ns'] <= wall_after - wall_before
+    assert 0 <= result['process_cpu_ns'] <= cpu_after - cpu_before
+    assert result['subcalls']['other']['count'] == 1
+    assert sum(result['wall_partition_ns'].values()) == result['total_ns']
+    assert sum(result['process_cpu_partition_ns'].values()) == result['process_cpu_ns']
 
 
 def test_trace_operation_capture_and_emission_are_distinct_costs():
