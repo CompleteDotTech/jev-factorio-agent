@@ -27,7 +27,7 @@ from .planning.goals import GOALS, completed, goal_order
 from .skills import Plan, compile_plans
 from .state import GameSnapshot
 from .provenance import gameplay_context
-from .telemetry import DISPATCH_STAGES, error_code, make_attempt, phase, utc_now, validate_phase
+from .telemetry import DISPATCH_STAGES, error_code, fingerprint, make_attempt, phase, utc_now, validate_phase
 
 
 def _json_safe(value):
@@ -942,6 +942,12 @@ class HierarchicalLoop(AgentLoop):
                 self._planning_diagnostics["ranked_plan_ids"] = [p.id for p in plans]
                 self._planning_diagnostics["candidate_evidence"] = deepcopy(
                     self._selection_support["candidate_evidence"])
+            if getattr(self, "_solid_science_policy", False):
+                # Capture the exact executable frontier independently of the
+                # later selected-plan event. This diagnostic is never a prompt
+                # field or an authorization gate and adds no observation/save.
+                self._planning_diagnostics["candidate_frontier"] = [
+                    {"id": plan.id, "sha256": fingerprint(plan.to_dict())} for plan in plans]
             provider_ready = not isinstance(self.jev, ProviderCircuit) or self.jev.state["phase"] == "healthy"
             singleton = bool(self._selection_support and len(plans) == 1
                              and self.policy == "hybrid" and provider_ready)

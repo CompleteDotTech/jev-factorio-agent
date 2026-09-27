@@ -201,6 +201,33 @@ def _selection_matches(record: dict, plan_id: str, expected_source=None) -> bool
     return True
 
 
+def _ordinary_frontier_matches(record: dict, definition: dict) -> bool:
+    diagnostics = record.get('planning_diagnostics')
+    if (not isinstance(diagnostics, dict) or diagnostics.get('schema') != 1
+            or type(diagnostics.get('schema')) is not int
+            or diagnostics.get('boundary') != 'post_capability_frontier'
+            or not _same(diagnostics.get('observed_tick'), record['state']['tick'])):
+        return False
+    key = definition.get('id')
+    for field in ('generated_plan_ids', 'eligible_plan_ids'):
+        if not isinstance(diagnostics.get(field), list) or key not in diagnostics[field]:
+            return False
+    frontier = diagnostics.get('candidate_frontier')
+    if not isinstance(frontier, list) or not frontier:
+        return False
+    for item in frontier:
+        if (not isinstance(item, dict) or set(item) != {'id', 'sha256'}
+                or not isinstance(item['id'], str) or not item['id']
+                or not isinstance(item['sha256'], str) or len(item['sha256']) != 64
+                or any(c not in '0123456789abcdef' for c in item['sha256'])):
+            return False
+    ids = [item['id'] for item in frontier]
+    if len(set(ids)) != len(ids) or ids != diagnostics.get('ranked_plan_ids'):
+        return False
+    matches = [item for item in frontier if item['id'] == key]
+    return len(matches) == 1 and matches[0]['sha256'] == fingerprint(definition)
+
+
 def _kit_plan_observed(proof: dict, record: dict, tick: int, fresh: list,
                        seen_attempts: set[str], budgets: dict, reservations: dict,
                        outcomes: list, bindings: dict) -> bool:
@@ -296,7 +323,7 @@ def _failed_precondition(step_value: dict | None, record: dict) -> bool:
 
 def _abandonment_count(proof: dict, event: dict, record: dict,
                        prior_budget: int | None, fresh: list, active_kit: bool,
-                       step_value: dict | None) -> int | None:
+                       step_value: dict | None, terminal_failure: bool = False) -> int | None:
     if prior_budget is None:
         return None
     reason, tick = event['reason'], event['tick']
@@ -305,6 +332,8 @@ def _abandonment_count(proof: dict, event: dict, record: dict,
     preceding = fresh[:next((index for index, value in enumerate(fresh) if _same(value, event)), 0)]
     failures = [value for value in preceding if value.get('kind') == 'plan_failed'
                 and value.get('plan') == proof['key'] + ':kit']
+    if terminal_failure and reason == 'kit_failure_budget' and len(failures) == 1:
+        return prior_budget + 1
     failed = (active_kit and len(failures) == 1 and set(failures[0]) == {'kind', 'plan', 'reason', 'tick'}
               and isinstance(failures[0]['reason'], str) and bool(failures[0]['reason'])
               and _tick(failures[0]['tick']) and failures[0]['tick'] == tick
@@ -487,14 +516,15 @@ def _background_admitted(record, plan, index, previous_pending, previous_attempt
     return len([value for value in fresh if _same(value, event)]) == 1
 
 
-def _terminal_outcomes(record, plan, index, pending, attempt, seen, fresh, budgets, reservations, job):
+def _terminal_outcomes(record, plan, index, pending, attempt, seen, fresh, budgets, reservations, job, recovery=None):
     """An explicit rejected or yielded attempt is terminal without verification."""
     if (record.get('verified') is not False or record.get('pending') is not None
             or record.get('attempt') is not None or index >= len(plan.steps)):
         return [], False
     step = plan.steps[index]
     kinds = {'storage_preflight_rejected', 'maintenance_preflight_rejected',
-             'connection_preflight_rejected', 'wait_replanned', 'wait_expired'}
+             'connection_preflight_rejected', 'wait_replanned', 'wait_expired',
+             'partial_transfer_reconciled', 'zero_effect_transfer_reconciled', 'rejected_transfer_reconciled'}
     values = [value for value in record.get('attempt_outcomes', [])
               if value.get('outcome') in kinds and value.get('finished_tick') == record['after_state']['tick']
               and (value.get('id') == (attempt or {}).get('id') if pending is not None else value.get('id') not in seen)
@@ -509,6 +539,40 @@ def _terminal_outcomes(record, plan, index, pending, attempt, seen, fresh, budge
     failure = (len(failed) == 1 and set(failed[0]) == {'kind', 'plan', 'reason', 'tick'}
                and isinstance(failed[0]['reason'], str) and bool(failed[0]['reason']) and failed[0]['tick'] == now
                and _budget(record.get('failure_budgets', {}), plan.id) == _budget(budgets, plan.id) + 1)
+    if kind in {'partial_transfer_reconciled', 'zero_effect_transfer_reconciled', 'rejected_transfer_reconciled'}:
+        if (not isinstance(pending, dict) or not isinstance(attempt, dict) or not failure
+                or step.action not in {'factory_insert', 'factory_extract'} or record.get('action') != 'reconcile'
+                or any(not _same(value.get(key), data) for key, data in attempt.items())):
+            return [], False
+        events = [event for event in fresh if event.get('kind') == kind]
+        if len(events) != 1:
+            return [], False
+        if kind == 'rejected_transfer_reconciled':
+            # The immutable initial checkpoint carries the separately verified
+            # sealed-log recovery reference. Do not reopen arbitrary log paths.
+            if not isinstance(recovery, dict) or step.action != 'factory_insert':
+                return [], False
+            expected = dict(kind=kind, attempt_id=attempt['id'], events_sha256=recovery.get('events_sha256'),
+                            sequences=recovery.get('sequences'), transferred_quantity=0, tick=now)
+            valid = (isinstance(expected['events_sha256'], str) and len(expected['events_sha256']) == 64
+                     and all(c in '0123456789abcdef' for c in expected['events_sha256'])
+                     and isinstance(expected['sequences'], list) and len(expected['sequences']) == 4
+                     and all(type(n) is int and n >= 0 for n in expected['sequences'])
+                     and _same(events[0], expected))
+            return ([value], True) if valid else ([], False)
+        from types import SimpleNamespace
+        from .controller import HierarchicalLoop
+        context = SimpleNamespace(memory=SimpleNamespace(pending=pending, attempt=attempt,
+                                  step_index=index, reservations=reservations))
+        observed = HierarchicalLoop._unacknowledged_transfer_receipt(
+            context, plan, step, GameSnapshot(**record['after_state']))
+        if observed is None or observed['receipt_tick'] > now:
+            return [], False
+        expected = dict(kind=kind, plan=plan.id, step_index=index, receipt=step.parameters['receipt'],
+                        requested_quantity=step.parameters['quantity'], transferred_quantity=observed['quantity'],
+                        receipt_tick=observed['receipt_tick'], attempt_id=attempt['id'], tick=now)
+        valid = ((observed['quantity'] == 0) == (kind == 'zero_effect_transfer_reconciled') and _same(events[0], expected))
+        return ([value], True) if valid else ([], False)
     if kind in {'wait_replanned', 'wait_expired'}:
         if (not isinstance(pending, dict) or not isinstance(attempt, dict)
                 or step.action not in {'idle', 'factory_wait'} or record.get('action') != 'observe'
@@ -663,6 +727,50 @@ def _kit_clear_observed(record, proof, step_value, previous_pending, previous_at
             and _attempt_endpoint(values[0], step_value, record['state']))
 
 
+def _goal_clears(target, previous, active, record, fresh, pending):
+    from .planning.goals import GOALS, completed, goal_order
+    events = [(index, value) for index, value in enumerate(fresh)
+              if value.get('kind') in {'goal_completed', 'goal_activated'}]
+    if not events:
+        return previous, active, False, False
+    if pending is not None and record.get('verified') is not True:
+        raise ValueError('Goal change cannot clear an unresolved pending action')
+    order = goal_order(target)
+    goals, current = deepcopy(previous), active
+    snapshots = [GameSnapshot(**record[label]) for label in ('state', 'after_state')]
+    foreground = next((index for index, value in enumerate(fresh)
+                       if value.get('kind') in {'plan_committed', 'step_verified', 'plan_failed'}), len(fresh))
+    clear_before = clear_after = False
+    before_goal = active
+    for index, event in events:
+        goal, tick = event.get('goal'), event.get('tick')
+        if goal not in order or not _tick(tick):
+            raise ValueError('Unobserved goal transition')
+        if event['kind'] == 'goal_completed':
+            if (set(event) != {'kind', 'goal', 'tick', 'world_kind'} or goal in goals
+                    or not all(key in goals for key in GOALS[goal].prerequisites)
+                    or not any(snapshot.tick == tick and snapshot.world_kind == event['world_kind']
+                               and completed(goal, snapshot) for snapshot in snapshots)):
+                raise ValueError('Goal completion predicate missing')
+            goals[goal] = tick
+        else:
+            expected = next((key for key in order if key not in goals), None)
+            if (set(event) != {'kind', 'goal', 'tick'} or target in goals or goal != expected or goal == current
+                    or not any(snapshot.tick == tick for snapshot in snapshots)):
+                raise ValueError('Goal activation does not follow completion')
+            current = goal
+        if pending is None and index < foreground and tick == record['state']['tick']:
+            clear_before = clear_before or target in goals or current != active
+            before_goal = current
+            if target in goals and foreground < len(fresh):
+                raise ValueError('Foreground work follows a completed target')
+        else:
+            clear_after = clear_after or target in goals or current != before_goal
+    if not _same(goals, record.get('completed_goals')) or not _same(current, record.get('goal')):
+        raise ValueError('Goal record differs from transitions')
+    return goals, current, clear_before, clear_after
+
+
 def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list[str]:
     """Check retained kit ownership and every observed transition, without I/O.
 
@@ -721,6 +829,9 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
         previous_budgets = initial.get('failures', {})
         previous_pending = initial.get('pending')
         previous_attempt = initial.get('attempt')
+        recovery = deepcopy(initial.get('transfer_recovery'))
+        completed_goals = deepcopy(initial.get('completed_goals', {}))
+        active_goal = initial.get('active_goal')
         background_job = deepcopy(initial.get('background_job'))
         background_attempt = deepcopy(initial.get('background_attempt'))
         previous_routes = initial.get('solid_commitments', {})
@@ -775,6 +886,22 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 if value['finished_tick'] == before_tick:
                     outcomes.append(deepcopy(value))
                     outcomes = outcomes[-64:]
+            completed_goals, active_goal, goal_clear_before, goal_clear_after = _goal_clears(
+                initial.get('target'), completed_goals, active_goal, record, fresh, previous_pending) if policy else (
+                completed_goals, active_goal, False, False)
+            if goal_clear_before:
+                if ordinary_plan is not None:
+                    reservations.pop(ordinary_plan.get('id'), None)
+                    ordinary_plan = None
+                if active_kit:
+                    reservations.pop(working['key'] + ':kit', None)
+                    active_kit = False
+            kit_terminal, kit_terminal_clear = [], False
+            if active_kit and working is not None and active_step is not None:
+                from .skills import Plan
+                retained_kit = Plan(working['key'] + ':kit', 'rocket_launch', 'Retained kit', (_kit_step(active_step),))
+                kit_terminal, kit_terminal_clear = _terminal_outcomes(record, retained_kit, 0, previous_pending,
+                    previous_attempt, seen_attempts, fresh, previous_budgets, reservations, dispatch_job, recovery)
             selected_kits = {value.get('key') for value in fresh if value.get('kind') == 'solid_kit_committed'}
             ordinary_commits = [value for value in fresh if value.get('kind') == 'plan_committed'
                                 and policy and value.get('plan') not in selected_kits]
@@ -790,6 +917,8 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                         or not _tick(event.get('tick')) or event['tick'] != before_tick
                         or not _selection_matches(record, event.get('plan'), event.get('source'))):
                     issues.add('solid_funding_ordinary_selection_unproven')
+                if not isinstance(event.get('definition'), dict) or not _ordinary_frontier_matches(record, event['definition']):
+                    issues.add('solid_funding_ordinary_frontier_unproven')
                 ordinary_plan = deepcopy(event.get('definition'))
                 ordinary_index = 0
                 if not isinstance(ordinary_plan, dict) or ordinary_plan.get('id') != event.get('plan'):
@@ -869,7 +998,8 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                             issues.add('solid_funding_abandonment_not_reconciled')
                             continue
                         expected_count = _abandonment_count(proof, event, record,
-                                _budget(previous_budgets, proof['key'] + ':kit'), fresh, active_kit, active_step)
+                                _budget(previous_budgets, proof['key'] + ':kit'), fresh, active_kit, active_step,
+                                kit_terminal_clear and _same(prior, proof))
                         if expected_count is None:
                             issues.add('solid_funding_abandonment_trigger_unproven')
                         elif count != expected_count:
@@ -936,6 +1066,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     and previous_pending is None and record.get('pending') is None
                     and record.get('attempt') is None and active_step is not None
                     and _failed_precondition(active_step, record))
+                failed_once = failed_once or (kit_terminal_clear and prior_budget == 0 and budget == 1)
                 if budget is None or budget >= 2:
                     issues.add('solid_funding_retained_budget_exhausted')
                 if budget != prior_budget and not failed_once:
@@ -944,6 +1075,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     issues.add('solid_funding_failed_plan_not_reconciled')
                 if failed_once:
                     active_kit = False
+                    reservations.pop(current['key'] + ':kit', None)
                 if action_budget_due and prior['key'] not in abandoned_keys:
                     issues.add('solid_funding_action_budget_release_missing')
                 if (previous_pending is None and _tick(before_tick)
@@ -963,14 +1095,26 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     and not _dispatch_admitted(_kit_step(active_step), record,
                                                current['key'] + ':kit', reservations, dispatch_job)):
                 issues.add('solid_funding_kit_admission_unproven')
+            if (active_kit and current is not None and active_step is not None
+                    and previous_pending is None and record.get('pending') is not None):
+                candidates = _current_dispatch_attempts(record, before_tick, now, seen_attempts)
+                if (len(candidates) == 1 and candidates[0]['plan_id'] == current['key'] + ':kit'
+                        and candidates[0]['step_index'] == 0
+                        and candidates[0]['step_sha256'] == fingerprint(active_step)
+                        and _attempt_endpoint(candidates[0], active_step, record['state'])):
+                    reservations[current['key'] + ':kit'] = deepcopy(active_step.get('costs') or {})
+                else:
+                    issues.add('solid_funding_kit_pending_unproven')
             completed = _completed_dispatches(record, previous_pending, previous_attempt, seen_attempts)
-            proven_outcomes = list(background_completed)
+            proven_outcomes = [*background_completed, *kit_terminal]
             if active_kit and current is not None and active_step is not None:
                 from .skills import Plan
                 kit = Plan(current['key'] + ':kit', 'rocket_launch', 'Retained kit', (_kit_step(active_step),))
                 terminal, _ = _terminal_outcomes(record, kit, 0, previous_pending, previous_attempt,
-                    seen_attempts, fresh, previous_budgets, reservations, dispatch_job)
+                    seen_attempts, fresh, previous_budgets, reservations, dispatch_job, recovery)
                 proven_outcomes.extend(terminal)
+                if terminal:
+                    reservations[current['key'] + ':kit'] = deepcopy(active_step.get('costs') or {})
             if current is None:
                 active_kit = False
             elif active_kit and active_step is not None and _kit_clear_observed(
@@ -1003,11 +1147,14 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                             and _attempt_endpoint(dispatched[0], asdict(step), record['state'])
                             and _dispatch_admitted(step, record, plan.id, reservations, dispatch_job)):
                         ordinary_index = candidate_index
+                        reservations[plan.id] = deepcopy(step.costs or {})
                     else:
                         issues.add('solid_funding_pending_admission_unproven')
                 terminal, terminal_clear = _terminal_outcomes(record, plan, candidate_index, previous_pending,
-                    previous_attempt, seen_attempts, fresh, previous_budgets, reservations, dispatch_job)
+                    previous_attempt, seen_attempts, fresh, previous_budgets, reservations, dispatch_job, recovery)
                 proven_outcomes.extend(terminal)
+                if terminal and not terminal_clear:
+                    reservations[plan.id] = deepcopy(step.costs or {})
                 admitted_background = _background_admitted(record, plan, candidate_index, previous_pending,
                     previous_attempt, seen_attempts, fresh, reservations,
                     None if background_completed else background_job)
@@ -1031,6 +1178,15 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 elif failed or terminal_clear or admitted_background:
                     reservations.pop(plan.id, None)
                     ordinary_plan = None
+            if any(value.get('outcome') == 'rejected_transfer_reconciled' for value in proven_outcomes):
+                recovery = None
+            if goal_clear_after:
+                if ordinary_plan is not None:
+                    reservations.pop(ordinary_plan.get('id'), None)
+                    ordinary_plan = None
+                if active_kit:
+                    reservations.pop(current['key'] + ':kit', None)
+                    active_kit = False
             if policy and (background_job is None or background_completed) and record.get('background_job') is not None:
                 if not admitted_background:
                     issues.add('solid_funding_background_admission_unproven')
@@ -1058,6 +1214,8 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
             previous_attempt = record.get('attempt')
             previous_routes = record.get('after_state', {}).get('factory', {}).get('solid_routes', {}).get('routes', {})
             previous_history = history
+        if policy and not _same(recovery, final.get('transfer_recovery')):
+            issues.add('solid_funding_final_transfer_recovery_mismatch')
         if policy and (not _same(background_job, final.get('background_job'))
                        or not _same(background_attempt, final.get('background_attempt'))):
             issues.add('solid_funding_final_background_mismatch')

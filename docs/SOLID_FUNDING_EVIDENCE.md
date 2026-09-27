@@ -256,3 +256,18 @@ preserves its prior entries rather than saving an oversized map. A new project
 without an independent declaration remains unmeasurable. Hybrid request rejection
 can legitimately fall back before calling a model; its false call flags do not
 claim a provider evaluation.
+
+Ordinary commits require the captured post-capability frontier: generated and
+eligible IDs, ranked IDs, observation tick and a matching exact plan hash captured
+after filtering/ranking but before selection. This is independent of the later
+commit event, stays out of model requests, and adds no observation or save. It is
+a consistency check, not authentication of an externally supplied capture.
+
+Terminal partial/zero transfer reconciliation reuses the controller's read-only
+receipt predicate and requires the retained attempt, receipt event and exact
+failure increment. Sealed-log rejection binds the recovery reference already
+held in the initial checkpoint; this reader never opens a supplied recovery path
+or re-authenticates the external log. Uncaptured recovery authority is unknown.
+These outcomes never become verified service samples. Goal-driven plan clearing
+requires the actual goal predicate and ordered completion/activation events; it
+can occur before selection or after a verified foreground step.
