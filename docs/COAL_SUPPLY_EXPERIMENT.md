@@ -96,7 +96,7 @@ synchronous. This is not an atomic filesystem lease; exclusive checkpoint owners
 is still required, as documented in `SOLID_INITIAL_OBSERVATION_TRANSACTION.md`.
 
 The combined native solid extension uses implementation revision 4 and retains
-the full-corridor reservation marker. Coal uses implementation revision 3. These
+the full-corridor reservation marker. Coal uses implementation revision 4. These
 revisions include the quality-aware power API and reconciled mixed ownership
 guards. Earlier installed revisions fail closed; retained paid state is preserved.
 No in-place runtime migration or
@@ -252,6 +252,16 @@ or dispatching, and accepts only newly recorded receipts within the action's tic
 interval. Ambiguous manual transfers and coal faults block downstream native
 construction as well as coal work. Lost replies with a newly retained receipt
 still reconcile once through the existing machinery.
+
+Every native mixed construction preparation and final build revalidates the
+entire committed coal bundle, including paid source and receiving-corridor
+identity/geometry, resource geometry and owned power. An unrelated downstream
+corridor cannot rely on the previous observation while a source or receiving
+component is deleted or replaced during approach. Any other mixed corridor's
+pending journal or fault blocks payment; only the selected command's exact
+prepared journal may proceed. Healthy partial bundles remain supported.
+Coal revision 3 cannot be reattached under
+revision 4; its retained state requires reconciliation rather than silent reuse.
 
 Power checks use `LuaEntityPrototype.get_supply_area_distance(pole.quality)`:
 https://lua-api.factorio.com/2.0.72/classes/LuaEntityPrototype.html#get_supply_area_distance

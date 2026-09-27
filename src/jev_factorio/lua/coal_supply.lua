@@ -4,11 +4,11 @@ local c,fair,r=storage.campaign,storage.fair,storage.solid_routes
 assert(c and fair and r and r.implementation_revision==4 and r.coal_api and c.observe==r.observer,
     "Coal supply requires the qualified solid runtime")
 if storage.coal_supply then
-    assert(r.coal==storage.coal_supply and r.coal.revision==3 and c.prepare_coal_source==r.coal.prepare
+    assert(r.coal==storage.coal_supply and r.coal.revision==4 and c.prepare_coal_source==r.coal.prepare
         and c.build_coal_source==r.coal.build,"Coal runtime requires reconciliation")
     return
 end
-local q={revision=3,targets={},rows={},committed=false,serial=0,reason="no_supported_bundle"}
+local q={revision=4,targets={},rows={},committed=false,serial=0,reason="no_supported_bundle"}
 storage.coal_supply,r.coal=q,q
 local a=r.coal_api
 local vec={{x=0,y=-1},{x=1,y=0},{x=0,y=1},{x=-1,y=0}}
@@ -201,7 +201,16 @@ local function full_clear()
         for _,other in ipairs(seen) do
             corridor_reservations_clear({source={role=role(row.target.role,"chest")},steps=row.corridor},other)
         end
-        clear(row);seen[#seen+1]=row
+        clear(row)
+        local cell=corridor(row)
+        if cell then
+            assert(not cell.fault,"Coal receiving corridor requires reconciliation")
+            -- Validate every paid receiving component as well as future cells.
+            -- clear accepts healthy partial prefixes; full topology is not
+            -- required before the bundle has finished commissioning.
+            a.clear(cell)
+        end
+        seen[#seen+1]=row
     end
 end
 local function source_for(s)
@@ -277,7 +286,15 @@ end
 q.construction_gate=function(cell,receipt)
     local row=source_for(cell.source.role)
     if not row and not q.committed then return end -- Unpaid coal proposals own no stock.
-    if row then full_clear() end
+    -- Any paid construction consumes capacity protected by the committed bundle.
+    -- Recheck native ownership/resources/power even for an unrelated corridor;
+    -- the last observation cannot authorize payment after approach/world changes.
+    full_clear()
+    for _,other in pairs(r.cells) do
+        assert(not other.fault,"Mixed receiving corridor requires reconciliation")
+        assert(not other.pending or (other==cell and other.pending.phase=="prepared"
+            and other.pending.receipt==receipt),"Another mixed corridor action requires reconciliation")
+    end
     affordable(cell) -- Include the selected downstream kit once, plus other paid prefixes.
     for _,x in pairs(q.rows) do
         for _,part in pairs(x.parts) do assert(part.receipt~=receipt,"Coal receipt reused as corridor payment") end

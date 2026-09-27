@@ -86,6 +86,6 @@ This document describes the reconciled implementation, not the historical
 packet tree. The native core retains the mixed whole-kit and pending barriers
 from `e80b356f`; the downstream-project filter and regression cases from
 `b8bf1585` are included without replacing those native guards. Solid revision 4
-and coal revision 3 reject earlier attachments while preserving retained state.
+and coal revision 4 reject earlier attachments while preserving retained state.
 The existing main downstream paid-kit feature remains supported; the missing
 automatic-kit capability above concerns coal bundles only.

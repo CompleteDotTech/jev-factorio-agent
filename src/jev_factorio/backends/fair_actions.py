@@ -424,6 +424,10 @@ class FairActions:
             "local key = horizontal .. ':' .. vertical; if seen[key] then return end; seen[key] = true; "
             "local position = {x=horizontal+0.5,y=vertical+0.5}; "
             "if blocked_cell(position) then return end; "
+            # A full route must exclude unpaid coal footprints before its first
+            # placement. The native fair.place guard still rechecks each build.
+            "if storage.coal_supply and storage.coal_supply.placement_reserved("
+            + json.dumps(name) + ",position,defines.direction.north) then return end; "
             "local entity = player.surface.find_entity(" + json.dumps(name) + ", position); "
             "if entity and entity.force == player.force then "
             "local contents = #entity.fluidbox > 0 and entity.fluidbox[1]; "
