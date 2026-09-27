@@ -225,7 +225,8 @@ def test_catalog_and_inventory_updates_are_not_cached_between_decisions():
 
 
 @pytest.mark.parametrize('fuel', [2, 1, 0])
-def test_corrected_deficit_preserves_ready_science_in_composed_controller(tmp_path, monkeypatch, fuel):
+@pytest.mark.parametrize('missing_kit', [False, True])
+def test_corrected_deficit_preserves_ready_science_in_composed_controller(tmp_path, monkeypatch, fuel, missing_kit):
     import test_solid_investment as fixtures
     original = fixtures.scenario
     def partly_stocked():
@@ -233,7 +234,7 @@ def test_corrected_deficit_preserves_ready_science_in_composed_controller(tmp_pa
         state.factory['entities'][TARGET]['input'] = {'iron-gear-wheel': 60, 'copper-plate': 60}
         return state, data
     monkeypatch.setattr(fixtures, 'scenario', partly_stocked)
-    fixtures.test_real_composed_frontier_keeps_ready_science_with_justified_policy(tmp_path, fuel)
+    fixtures.test_real_composed_frontier_keeps_ready_science_with_justified_policy(tmp_path, fuel, missing_kit)
 
 
 def test_cheap_manual_service_still_defers_a_corrected_deficit():
