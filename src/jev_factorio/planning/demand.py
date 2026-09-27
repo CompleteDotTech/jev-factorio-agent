@@ -29,6 +29,9 @@ def _queued_production(machine: dict, catalog) -> _QueuedProduction | None:
             or products[0].get('probability', 1) != 1
             or any(i.get('type') != 'item' or i.get('amount', 0) <= 0 for i in ingredients)):
         return None
+    names = [ingredient['name'] for ingredient in ingredients]
+    if len(set(names)) != len(names):
+        raise ValueError('Ambiguous queued recipe ingredients')
     product, output = products[0]['name'], products[0]['amount']
     quantities({product: output})
     queued = min(math.floor(machine.get('input', {}).get(i['name'], 0) / i['amount'])
@@ -37,7 +40,7 @@ def _queued_production(machine: dict, catalog) -> _QueuedProduction | None:
                              tuple((i['name'], i['amount']) for i in ingredients))
 
 
-def uncommitted_input(machine: dict, catalog, item: str) -> float:
+def uncommitted_input(machine: dict, catalog, item: str, *, require_supported: bool = False) -> float:
     """Input left AFTER the complete queued batches credited by SupplyLedger.
 
     A net material bill has already consumed the corresponding forecast products.
@@ -47,6 +50,8 @@ def uncommitted_input(machine: dict, catalog, item: str) -> float:
     """
     stock = quantities(machine.get('input', {})).get(item, 0)
     queued = _queued_production(machine, catalog)
+    if queued is None and require_supported:
+        raise ValueError('Unsupported queued destination recipe')
     pledged = (queued.batches * dict(queued.ingredients).get(item, 0)
                if queued is not None else 0)
     return max(0, stock - pledged)

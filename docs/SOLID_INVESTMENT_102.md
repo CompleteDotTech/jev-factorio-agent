@@ -69,6 +69,12 @@ science was delivered. Native route/recipe qualification remains unchanged.
 The conservation tests exercise additional recipe coefficients as arithmetic
 fixtures only; they do not expand the supported native transport contract.
 
+The shared forecast rejects duplicate ingredient entries rather than silently
+collapsing them into one input. Optional paid-kit valuation also requires a
+supported deterministic destination recipe; an unsupported recipe cannot use
+observed input stock to justify construction. Existing queued-batch and surplus
+diagnostics remain the active interface.
+
 This correction is deliberately limited to avoiding a duplicate credit at the
 valued destination. It does not make the bounded recipe bill a global factory
 allocation or throughput optimizer. In particular, it does not route residual
