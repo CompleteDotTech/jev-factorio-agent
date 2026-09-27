@@ -214,7 +214,8 @@ def frontier(loop, snapshot):
         except (ValueError, KeyError):
             pass  # Never bypass capability guards with a less capable planner.
         return safe, blocker or 'No safe continuation for committed capital investment'
-    if (_protected_work(snapshot) or not snapshot.factory.get('research')
+    if (getattr(loop.memory, 'solid_funding', None) is not None
+            or _protected_work(snapshot) or not snapshot.factory.get('research')
             or any(p.steps[0].action not in {'factory_wait', 'factory_gather'}
                    and capital.MARKER not in (p.materials or {}) for p in safe)):
         return safe, blocker

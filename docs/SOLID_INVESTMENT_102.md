@@ -12,7 +12,9 @@ The existing explicit-intent composition gains `solid_science_policy=True`.
 With its default `False`, explicit-intent foundation behavior is retained. With
 `True`, configured intents are an allowlist, not unconditional construction
 orders. The controller computes demand and payback before adding at most two
-new offers. At most one paid construction project progresses at a time.
+new offers. At most one paid construction project progresses at a time. A selected kit
+prerequisite also binds one optional funding intent, with a fixed deadline and
+action/failure bounds; ready science and urgent work remain eligible.
 
 The policy only considers the current research's automation/logistic science
 requirements, capped at 120 packs per type. The owned lab must be observed and
@@ -30,6 +32,48 @@ item for the current research horizon, and both endpoints must pass the existing
 identity, power, role, item and corridor checks. There is no new global scan,
 resource observation, actor mutation, remote call, or model evaluation during
 this calculation. Stockpiled plates alone do not establish science progress.
+
+## Count queued production and destination inputs once
+
+The research material bill already credits complete batches backed by current
+machine inputs as forecast products. Those inputs are pledged to the credited
+batches; they cannot also satisfy the additional recipe-input bill. The route
+valuation now deducts only the **uncommitted input residue**, computed with the
+same queued-batch arithmetic used by `SupplyLedger.capture`. Completed output,
+carried/reserved stock and the separate in-flight batch retain their existing
+ledger semantics. No new stock category is made spendable or persisted.
+
+For the fixture's one-gear/one-copper red-science recipe and a remaining
+120-pack horizon with no carried gears or finished packs:
+
+| Gears / copper in destination | Old incoming gear deficit | Correct incoming gear deficit |
+| --- | ---: | ---: |
+| 0 / 120 | 120 | 120 |
+| 40 / 40 | 40 | 80 |
+| 60 / 60 | 0 | 60 |
+| 60 / 40 | 20 | 60 |
+| 120 / 40 | 0 | 0 |
+
+The final row matters: removing all destination-stock credit would also be
+wrong. Its 40 complete batches are already forecast, but the remaining 80 gears
+are still available to fund the additional 80 batches once copper arrives.
+Transforming input pairs into completed science must not change the remaining
+incoming-gear requirement. Fresh preconditions recompute this accounting; a
+newly supplied complete horizon still rejects a new construction payment.
+
+Valuation diagnostics expose `destination_input_units`, `queued_input_units`,
+`uncommitted_input_units`, and the basis
+`net_recipe_bill_less_uncommitted_input`. They are current-observation estimates,
+not proof that machines ran, that an ingredient traveled on a belt, or that
+science was delivered. Native route/recipe qualification remains unchanged.
+The conservation tests exercise additional recipe coefficients as arithmetic
+fixtures only; they do not expand the supported native transport contract.
+
+This correction is deliberately limited to avoiding a duplicate credit at the
+valued destination. It does not make the bounded recipe bill a global factory
+allocation or throughput optimizer. In particular, it does not route residual
+input from a different machine, qualify unsupported sources, acquire a missing
+kit, or construct an unconfigured topology.
 
 ## Declared economics, not action permission
 
@@ -62,11 +106,14 @@ admitted only when the estimated manual burden exceeds this build estimate by
 25%. This margin is a policy parameter in code, not a measured performance result.
 Unknown recipe costs or unsupported material shortages reject the offer.
 
-The complete unreserved remaining kit must already be carried. This version
-explicitly defers with `insufficient_unreserved_kit` otherwise; it does not
-implement automatic kit acquisition, source mining, new endpoint placement,
-power bootstrap, shared endpoints, or arbitrary routing. Those are real scope
-limits, not native accomplishments hidden behind a flag.
+The complete unreserved remaining kit must be carried before the first paid
+placement. When it is incomplete, the [bounded kit funding extension](SOLID_KIT_ACQUISITION_102.md)
+can acquire the next prerequisite through an existing paid hand-craft or owned-output
+extraction, but only if the entire bounded bill is fundable from current stock.
+It reprices acquisition handling and the source items consumed by that bill.
+It does not mine raw materials, finance future production, place new endpoints,
+bootstrap power, share endpoints, or discover arbitrary routing. Those are real
+scope limits, not native accomplishments hidden behind a flag.
 
 ## Composition, ranking and fresh dispatch
 
@@ -131,7 +178,8 @@ native paid flow and crash qualification are still required.
 
 ```sh
 PYTHONPATH=src python -m pytest tests/test_solid_investment.py \
-  tests/test_solid_partial_service.py tests/test_solid_route_integration.py -q
+  tests/test_solid_partial_service.py tests/test_solid_route_integration.py \
+  tests/test_solid_demand_accounting.py tests/test_demand_service.py -q
 PYTHONPATH=src python -m pytest tests/test_solid*.py -q
 ```
 

@@ -120,7 +120,10 @@ class CausalTrace:
                 raise TraceStorageError("Causal storage exhausted; retain pending ownership") from None
             raise ResearchLogError("Causal event persistence failed") from None
         except BaseException:
+            # The sink may already have written some or all of this event.
+            # Preserve the interruption, but never reuse uncertain audit state.
             failed = True
+            self._failed = True
             raise
         finally:
             if self.metrics is not None:
@@ -133,8 +136,11 @@ class CausalTrace:
             return
         try:
             self.emit(event_type, {"status": "error", "error": error_facts(error), **details})
-        except ResearchLogError:
-            pass
+        except BaseException:
+            # Only this secondary diagnostic is suppressed. Capture can fail
+            # before emit() is entered; both paths permanently poison the trace.
+            # The caller still raises the original operation failure unchanged.
+            self._failed = True
 
     def call(self, event_type: str, operation: Callable[[], T], *,
              details: dict | None = None,
@@ -165,18 +171,22 @@ class CausalTrace:
         try:
             with span("trace_capture"):
                 captured = result(value) if result else {}
+                # Assembly is part of capture, not the native operation. A bad
+                # callback result must not become a recoverable backend error.
+                event = {**(details or {}), "status": "ok", "duration_ns": elapsed, **captured}
         except Exception:
             capture_failed = True
             self._failed = True
             raise ResearchLogError("Cannot capture a causal event") from None
         except BaseException:
             capture_failed = True
+            self._failed = True
             raise
         finally:
             if self.metrics is not None:
                 self.metrics.call('trace_capture', time.perf_counter_ns() - capture_start,
                                   failed=capture_failed, cpu_ns=time.process_time_ns() - capture_cpu)
-        self.emit(event_type, {**(details or {}), "status": "ok", "duration_ns": elapsed, **captured})
+        self.emit(event_type, event)
         return value
 
     def observe(self, backend, phase: str):

@@ -7,6 +7,7 @@ See docs/CAPACITY_AUDIT.md for sampling, owner review and exact rollback.
 from __future__ import annotations
 
 import argparse
+from fractions import Fraction
 import json
 import math
 import os
@@ -18,6 +19,8 @@ import time
 MAX_FILE = 256 * 1024
 MAX_LEVELS = 64
 MAX_CPU = 65535
+MIN_BANDWIDTH_US = 1000
+MAX_PERIOD_US = 1000000
 CPU_COUNTERS = {'usage_usec', 'user_usec', 'system_usec', 'nr_periods', 'nr_throttled', 'throttled_usec'}
 VM_COUNTERS = {'pswpin', 'pswpout', 'pgmajfault'}
 MEM_COUNTERS = {'MemTotal', 'MemAvailable', 'SwapTotal', 'SwapFree'}
@@ -56,6 +59,9 @@ def parse_cpu_max(text: str) -> dict:
         raise ValueError('Invalid CPU quota')
     period = _integer(parts[1], positive=True)
     quota = None if parts[0] == 'max' else _integer(parts[0], positive=True)
+    if not MIN_BANDWIDTH_US <= period <= MAX_PERIOD_US or (
+            quota is not None and quota < MIN_BANDWIDTH_US):
+        raise ValueError('CPU bandwidth is outside the supported CFS range')
     return {'state': 'unlimited' if quota is None else 'finite',
             'quota_us': quota, 'period_us': period,
             'cpu_equivalents': quota / period if quota is not None else None}
@@ -90,14 +96,17 @@ def _keyed(text: str | None, allowed: set[str]) -> dict:
 
 
 def parse_proc_stat(text: str) -> dict:
-    row = next((line.split()[1:] for line in text.splitlines() if line.startswith('cpu ')), None)
-    if row is None or len(row) < 8:
+    rows = [line.split()[1:] for line in text.splitlines() if line.startswith('cpu ')]
+    if len(rows) != 1 or len(rows[0]) < 8:
         raise ValueError('Missing aggregate CPU accounting')
-    values = [_integer(value) for value in row]
+    values = [_integer(value) for value in rows[0]]
+    cpu_names = [line.split()[0] for line in text.splitlines() if re.match(r'^cpu[0-9]+ ', line)]
+    if len(cpu_names) != len(set(cpu_names)):
+        raise ValueError('Duplicate CPU accounting row')
     # guest and guest_nice are already included in user/nice; do not add twice.
     boot = _keyed(text, {'btime'}).get('btime')
     return {'total_ticks': sum(values[:8]), 'steal_ticks': values[7], 'boot_epoch': boot,
-            'advertised_cpu_count': sum(bool(re.match(r'^cpu[0-9]+ ', line)) for line in text.splitlines())}
+            'advertised_cpu_count': len(cpu_names)}
 
 
 def _pressure(text: str) -> dict:
@@ -106,7 +115,12 @@ def _pressure(text: str) -> dict:
         parts = line.split()
         if not parts or parts[0] not in {'some', 'full'}:
             continue
-        values = dict(token.split('=', 1) for token in parts[1:])
+        values = {}
+        for token in parts[1:]:
+            key, separator, value = token.partition('=')
+            if not separator or key in values:
+                raise ValueError('Invalid or duplicate pressure field')
+            values[key] = value
         if set(values) != {'avg10', 'avg60', 'avg300', 'total'} or parts[0] in result:
             raise ValueError('Invalid pressure row')
         row = {key: float(values[key]) for key in ('avg10', 'avg60', 'avg300')}
@@ -133,7 +147,7 @@ def _memory(text: str) -> dict:
         parts = line.split()
         key = parts[0].rstrip(':') if parts else None
         if key in MEM_COUNTERS:
-            if len(parts) != 3 or parts[2] != 'kB' or key in result:
+            if len(parts) != 3 or parts[2] != 'kB' or key + '_bytes' in result:
                 raise ValueError('Invalid memory counter')
             result[key + '_bytes'] = _integer(parts[1]) * 1024
     return result
@@ -204,7 +218,14 @@ def read_sample(*, proc_root: Path = Path('/proc'), cgroup_root: Path = Path('/s
     return sample
 
 
+def _same_epoch(before, after) -> bool | None:
+    # Missing evidence is not proof that a counter reset or a boot changed.
+    return None if before is None or after is None else before == after
+
+
 def _delta(before, after, *, same_epoch=True) -> dict:
+    if same_epoch is None:
+        return {'state': 'unknown', 'value': None}
     if not same_epoch:
         return {'state': 'epoch_changed', 'value': None}
     if type(before) is not int or type(after) is not int:
@@ -220,13 +241,21 @@ def compare_samples(before: dict, after: dict) -> dict:
     if elapsed <= 0:
         raise ValueError('Sampling interval must be positive')
     levels = []
+    proc_before, proc_after = before['proc_stat'], after['proc_stat']
+    boot_same = _same_epoch(proc_before.get('boot_epoch'), proc_after.get('boot_epoch'))
     old = {row['level']: row for row in before['levels']}
     for row in after['levels']:
         previous = old.get(row['level'], {})
-        same = row['identity'] is not None and row['identity'] == previous.get('identity')
+        identity_same = _same_epoch(row['identity'], previous.get('identity'))
+        level_elapsed = row['sampled_ns'] - previous.get('sampled_ns', row['sampled_ns'])
+        if boot_same is False or identity_same is False:
+            same = False
+        elif boot_same is None or identity_same is None or level_elapsed <= 0:
+            same = None
+        else:
+            same = True
         delta = {key: _delta(previous.get('cpu_stat', {}).get(key), row['cpu_stat'].get(key), same_epoch=same)
                  for key in sorted(CPU_COUNTERS)}
-        level_elapsed = row['sampled_ns'] - previous.get('sampled_ns', row['sampled_ns'])
         levels.append({'level': row['level'], 'cpu_max': row['cpu_max'], 'cpu_stat_delta': delta,
                        'elapsed_ns': level_elapsed if level_elapsed > 0 else None,
                        'cpuset_cpu_count': len(row['cpus']) if row['cpus'] is not None else None,
@@ -242,9 +271,6 @@ def compare_samples(before: dict, after: dict) -> dict:
         if row['cpus'] is not None:
             eligible = set(row['cpus']) if eligible is None else eligible & row['cpus']
     upper_bounds = ([ceiling] if ceiling is not None else []) + ([len(eligible)] if eligible is not None else [])
-    proc_before, proc_after = before['proc_stat'], after['proc_stat']
-    boot_same = (proc_before.get('boot_epoch') is not None and
-                 proc_before.get('boot_epoch') == proc_after.get('boot_epoch'))
     cpu_delta = {key: _delta(proc_before.get(key), proc_after.get(key), same_epoch=boot_same)
                  for key in ('total_ticks', 'steal_ticks')}
     total, steal = cpu_delta['total_ticks']['value'], cpu_delta['steal_ticks']['value']
@@ -283,22 +309,39 @@ def allocation_plan(current: dict, *, intended_cpus: float, advertised_vcpus: in
                     headroom_cpus: float | None = None) -> dict:
     """Review artifact only. Headroom is an operator estimate, not an attestation."""
     if (set(current) != {'quota_us', 'period_us'} or type(current['period_us']) is not int
-            or not 1000 <= current['period_us'] <= 1000000
-            or current['quota_us'] is not None and (type(current['quota_us']) is not int or current['quota_us'] <= 0)):
+            or not MIN_BANDWIDTH_US <= current['period_us'] <= MAX_PERIOD_US
+            or current['quota_us'] is not None and (type(current['quota_us']) is not int
+                or not MIN_BANDWIDTH_US <= current['quota_us'] < 10**20)):
         raise ValueError('Explicit current quota and period are required')
     if (type(advertised_vcpus) is not int or not 1 <= advertised_vcpus <= 65536
-            or type(intended_cpus) not in {float, int} or not math.isfinite(intended_cpus)
-            or not 0 < intended_cpus <= advertised_vcpus):
+            or type(intended_cpus) not in {float, int}
+            or not 0 < intended_cpus <= advertised_vcpus or not math.isfinite(intended_cpus)):
         raise ValueError('Invalid intended allocation')
-    if headroom_cpus is not None and (type(headroom_cpus) not in {int,float} or
-                                     not math.isfinite(headroom_cpus) or headroom_cpus < 0):
-        raise ValueError('Invalid declared headroom')
-    proposed = {'quota_us': math.ceil(intended_cpus * current['period_us']), 'period_us': current['period_us']}
-    current_cpu = current['quota_us'] / current['period_us'] if current['quota_us'] is not None else None
-    increase = max(0, intended_cpus - current_cpu) if current_cpu is not None else None
+    if headroom_cpus is not None:
+        try:
+            valid_headroom = (type(headroom_cpus) in {int, float}
+                              and math.isfinite(headroom_cpus) and headroom_cpus >= 0)
+        except OverflowError:
+            valid_headroom = False
+        if not valid_headroom:
+            raise ValueError('Invalid declared headroom')
+    # Fraction(str(...)) preserves the supplied decimal request without a
+    # floating-product rounding error adding an extra microsecond of quota.
+    requested = Fraction(str(intended_cpus))
+    proposed_quota = math.ceil(requested * current['period_us'])
+    if proposed_quota < MIN_BANDWIDTH_US:
+        raise ValueError('Requested quota is below the supported CFS minimum')
+    proposed = {'quota_us': proposed_quota, 'period_us': current['period_us']}
+    increase = (Fraction(max(0, proposed_quota - current['quota_us']), current['period_us'])
+                if current['quota_us'] is not None else None)
     return {'schema': 1, 'current': dict(current), 'proposed': proposed, 'rollback': dict(current),
-            'additional_cpu_equivalents': increase, 'declared_headroom_cpus': headroom_cpus,
-            'preconditions_satisfied': increase is not None and headroom_cpus is not None and increase <= headroom_cpus,
+            'additional_cpu_equivalents': float(increase) if increase is not None else None,
+            'declared_headroom_cpus': headroom_cpus,
+            'requested_cpu_equivalents': intended_cpus,
+            'proposed_cpu_equivalents': proposed_quota / current['period_us'],
+            'quota_rounding': 'ceil_decimal_request_to_whole_microseconds',
+            'preconditions_satisfied': (increase is not None and headroom_cpus is not None
+                                        and increase <= Fraction(str(headroom_cpus))),
             'preconditions_scope': 'numeric_allocation_and_declared_headroom_only',
             'apply_authorized': False, 'requires': ['infrastructure_owner_review', 'memory_pressure_assessment',
                 'affected_workload_ownership', 'active_and_persistent_readback', 'matched_useful_output_comparison']}

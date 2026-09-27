@@ -300,7 +300,8 @@ def test_policy_unknown_manifest_configuration_rejected(tmp_path):
 
 
 @pytest.mark.parametrize('fuel', [2, 1, 0])
-def test_real_composed_frontier_keeps_ready_science_with_justified_policy(tmp_path, fuel):
+@pytest.mark.parametrize('missing_kit', [False, True])
+def test_real_composed_frontier_keeps_ready_science_with_justified_policy(tmp_path, fuel, missing_kit):
     from test_maintenance_progress import progress_scenario
     from test_input_route_integration import RouteLoop
     backend, data = progress_scenario(fuel=fuel)
@@ -321,6 +322,8 @@ def test_real_composed_frontier_keeps_ready_science_with_justified_policy(tmp_pa
             state.factory[key]['session_id'] = state.session_id
             state.factory[key]['tick'] = state.tick
     state.inventory.update(inserter=2, **{'transport-belt': 22})
+    if missing_kit:
+        state.inventory.update(inserter=0, **{'transport-belt': 0, 'iron-plate': 200, 'copper-plate': 100})
     backend.solid_routes_supported = True
     kind = solid_loop_type(RouteLoop)
     loop = kind(backend, target='rocket_launch', policy='deterministic',
@@ -334,7 +337,8 @@ def test_real_composed_frontier_keeps_ready_science_with_justified_policy(tmp_pa
     deliveries = [plan for plan in plans if plan.steps[0].action == 'factory_insert'
                   and plan.steps[0].parameters['role'] == 'utility:lab'
                   and plan.steps[0].parameters['item'] == 'logistic-science-pack']
-    builders = [plan for plan in plans if plan.steps[0].action == contract.COMMAND]
+    builders = [plan for plan in plans if ((plan.materials or {}).get(policy.MARKER, {}).get('stage') == 'kit'
+                if missing_kit else plan.steps[0].action == contract.COMMAND)]
     assert deliveries, blocker
     assert builders, loop._solid_policy_evidence
     evidence = scheduling_context(state, data, plans, 'rocket_launch')['candidate_evidence']
