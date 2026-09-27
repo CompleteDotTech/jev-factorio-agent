@@ -189,3 +189,33 @@ def test_fdopen_failure_does_not_close_a_lost_descriptor_identity(tmp_path, monk
         if reused and descriptors:
             try: real_close(descriptors[0])
             except OSError: pass
+
+
+@pytest.mark.parametrize('substitute', [False, True])
+def test_fdopen_failure_cleans_only_original_temporary_entry(tmp_path, monkeypatch, substitute):
+    primary = OSError(errno.EMFILE, 'wrapper failure')
+    memory = CampaignMemory('fixture', 'rocket_launch')
+    path = tmp_path / 'state.json'
+    retained = []
+
+    def opening(fd, *_):
+        temporary = next(tmp_path.glob('state.json.*'))
+        retained.append(temporary)
+        if substitute:
+            other = tmp_path / 'other'
+            other.write_bytes(b'other owner evidence')
+            os.replace(other, temporary)
+        raise primary
+
+    monkeypatch.setattr(checkpoint.os, 'fdopen', opening)
+    with pytest.raises(OSError) as caught:
+        memory.save(path)
+    assert caught.value is primary
+    assert not path.exists()
+    assert memory._checkpoint_cache is None
+    assert memory._checkpoint_metrics['status'] == 'failed'
+    assert len(retained) == 1
+    if substitute:
+        assert retained[0].read_bytes() == b'other owner evidence'
+    else:
+        assert not retained[0].exists()

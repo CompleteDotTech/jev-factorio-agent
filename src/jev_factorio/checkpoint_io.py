@@ -246,9 +246,9 @@ def save_checkpoint(memory, path: Path | None) -> None:
         _provision_parent(path.parent, metrics)
         parent_identity = path.parent.stat()
         fd, temporary = tempfile.mkstemp(prefix=path.name + '.', dir=path.parent)
+        temporary_identity = _identity(os.fstat(fd))[:2]
         with ExitStack() as handles:
             stream = handles.enter_context(_descriptor_stream(fd))
-            temporary_identity = _identity(os.fstat(stream.fileno()))[:2]
             with span("checkpoint_write"):
                 stream.write(payload)
                 stream.flush()
