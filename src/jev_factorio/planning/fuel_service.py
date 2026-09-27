@@ -37,7 +37,7 @@ def coal_capacity(value) -> int | None:
     return result
 
 
-def service_plan(planner, primary: str, source: str, path, acquire):
+def service_plan(planner, primary: str, source: str | None, path, acquire):
     """One receipt-verified action; recompute the group after every observation.
 
     Only the currently needed cell and other *demanded, uncovered* cells enter
@@ -46,7 +46,11 @@ def service_plan(planner, primary: str, source: str, path, acquire):
     carried reserve is useful immediately instead of requiring a full load.
     """
     entities, snapshot = planner.entities, planner.snapshot
-    requested = {source}
+    # A primary outpost drill is a raw-material dependency, not evidence
+    # that its downstream furnace/output arm also needs service. Existing
+    # route callers pass their required cell; outposts pass None and let
+    # observed uncovered demand admit downstream consumers below.
+    requested = {source} if source is not None else set()
     demands = dict(getattr(planner, 'targets', {}))
     for item, amount in getattr(planner, 'demands', {}).items():
         demands[item] = max(demands.get(item, 0), amount)

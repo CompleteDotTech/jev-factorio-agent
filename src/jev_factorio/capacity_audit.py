@@ -159,6 +159,14 @@ def _limit(text: str) -> dict:
             'bytes': None if value == 'max' else _integer(value)}
 
 
+def _directory_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        info = path.stat(follow_symlinks=False)
+    except OSError:
+        return None
+    return (info.st_dev, info.st_ino) if stat.S_ISDIR(info.st_mode) else None
+
+
 def read_sample(*, proc_root: Path = Path('/proc'), cgroup_root: Path = Path('/sys/fs/cgroup'),
                 pid: str = 'self', leaf: Path | None = None) -> dict:
     if pid != 'self' and (not isinstance(pid, str) or not re.fullmatch(r'[1-9][0-9]{0,9}', pid)):
@@ -182,18 +190,22 @@ def read_sample(*, proc_root: Path = Path('/proc'), cgroup_root: Path = Path('/s
             raise ValueError('Cgroup hierarchy exceeds audit budget')
         for index, path in enumerate(paths):
             start = time.monotonic_ns()
-            try:
-                info = path.stat()
-                identity = (info.st_dev, info.st_ino)
-            except OSError:
-                identity = None
-            levels.append({'level': index, 'identity': identity,
+            identity = _directory_identity(path)
+            row = {'level': index, 'identity': identity,
                 'cpu_max': _parsed(path/'cpu.max', parse_cpu_max, {'state': 'unknown'}),
                 'cpu_stat': _parsed(path/'cpu.stat', lambda s: _keyed(s, CPU_COUNTERS), {}),
                 'cpus': _parsed(path/'cpuset.cpus.effective', parse_cpu_set),
                 'memory_max': _parsed(path/'memory.max', _limit, {'state': 'unknown'}),
-                'memory_current_bytes': _parsed(path/'memory.current', lambda s: _integer(s.strip())),
-                'sampled_ns': (start + time.monotonic_ns()) // 2})
+                'memory_current_bytes': _parsed(path/'memory.current', lambda s: _integer(s.strip()))}
+            installed = _directory_identity(path)
+            if identity is None or installed != identity:
+                # Never use mixed-directory limits as a capacity bound or attach
+                # replacement accounting to the previous directory's identity.
+                # Other independently sampled hierarchy levels remain usable.
+                row.update(identity=None, cpu_max={'state': 'unknown'}, cpu_stat={},
+                           cpus=None, memory_max={'state': 'unknown'}, memory_current_bytes=None)
+            row['sampled_ns'] = (start + time.monotonic_ns()) // 2
+            levels.append(row)
     status = _text(process/'status')
     affinity = None
     if status is not None:
