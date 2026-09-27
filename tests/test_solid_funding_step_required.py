@@ -32,5 +32,6 @@ def test_old_step_less_initial_history_is_not_a_new_commit():
     old.pop('step')
     initial['history'] = [deepcopy(old)]
     for record in records: record['history'] = [deepcopy(old)]
+    data[3]['history'] = deepcopy(records[-1]['history'])
     result = analyze_rows(*data)
     assert result['measurement_checks_passed'], result['issues']

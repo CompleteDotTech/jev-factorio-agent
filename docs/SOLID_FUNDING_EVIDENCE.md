@@ -112,6 +112,19 @@ to one while retaining funding. It cannot justify an exhausted-budget release.
 Deadline deferral requires one unseen current-process attempt, matching the
 selected plan, action, dispatch phase and observation interval.
 
+New commitments capture the bounded kit recipe graph, researched technology
+facts and reservations used in acquisition. The graph must hash to the existing
+funding catalog binding; replaying acquisition against the initial observation
+must produce the exact captured step. This prevents a self-consistent step hash
+for unrelated crafting from proving kit acquisition. Paid components likewise
+require index zero and the exact build-step hash, including the stable receipt.
+An unsatisfied effect alone does not prove a failed admission: retained first
+failures and ordinary second-failure abandonment need an observable failed step
+precondition. Uncaptured admission/reservation causes remain unmeasurable.
+Action-budget release waits until the active kit plan has cleared. Final
+checkpoint history must match the last record's suffix and replay to its funding
+state; invented, omitted or contradictory final transitions fail measurement.
+
 New commits check receive/send/belt project budgets as well as the kit budget.
 Ordinary acquisition failure counts also matter. New commit events capture a
 detached selected `step`, allowing its exact recipe/role counter to be checked.

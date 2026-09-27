@@ -10,6 +10,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+from dataclasses import asdict
 
 from .planning import solid_funding
 from .telemetry import fingerprint, validate_attempt
@@ -62,6 +63,8 @@ def _validate_transition(event: dict, minimum: int, maximum: int, intents: list,
     if kind == 'solid_kit_committed' and (new or 'step' in event):
         fields.add('step')
         _kit_step(event['step'])
+    if kind == 'solid_kit_committed' and (new or 'acquisition' in event):
+        fields.add('acquisition')
     if (kind not in KINDS or set(event) != fields or not _tick(event.get('tick'))
             or not minimum <= event['tick'] <= maximum):
         raise ValueError('Invalid funding transition schema')
@@ -78,6 +81,23 @@ def _kit_step(value: dict) -> Step:
     if (step.action, step.effect) not in {('factory_craft', 'inventory'), ('factory_extract', 'transfer')}:
         raise ValueError('Invalid kit action or effect')
     return step
+
+
+def _acquisition_matches(commit: dict, record: dict, proof: dict) -> bool:
+    from .planning.catalog import Catalog
+    value = commit.get('acquisition')
+    if not isinstance(value, dict) or set(value) != {'catalog', 'reserved', 'technologies'}:
+        return False
+    data = value['catalog']
+    if (not isinstance(data, dict) or set(data) != {'recipes', 'hand_categories', 'version'}
+            or solid_funding.digest(data) != proof['catalog_sha256']
+            or len(data['recipes']) > solid_funding.MAX_EXPANSIONS):
+        return False
+    catalog = Catalog.from_dict({**data, 'technologies': value['technologies'], 'machines': {}})
+    snapshot = GameSnapshot(**record['state'])
+    row = snapshot.factory['solid_routes']['routes'][proof['route']]
+    expected, _ = solid_funding.acquire(row, snapshot, catalog, reserved=value['reserved'])
+    return expected is not None and _same(asdict(expected.steps[0]), commit['step'])
 
 
 def _project_budget_open(proof: dict, budgets: dict, step_value: dict) -> bool:
@@ -135,7 +155,7 @@ def _kit_plan_observed(proof: dict, record: dict, tick: int, fresh: list,
                    and _same(value.get('funding'), proof) and value.get('tick') == tick), {})
     step_value = commit.get('step')
     step = _kit_step(step_value)
-    if step.satisfied(GameSnapshot(**record['state'])) or (
+    if not _acquisition_matches(commit, record, proof) or step.satisfied(GameSnapshot(**record['state'])) or (
             action == 'verify' and not step.satisfied(GameSnapshot(**record['after_state']))):
         return False
     if action in {'factory_craft', 'factory_extract'}:
@@ -206,11 +226,19 @@ def _observable_trigger(proof: dict, reason: str, tick: int, record: dict) -> bo
     return False
 
 
+def _failed_precondition(step_value: dict | None, record: dict) -> bool:
+    return (step_value is not None and not _kit_step(step_value).satisfied(GameSnapshot(**record['after_state']))
+            and not _kit_step(step_value).allowed(GameSnapshot(**record['after_state'])))
+
+
 def _abandonment_count(proof: dict, event: dict, record: dict,
-                       prior_budget: int | None, fresh: list, active_kit: bool) -> int | None:
+                       prior_budget: int | None, fresh: list, active_kit: bool,
+                       step_value: dict | None) -> int | None:
     if prior_budget is None:
         return None
     reason, tick = event['reason'], event['tick']
+    if reason == 'kit_action_budget' and active_kit:
+        return None
     preceding = fresh[:next((index for index, value in enumerate(fresh) if _same(value, event)), 0)]
     failures = [value for value in preceding if value.get('kind') == 'plan_failed'
                 and value.get('plan') == proof['key'] + ':kit']
@@ -218,12 +246,15 @@ def _abandonment_count(proof: dict, event: dict, record: dict,
               and isinstance(failures[0]['reason'], str) and bool(failures[0]['reason'])
               and _tick(failures[0]['tick']) and failures[0]['tick'] == tick
               and record.get('action') == 'observe' and record.get('verified') is False
-              and any(_observable_trigger(proof, cause, tick, record) for cause in
-                      ('kit_deadline', 'kit_endpoint_or_layout_changed')))
+              and (any(_observable_trigger(proof, cause, tick, record) for cause in
+                       ('kit_deadline', 'kit_endpoint_or_layout_changed'))
+                   or tick == record['after_state']['tick'] and _failed_precondition(step_value, record)))
     if reason != 'kit_failure_budget':
         return max(2, prior_budget) + int(failed) if _observable_trigger(proof, reason, tick, record) else None
     if failed:
-        return max(2, prior_budget) + 1
+        observer_floor = any(_observable_trigger(proof, cause, tick, record) for cause in
+                             ('kit_deadline', 'kit_endpoint_or_layout_changed'))
+        return (max(2, prior_budget) if observer_floor else prior_budget) + 1
     return prior_budget if prior_budget >= 2 and not failures else None
 
 
@@ -241,7 +272,13 @@ def _paid_growth_observed(before: dict, after: dict, proof: dict, attempts: list
                 and attempt.get('receipt') == paid.get('receipt')
                 and _tick(attempt.get('started_tick')) and attempt['started_tick'] <= now):
             validate_attempt(attempt, finished='outcome' in attempt)
-            return True
+            component = next((value for value in after.get('steps', []) if value.get('part') == part), None)
+            if component is None:
+                return False
+            expected = Step('factory_solid_build', 'solid_component', costs={component['name']: 1},
+                parameters={'route': proof['route'], 'layout': proof['layout'], 'part': part,
+                            'receipt': paid['receipt']}, timeout_ticks=1800)
+            return attempt['step_index'] == 0 and attempt['step_sha256'] == fingerprint(asdict(expected))
     return False
 
 
@@ -457,7 +494,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                             issues.add('solid_funding_abandonment_not_reconciled')
                             continue
                         expected_count = _abandonment_count(proof, event, record,
-                                _budget(previous_budgets, proof['key'] + ':kit'), fresh, active_kit)
+                                _budget(previous_budgets, proof['key'] + ':kit'), fresh, active_kit, active_step)
                         if expected_count is None:
                             issues.add('solid_funding_abandonment_trigger_unproven')
                         elif count != expected_count:
@@ -523,7 +560,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     and record.get('action') == 'observe' and record.get('verified') is False
                     and previous_pending is None and record.get('pending') is None
                     and record.get('attempt') is None and active_step is not None
-                    and not _kit_step(active_step).satisfied(GameSnapshot(**record['after_state'])))
+                    and _failed_precondition(active_step, record))
                 if budget is None or budget >= 2:
                     issues.add('solid_funding_retained_budget_exhausted')
                 if budget != prior_budget and not failed_once:
@@ -556,9 +593,18 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
             elif (active_kit and record.get('verified') is True and active_step is not None
                   and _kit_step(active_step).satisfied(GameSnapshot(**record['after_state']))):
                 active_kit = False
+        final_events = _funding_events(final.get('history', []))
+        if not _same(final.get('history', [])[-8:], rows[-1].get('history', [])):
+            issues.add('solid_funding_final_history_record_mismatch')
+        for event in final_events:
+            _validate_transition(event, 0, final['last_tick'], intents)
+            if hashlib.sha256(_encoded(event)).digest() not in seen:
+                issues.add('solid_funding_final_history_unobserved')
+        if not _initial_history_state(final_events, final.get('solid_funding')):
+            issues.add('solid_funding_final_history_mismatch')
         if not _same(working, final.get('solid_funding')) or not _same(
                 rows[-1].get('solid_funding'), final.get('solid_funding')):
             issues.add('solid_funding_final_checkpoint_mismatch')
-    except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError, IndexError):
         issues.add('solid_funding_evidence_invalid')
     return sorted(issues)

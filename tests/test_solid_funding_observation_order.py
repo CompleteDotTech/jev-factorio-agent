@@ -161,6 +161,7 @@ def test_initially_unbound_project_can_be_abandoned_at_observation(missing):
         routes.pop(initial['solid_funding']['route'])
     else:
         routes[initial['solid_funding']['route']]['layout'] = 'replacement-layout'
+    data[3]['history'] = deepcopy(records[-1]['history'])
     result = analyze_rows(*data)
     assert result['measurement_checks_passed'], result['issues']
 
@@ -176,5 +177,6 @@ def test_abandonment_may_follow_an_intermediate_pre_dispatch_observation():
         record['solid_funding']['deadline_tick'] = deadline
     data[0][3]['history'][0]['funding']['deadline_tick'] = deadline
     for record in data[0][4:]: record['history'] = deepcopy(data[0][3]['history'])
+    data[3]['history'] = deepcopy(data[0][-1]['history'])
     result = analyze_rows(*data)
     assert result['measurement_checks_passed'], result['issues']

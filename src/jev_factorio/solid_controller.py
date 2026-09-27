@@ -252,7 +252,12 @@ class SolidRouteMixin:
                 raise ValueError("Solid kit action budget exhausted")
             state["actions"] += 1
         self.memory.event("solid_kit_committed", key=plan.id, tick=snapshot.tick,
-                          funding=deepcopy(self.memory.solid_funding), step=asdict(plan.steps[0]))
+                          funding=deepcopy(self.memory.solid_funding), step=asdict(plan.steps[0]),
+                          acquisition=deepcopy({
+                              "catalog": solid_funding.catalog_evidence(row, snapshot, self.catalog),
+                              "reserved": self._solid_reservations(),
+                              "technologies": {name: value for name, value in self.catalog.technologies.items()
+                                  if name in (snapshot.researched or [])}}))
         # The ordinary plan-commit save follows before fresh observation and the
         # prepared mutation save. No asynchronous or new durability path exists.
 

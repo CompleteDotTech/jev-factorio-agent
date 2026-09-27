@@ -1,6 +1,7 @@
 """Synthetic funding/acceptance composition; never Factorio or provider evidence."""
 from copy import deepcopy
 from dataclasses import asdict
+from functools import lru_cache
 
 import pytest
 
@@ -9,6 +10,7 @@ from solid_routes_fixtures import fixture, row as route_row, SOURCE, TARGET
 from jev_factorio.integration_evidence import analyze_rows
 from jev_factorio.judgments import Decision
 from jev_factorio.skills import Step
+from jev_factorio.state import GameSnapshot
 from jev_factorio.planning import solid_funding
 from test_solid_kit_acquisition import kit_loop
 
@@ -36,7 +38,8 @@ def funded_evidence():
         step['position']['y'] += 60
     intent = solid_funding.intent(route)
     trial['solid_intents'].append(deepcopy(intent))
-    funding = solid_funding.start(route, {'catalog_sha256': '1' * 64}, initial['last_tick'])
+    from test_solid_investment import catalog
+    funding = solid_funding.start(route, {'catalog_sha256': solid_funding.catalog_digest(route, base, catalog())}, initial['last_tick'])
     for cp in (initial, final):
         cp['solid_intents'].append(deepcopy(intent))
         cp['solid_funding'] = deepcopy(funding)
@@ -44,6 +47,7 @@ def funded_evidence():
         record['acceptance_configuration']['solid_science_policy'] = True
         record.update(solid_funding_schema=1, solid_funding=deepcopy(funding), history=[])
         for label in ('state', 'after_state'):
+            record[label]['inventory'].update({'iron-plate': 200, 'copper-plate': 100, 'transport-belt': 0})
             factory = record[label]['factory']
             factory['entities'].update(deepcopy(entities))
             factory['solid_routes']['routes'][route['route']] = deepcopy(route)
@@ -52,10 +56,23 @@ def funded_evidence():
     return rows, trial, initial, final
 
 
+@lru_cache(maxsize=1)
+def acquisition_fixture():
+    from test_solid_investment import catalog
+    records, _, initial, _ = funded_evidence()
+    snapshot = GameSnapshot(**records[0]['state'])
+    row = snapshot.factory['solid_routes']['routes'][initial['solid_funding']['route']]
+    data = catalog()
+    plan, _ = solid_funding.acquire(row, snapshot, data)
+    return asdict(plan.steps[0]), {'catalog': solid_funding.catalog_evidence(row, snapshot, data),
+                                 'reserved': {}, 'technologies': {}}
+
+
 def event(kind, funding, tick, **extras):
     if kind == 'solid_kit_committed':
-        extras.setdefault('step', asdict(Step('factory_craft', 'inventory', 'iron-gear-wheel', 1,
-            costs={'iron-plate': 2}, parameters={'recipe': 'iron-gear-wheel', 'batches': 1})))
+        step, acquisition = acquisition_fixture()
+        extras.setdefault('step', deepcopy(step))
+        extras.setdefault('acquisition', deepcopy(acquisition))
     return {'kind': kind, 'key': funding['key'] + ('' if kind == 'solid_kit_paid_handoff' else ':kit'),
             'tick': tick, 'funding': deepcopy(funding), **extras}
 
@@ -88,6 +105,7 @@ def close_funding(data, index=3, kind='solid_kit_abandoned'):
             record['failure_budgets'][funding['key'] + ':kit'] = 2
     final['solid_funding'] = None
     final['failures'] = deepcopy(rows[-1]['failure_budgets'])
+    final['history'] = deepcopy(rows[-1]['history'])
 
 
 def assert_rejected(data):
@@ -125,6 +143,7 @@ def test_initial_funding_paid_handoff_has_exact_observed_ownership():
         record.update(solid_funding_schema=1, solid_funding=None, history=[])
     rows[0]['history'] = [event('solid_kit_paid_handoff', funding, initial['last_tick'])]
     for record in rows[1:]: record['history'] = deepcopy(rows[0]['history'])
+    final['history'] = deepcopy(rows[-1]['history'])
     result = analyze_rows(rows, trial, initial, final)
     assert result['measurement_checks_passed'], result['issues']
 
@@ -148,6 +167,7 @@ def test_transient_funding_can_be_committed_then_abandoned_in_one_record():
         record['failure_budgets'][funding['key'] + ':kit'] = 3
         record['history'] = deepcopy(rows[3]['history'])
     final['failures'] = deepcopy(rows[-1]['failure_budgets'])
+    final['history'] = deepcopy(rows[-1]['history'])
     result = analyze_rows(*data)
     assert result['measurement_checks_passed'], result['issues']
 
@@ -295,6 +315,7 @@ def test_commit_increment_needs_an_exact_new_proof_and_retains_identity():
         record['solid_funding'] = deepcopy(next_state)
         record['history'] = deepcopy(rows[3]['history'])
     final['solid_funding'] = deepcopy(next_state)
+    final['history'] = deepcopy(rows[-1]['history'])
     result = analyze_rows(*data)
     assert result['measurement_checks_passed'], result['issues']
     rows[3]['history'] = []
@@ -458,5 +479,6 @@ def test_repeated_history_commit_does_not_consume_current_record_commit_limit():
         record['history'] = deepcopy(history)
         record['solid_funding'] = deepcopy(new)
     final['solid_funding'] = deepcopy(new)
+    final['history'] = deepcopy(rows[-1]['history'])
     result = analyze_rows(*data)
     assert result['measurement_checks_passed'], result['issues']

@@ -54,10 +54,13 @@ def test_real_first_failed_precondition_retains_funding(tmp_path, change):
     loop, backend = kit_loop(tmp_path)
     loop._observe()
     initial = asdict(loop.memory)
-    # Inject a changed admission result at the real pre-dispatch boundary;
-    # _fail_plan, history, counters and checkpoint ownership remain production.
-    allowed = loop._step_allowed
-    loop._step_allowed = lambda step, snapshot: False if backend.observations >= 3 else allowed(step, snapshot)
+    # Remove selected input at the fresh observation; admission, failure,
+    # counters and ownership all remain production behavior.
+    def lose_input():
+        if backend.observations == 3:
+            step = loop.memory.active_plan['steps'][0]
+            backend.state.inventory[next(iter(step['costs']))] = 0
+    backend.before_observe = lose_input
     record = loop.step()
     final = asdict(loop.memory)
     assert record['action'] == 'observe' and not record['verified']

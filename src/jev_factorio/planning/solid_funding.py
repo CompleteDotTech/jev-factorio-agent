@@ -67,11 +67,15 @@ def intent(row: dict) -> dict:
 
 
 def catalog_digest(row: dict, snapshot: GameSnapshot, catalog: Catalog) -> str:
+    return digest(catalog_evidence(row, snapshot, catalog))
+
+
+def catalog_evidence(row: dict, snapshot: GameSnapshot, catalog: Catalog) -> dict:
     bill = catalog.material_demands(routes.remaining(row), {}, snapshot.researched or [])
     if len(bill.batches) > MAX_EXPANSIONS:
         raise ValueError('Kit catalog graph exceeds bound')
-    return digest({'recipes': {name: catalog.recipes[name] for name in sorted(bill.batches)},
-                   'hand_categories': catalog.hand_categories, 'version': catalog.version})
+    return {'recipes': {name: catalog.recipes[name] for name in sorted(bill.batches)},
+            'hand_categories': catalog.hand_categories, 'version': catalog.version}
 
 
 def _positive(value: object) -> bool:
