@@ -25,6 +25,18 @@ def _quantity(value):
     return math.floor(value)
 
 
+def coal_capacity(value) -> int | None:
+    """Optional current native hint; never an inventory reservation or permission."""
+    if value is None:
+        return None
+    if not isinstance(value, dict) or len(value) > 4096:
+        raise ValueError('Invalid coal capacity map')
+    result = value.get('coal')
+    if result is not None and (type(result) is not int or not 0 <= result <= 2**53 - 1):
+        raise ValueError('Invalid coal capacity')
+    return result
+
+
 def service_plan(planner, primary: str, source: str, path, acquire):
     """One receipt-verified action; recompute the group after every observation.
 
@@ -49,7 +61,7 @@ def service_plan(planner, primary: str, source: str, path, acquire):
         if needed > 0 and _quantity(ready) < needed and row.get('state') != 'fault':
             requested.add(name)
 
-    due, observed = {}, {}
+    due, observed, full_units = {}, {}, set()
     deferred = Counter()
     failures = getattr(snapshot, '_planner_failure_budgets', {})
     def add(role):
@@ -59,7 +71,8 @@ def service_plan(planner, primary: str, source: str, path, acquire):
             raise ValueError('Fuel consumer has no native identity')
         current = _quantity(machine.get('fuel', {}).get('coal', 0))
         name = machine.get('name', '')
-        identity = (name, current, position(machine.get('position')))
+        insertable = coal_capacity(machine.get('fuel_insertable'))
+        identity = (name, current, position(machine.get('position')), insertable)
         if unit in observed and observed[unit] != identity:
             raise ValueError('Aliased fuel observations disagree')
         observed[unit] = identity
@@ -67,8 +80,17 @@ def service_plan(planner, primary: str, source: str, path, acquire):
             return
         if current >= 2:
             return
+        if insertable == 0:
+            if role == primary:
+                raise ValueError('Fuel primary destination has no observed capacity')
+            # Multiple role aliases of one full burner are one deferred visit.
+            if unit not in full_units:
+                deferred['destination_capacity'] += 1
+                full_units.add(unit)
+            return
+        deficit = 5 - current if insertable is None else min(5 - current, insertable)
         proposal = {'role': role, 'unit_number': unit, 'fuel': current,
-                    'target': 5, 'deficit': 5-current}
+                    'target': current + deficit, 'deficit': deficit, 'insertable': insertable}
         old = due.get(unit)
         # Preserve the requested endpoint's identity when it has an alias.
         if old is None or role == primary:
@@ -141,9 +163,7 @@ def service_plan(planner, primary: str, source: str, path, acquire):
     spendable = min(carried, _quantity(planner.ledger.carried.get('coal', 0)))
     reserved = carried-spendable
     target = min(MAX_COAL_TARGET, deficit)
-    capacity = snapshot.factory.get('inventory_insertable', {}).get('coal')
-    if capacity is not None:
-        capacity = _quantity(capacity)
+    capacity = coal_capacity(snapshot.factory.get('inventory_insertable'))
     coal_site = position(snapshot.factory.get('fair_resource_targets', {}).get('coal', {}).get('position'))
     travel = None
     if origin is not None and coal_site is not None:
@@ -204,11 +224,12 @@ def service_plan(planner, primary: str, source: str, path, acquire):
             raise ValueError('Fuel acquisition did not produce a safe prerequisite')
     return replace(plan, materials={**(plan.materials or {}), 'fuel_service': {
         'schema': 2, 'observed_tick': snapshot.tick, 'consumer_count': len(consumers),
-        'consumers': [{key: row[key] for key in ('role','fuel','target','deficit')} for row in consumers],
+        'consumers': [{key: row[key] for key in ('role','fuel','target','deficit','insertable')} for row in consumers],
         'combined_deficit': deficit, 'acquisition_target': target,
         'acquisition_performed_by_this_plan': plan.steps[0].action == 'factory_gather',
         'carried_spendable': spendable, 'carried_held': reserved,
         'inventory_insertable': capacity, 'reserve': reserve,
+        'capacity_basis': 'fresh_native_basic_inventory_hint_when_available_not_action_permission',
         'reserve_basis': reserve_basis,
         'max_reserve': MAX_RESERVE, 'deferred': dict(deferred),
         'visit_order_basis': 'required_primary_then_bounded_nearest_neighbor_not_path_proof',

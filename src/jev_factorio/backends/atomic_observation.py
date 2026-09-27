@@ -48,6 +48,15 @@ def _inventory(value: Any) -> dict[str, int]:
     return dict(result)
 
 
+def _capacity(value: Any) -> dict:
+    result = _map(value, 'capacity')
+    for item, quantity in result.items():
+        if not isinstance(item, str) or not item or len(item) > 128:
+            raise ValueError('Invalid atomic capacity item')
+        _integer(quantity, 'capacity')
+    return dict(result)
+
+
 def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
     """Read and validate one v2 snapshot before exposing any of its native facts."""
     from fle.env import Position
@@ -105,6 +114,11 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
             raise ValueError('Atomic runtime identity changed')
     for key in ('entities', 'receipts'):
         factory[key] = _map(factory.get(key), key)
+    if 'inventory_insertable' in factory:
+        factory['inventory_insertable'] = _capacity(factory['inventory_insertable'])
+    for entity in factory['entities'].values():
+        if isinstance(entity, dict) and 'fuel_insertable' in entity:
+            entity['fuel_insertable'] = _capacity(entity['fuel_insertable'])
     researched = factory.get('researched')
     if (not isinstance(researched, list) or len(researched) > 4096
             or any(not isinstance(v, str) or not v or len(v) > 128 for v in researched)):

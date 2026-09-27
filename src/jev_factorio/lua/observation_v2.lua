@@ -30,6 +30,45 @@ local function contents(inv)
     end
     return result
 end
+-- Optional basic-inventory advisory reads. Unsupported APIs stay unknown;
+-- malformed successful replies invalidate this observation. No capacity hint is
+-- cached, reserves material, or replaces the fresh native transfer precondition.
+local function coal_capacity(inv)
+    if not inv or inv.valid == false then return nil end
+    local ok, amount=pcall(function()
+        return inv.get_insertable_count{name="coal",quality="normal"}
+    end)
+    if not ok then return nil end
+    assert(integer(amount,0,9007199254740991),"Invalid native coal capacity")
+    return {coal=amount}
+end
+local function fuel_capacities(factory, player, main_inventory)
+    factory.inventory_insertable=coal_capacity(main_inventory)
+    local roles={}
+    for role, row in pairs(factory.entities or {}) do
+        row.fuel_insertable=nil -- never pass through a stale wrapper hint
+        if row.name=="burner-inserter" or row.name=="burner-mining-drill" then
+            roles[#roles+1]=role
+        end
+    end
+    table.sort(roles)
+    local seen, observed={},{}
+    local count=0
+    for _, role in ipairs(roles) do
+        local row=factory.entities[role]
+        local entity=campaign.entities and campaign.entities[role]
+        if entity and entity.valid and entity.name==row.name and entity.unit_number==row.unit_number
+            and entity.surface.index==player.surface.index and entity.force.index==player.force.index then
+            local unit=entity.unit_number
+            if not seen[unit] and count<16 then
+                seen[unit]=true;count=count+1
+                observed[unit]=coal_capacity(entity.get_fuel_inventory())
+            end
+            -- Native identities deduplicate role aliases, including unknowns.
+            row.fuel_insertable=observed[unit]
+        end
+    end
+end
 local function profiler()
     if helpers.create_profiler then return helpers.create_profiler() end
     if game.create_profiler then return game.create_profiler() end
@@ -118,7 +157,9 @@ campaign.observation_snapshot_v2=function(generation,expected_drill)
     local tick=game.tick
     local timer=profiler()
     local factory=campaign.observe() -- all installed capability wrappers, never cached
-    local inventory=contents(player.get_main_inventory())
+    local main_inventory=player.get_main_inventory()
+    local inventory=contents(main_inventory)
+    fuel_capacities(factory,player,main_inventory)
     local initial=bootstrap(player,expected_drill)
     finish(timer,"campaign_snapshot")
     local radius=factory.exploration_radius
