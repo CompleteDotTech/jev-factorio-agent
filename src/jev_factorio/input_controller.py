@@ -128,8 +128,8 @@ def input_loop_type(base):
         input_commitments: dict = field(default_factory=dict)
 
         @classmethod
-        def load(cls, path, session_id, target):
-            memory = super().load(path, session_id, target)
+        def _from_data(cls, data, session_id, target):
+            memory = super()._from_data(data, session_id, target)
             if (type(memory.input_routes_schema) is not int or memory.input_routes_schema != 1
                     or not isinstance(memory.input_commitments, dict)
                     or len(memory.input_commitments) > (4 if hasattr(memory, "successor_schema") else 2)):

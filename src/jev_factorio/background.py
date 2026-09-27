@@ -26,8 +26,8 @@ class BackgroundMemory(CampaignMemory):
     background_attempt: dict | None = None
 
     @classmethod
-    def load(cls, path: Path, session_id: str, target: str) -> BackgroundMemory:
-        memory = super().load(path, session_id, target)
+    def _from_data(cls, data: dict, session_id: str, target: str) -> BackgroundMemory:
+        memory = super()._from_data(data, session_id, target)
         if type(memory.background_schema) is not int or memory.background_schema not in {1, 2}:
             raise ValueError("Unsupported background checkpoint extension")
         if memory.background_schema == 1:

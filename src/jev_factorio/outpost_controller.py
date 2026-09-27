@@ -110,13 +110,14 @@ def outpost_loop_type(base):
         outpost_commitments: dict = field(default_factory=dict)
 
         @classmethod
-        def load(cls, path, session_id, target):
-            data = json.loads(path.read_text(encoding='utf-8'))
+        def _from_data(cls, data, session_id, target):
+            if not isinstance(data, dict):
+                raise ValueError('Invalid mining-outpost checkpoint')
             keys = {'outposts_schema', 'outpost_commitments'}
             legacy = not keys.intersection(data)
             if not legacy and not keys <= data.keys():
                 raise ValueError('Incomplete mining-outpost checkpoint extension')
-            memory = super().load(path, session_id, target)
+            memory = super()._from_data(data, session_id, target)
             if legacy:
                 if (memory.status != 'running' or memory.active_plan or memory.pending or memory.reservations
                         or getattr(memory, 'background_job', None)):

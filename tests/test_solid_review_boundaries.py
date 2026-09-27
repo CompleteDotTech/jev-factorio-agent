@@ -139,12 +139,12 @@ def test_unbound_fault_allowance_cannot_authorize_other_invalid_states(tmp_path,
 def test_checkpoint_changed_during_preflight_never_attaches_backend(tmp_path, monkeypatch):
     backend = Backend(); loop = controller(backend, tmp_path)
     loop.memory.active_goal = "rocket_launch"; loop._observe()
-    original = Loop.memory_type.load
-    def changing(cls, path, session, target):
-        memory = original(path, session, target)
-        path.write_bytes(path.read_bytes() + b" ")
+    original = Loop.memory_type.from_bytes
+    def changing(cls, raw, session, target):
+        memory = original(raw, session, target)
+        backend.checkpoint.write_bytes(raw + b" ")
         return memory
-    monkeypatch.setattr(Loop.memory_type, "load", classmethod(changing))
+    monkeypatch.setattr(Loop.memory_type, "from_bytes", classmethod(changing))
     spy = AttachmentSpy()
     with pytest.raises(ValueError, match="changed"):
         resume(spy, backend.checkpoint)
