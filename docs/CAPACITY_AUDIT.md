@@ -166,3 +166,23 @@ These corrections do not implement or qualify the separately reported detailed
 host-audit continuation, perform active/persistent libvirt readback, or finish
 #97/#92 operational acceptance. Keep those source and infrastructure-owner gates
 separate from this bounded correction to the merged audit API.
+
+## Directory continuity within each sample
+
+Each level's directory identity is read before and after its quota, accounting,
+cpuset and memory files. Both reads must identify the same directory. Missing
+metadata, observed removal/replacement or symlink substitution invalidates that
+whole level: its identity, quotas, counters, cpuset and memory values become
+unknown. Mixed values cannot contribute a capacity ceiling or a measured counter
+delta. Independently validated ancestor levels remain available, while the
+visible quota hierarchy is marked incomplete.
+
+These local device/inode checks are not an atomic snapshot or a lock. They do
+not detect a replacement that returns to the original identity between checks,
+prove that settings remained constant, or attest a remote host. Sequential-read
+and host-capacity limitations still apply. No host or game state is changed.
+
+`tests/test_capacity_sample_identity.py` uses private filesystem fixtures to
+replace, remove or substitute a symlink at every level-file read boundary; it
+also covers unavailable directory metadata and unchanged-directory controls.
+Run it with the two existing capacity-audit suites before publication.

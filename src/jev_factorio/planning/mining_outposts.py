@@ -78,7 +78,7 @@ class MiningOutpostPlanner(InputRoutePlanner):
         if row['remaining'] and drill.get('fuel', {}).get('coal', 0) < 2:
             self._buffer_service = True
             from .fuel_service import service_plan
-            return service_plan(self, role(item, 'drill'), RESOURCES[item], path, self._acquire_outpost)
+            return service_plan(self, role(item, 'drill'), None, path, self._acquire_outpost)
         if not commissioned:
             self._buffer_service = True
             return self._wait('outpost_flow', row['layout'], 3, item, timeout=3600,
