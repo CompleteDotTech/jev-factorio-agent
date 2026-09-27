@@ -186,3 +186,54 @@ and host-capacity limitations still apply. No host or game state is changed.
 replace, remove or substitute a symlink at every level-file read boundary; it
 also covers unavailable directory metadata and unchanged-directory controls.
 Run it with the two existing capacity-audit suites before publication.
+
+## Target membership continuity (source follow-up, native acceptance pending)
+
+A stable cgroup directory does not prove that the selected process remained in
+that cgroup while its files were sampled. The reader now brackets the complete
+sample with two bounded reads of the selected process's unified-v2 membership.
+There must be exactly one live, absolute v2 membership without control characters
+or out-of-namespace parent traversal. Missing, duplicate, malformed or deleted
+membership is unavailable, not evidence of an unlimited host or a root binding.
+
+With automatic leaf discovery, an observed change or unavailable membership
+invalidates all target-derived hierarchy levels and the sampled affinity. System
+memory, CPU, PSI and VM counters remain independently available. This prevents an
+old cgroup's ceiling being combined with a later process-affinity observation.
+With an explicit `--leaf`, its independently validated cgroup rows remain usable,
+but affinity is excluded unless both membership reads match that selected leaf.
+`capacity.scope` labels such unmatched explicit data
+`explicit_cgroup_not_bound_to_target`: its upper bound belongs to the selected
+cgroup, **not a verified claim about the selected process**. Existing per-level
+inode/boot/counter-continuity checks remain in force.
+
+`target_binding` publishes only bounded state and selection labels, never the
+membership path. `observed_stable` means only that the two membership reads
+agreed; it does not prove a single-tick snapshot, stable quota/affinity throughout
+the interval, absence of an unseen move-and-return, or PID reuse protection.
+`pid_reuse_checked` stays false. Legacy samples retain their numerical fields
+with `legacy_target_binding_unverified`; no missing binding is reported as a
+measured zero or a newly verified process. Unknown bindings must not be used as
+an acceptance pass by a consuming report.
+
+The change adds exactly one membership-file read per new sample. There is no
+retry loop, hierarchy scan, host write, controller/game call or change to quota
+proposal arithmetic, authoritative checkpoint state, or campaign treatment.
+The implementation is a read-only measurement correction, not capacity
+remediation or a native performance result. Reconcile with any separate
+host-audit continuation before publishing the shared module.
+
+Reproduce with temporary proc/cgroup fixture files:
+
+```sh
+PYTHONPATH=src:tests python -m pytest \
+  tests/test_capacity_target_membership.py tests/test_capacity_audit.py \
+  tests/test_capacity_audit_integrity.py tests/test_capacity_sample_identity.py -q
+```
+
+The kernel's cgroup-v2 documentation describes both process migration and the
+`0::$PATH` membership format, including namespace-relative parent traversal and
+deleted memberships: <https://docs.kernel.org/admin-guide/cgroup-v2.html>.
+No process migration is performed by these tests; only disposable fixture files
+are changed at known read boundaries. Repeat the actual controller/host audit
+through the existing operational owner for #97/#92 acceptance.

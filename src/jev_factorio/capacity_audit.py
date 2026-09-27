@@ -167,6 +167,22 @@ def _directory_identity(path: Path) -> tuple[int, int] | None:
     return (info.st_dev, info.st_ino) if stat.S_ISDIR(info.st_mode) else None
 
 
+def _unified_membership(text: str | None) -> str | None:
+    """Parse one live v2 membership without retaining a public identifying path."""
+    if text is None:
+        return None
+    rows = [line for line in text.split('\n') if line.startswith('0:')]
+    if len(rows) != 1 or not rows[0].startswith('0::/'):
+        return None
+    member = rows[0][3:]
+    # An out-of-namespace/deleted/ambiguous membership is not a root binding.
+    # The explicit --leaf path can still be audited independently of the PID.
+    if (member.endswith(' (deleted)') or '..' in member.split('/')
+            or any(ord(char) < 32 or ord(char) == 127 for char in member)):
+        return None
+    return member
+
+
 def read_sample(*, proc_root: Path = Path('/proc'), cgroup_root: Path = Path('/sys/fs/cgroup'),
                 pid: str = 'self', leaf: Path | None = None) -> dict:
     if pid != 'self' and (not isinstance(pid, str) or not re.fullmatch(r'[1-9][0-9]{0,9}', pid)):
@@ -174,11 +190,11 @@ def read_sample(*, proc_root: Path = Path('/proc'), cgroup_root: Path = Path('/s
     began = time.monotonic_ns()
     proc_root, cgroup_root = Path(proc_root), Path(cgroup_root).resolve()
     process = proc_root / pid
-    membership = _text(process / 'cgroup')
-    if leaf is None and membership is not None:
-        candidates = [line[3:] for line in membership.splitlines() if line.startswith('0::')]
-        if len(candidates) == 1 and candidates[0].startswith('/'):
-            leaf = cgroup_root / candidates[0].lstrip('/')
+    explicit_leaf = leaf is not None
+    membership = _unified_membership(_text(process / 'cgroup'))
+    member_leaf = cgroup_root / membership.lstrip('/') if membership is not None else None
+    if not explicit_leaf:
+        leaf = member_leaf
     levels = []
     if leaf is not None:
         leaf = Path(leaf)
@@ -226,6 +242,25 @@ def read_sample(*, proc_root: Path = Path('/proc'), cgroup_root: Path = Path('/s
         sample['page_size_bytes'] = os.sysconf('SC_PAGE_SIZE')
     except (OSError, ValueError):
         sample['page_size_bytes'] = None
+    # Bracket the complete sequential sample, not just individual cgroup files.
+    # Stable directory inodes do not prove that the selected PID stayed in them.
+    final_membership = _unified_membership(_text(process / 'cgroup'))
+    if membership is None or final_membership is None:
+        binding_state = 'unknown'
+    elif membership != final_membership:
+        binding_state = 'changed'
+    elif explicit_leaf and member_leaf != leaf:
+        binding_state = 'explicit_unbound'
+    else:
+        binding_state = 'observed_stable'
+    if binding_state != 'observed_stable':
+        sample['affinity'] = None
+        if not explicit_leaf:
+            sample['levels'] = []
+    sample['target_binding'] = {'state': binding_state,
+        'selection': 'explicit_leaf' if explicit_leaf else 'automatic',
+        'pid_reuse_checked': False,
+        'semantics': 'two_membership_reads_not_atomic_no_PID_reuse_check'}
     sample['ended_ns'] = time.monotonic_ns()
     return sample
 
@@ -293,9 +328,33 @@ def compare_samples(before: dict, after: dict) -> dict:
             (before['pressure'].get(resource) or {}).get(kind, {}).get('total_usec'),
             (after['pressure'].get(resource) or {}).get(kind, {}).get('total_usec'), same_epoch=boot_same)
             for kind in ('some', 'full')}
+    raw_binding = after.get('target_binding')
+    raw_binding = raw_binding if isinstance(raw_binding, dict) else {}
+    state = raw_binding.get('state')
+    selection = raw_binding.get('selection')
+    if (selection not in ('automatic', 'explicit_leaf')
+            or state == 'explicit_unbound' and selection != 'explicit_leaf'):
+        state = 'unknown'
+    # The report emits only this bounded vocabulary, never the private path or
+    # arbitrary additive input metadata. Old samples have no verified binding.
+    target_binding = {
+        'state': state if state in ('observed_stable', 'changed', 'unknown', 'explicit_unbound') else 'unknown',
+        'selection': selection if selection in ('automatic', 'explicit_leaf') else 'legacy',
+        'pid_reuse_checked': False,
+        'semantics': 'two_membership_reads_not_atomic_no_PID_reuse_check'
+                    if raw_binding else 'legacy_target_binding_unverified'}
+    if target_binding.get('state') == 'observed_stable':
+        capacity_scope = 'observed_target_membership'
+    elif target_binding.get('selection') == 'explicit_leaf':
+        capacity_scope = 'explicit_cgroup_not_bound_to_target'
+    elif target_binding.get('selection') == 'legacy':
+        capacity_scope = 'legacy_target_binding_unverified'
+    else:
+        capacity_scope = 'target_binding_unavailable'
     return {'schema': 1, 'elapsed_ns': elapsed, 'clock': 'monotonic_ns',
+        'target_binding': dict(target_binding),
         'sampling_scope': 'sequential_local_reads_not_atomic_or_cross_host_aligned',
-        'capacity': {'visible_cpu_quota_ceiling': ceiling,
+        'capacity': {'scope': capacity_scope, 'visible_cpu_quota_ceiling': ceiling,
             'restricting_quota_levels': [level for value, level in limits if value == ceiling],
             'visible_quota_hierarchy_complete': bool(levels) and all(row['cpu_max']['state'] != 'unknown' for row in levels),
             'visible_cpu_capacity_upper_bound': min(upper_bounds) if upper_bounds else None,
