@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -173,13 +174,44 @@ def test_nonpassing_junit_rejected(tmp_path, attributes):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process-group cleanup")
-def test_suite_timeout_kills_only_owned_group_including_child(tmp_path):
+@pytest.mark.parametrize("startup_delay", [0, 1.1])
+def test_suite_timeout_kills_only_owned_group_including_child(tmp_path, monkeypatch, startup_delay):
     pidfile = tmp_path / "child.pid"
     script = ("import subprocess,sys,time; from pathlib import Path; "
+              "time.sleep(float(sys.argv[2])); "
               "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
               "Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(60)")
+    real_popen = subprocess.Popen
+
+    def ready_popen(*args, **kwargs):
+        # The test concerns group termination, not Python startup scheduling.
+        # Start the production timeout only after this fixture's child exists.
+        process = real_popen(*args, **kwargs)
+        deadline = time.monotonic() + 10
+        try:
+            while True:
+                try:
+                    child_pid = int(pidfile.read_text())
+                    assert child_pid > 0
+                    break
+                except (FileNotFoundError, ValueError):
+                    assert process.poll() is None, "Fixture exited before child readiness"
+                    assert time.monotonic() < deadline, "Fixture child readiness timed out"
+                    time.sleep(0.01)
+        except BaseException:
+            # execute_suite has not received the process yet. Clean only the
+            # session this factory created, even when fixture startup fails.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=10)
+            raise
+        return process
+
+    monkeypatch.setattr(p.subprocess, "Popen", ready_popen)
     with pytest.raises(subprocess.TimeoutExpired):
-        p.execute_suite([sys.executable, "-c", script, str(pidfile)], timeout=1,
+        p.execute_suite([sys.executable, "-c", script, str(pidfile), str(startup_delay)], timeout=1,
                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL)
     child_pid = int(pidfile.read_text())

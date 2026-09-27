@@ -17,12 +17,30 @@ threshold. This source delivery does not deploy a controller, change host
 capacity, or establish native acceptance. Deployment and campaign evidence
 must be collected separately through the existing operational workflow.
 
+## Grouped-fuel follow-on after PR #108
+
+PR #108 merged the earlier packet as
+`294f59bfe5496595a0670a4997a505a4b19bbf54`. Its SSH-signed integration,
+alias regression and bounded cleanup-test correction remain intact. The
+follow-on described here extends #99; it does not reintroduce the earlier
+cumulative packet or claim its merged work as new.
+
+Three controlled regressions still reproduced on that merged baseline: known
+distant optional burners and exhausted optional/primary transfer plans could
+still expand fuel acquisition. The follow-on corrects those bounds, adds an
+identity-bound inventory-depletion proxy for bounded estimated-lead reserves,
+and keeps site-level acquisition failures authoritative across quantity changes.
+Forty-one additional cases cover these paths, uncertainty, deadlines and restart.
+See [the grouped fuel policy](GROUPED_FUEL_POLICY.md) for the exact contract.
+Independent review, signed publication, exact-head CI and native acceptance of
+this follow-on are separate from the completed PR #108 integration.
+
 ## Local changes and integration order
 
 | Issue | Packet changes | Explicitly unfinished |
 | --- | --- | --- |
 | #98 | Remove exclusive global input/output burner overrides; collect ready owned output before refilling upstream; preserve required-producer and boiler service. | Native science/research acceptance. |
-| #99 | Aggregate due small-burner deficits by native identity; preserve reserved coal; one sequential service action per fresh decision; capacity restriction when present. | Measured burn-rate reserve, comprehensive distant/unreachable service grouping, native capacity telemetry and trip/throughput validation. |
+| #99 | Aggregate due small-burner deficits by native identity; preserve held coal; bound optional visits/reserves; observation-only depletion proxy; retain site-level failure history; sequential fresh decisions. | Native capacity/path and true consumption/trip/throughput evidence; independent publication and full acceptance of the follow-on. |
 | #93 | Compile using the effective composed planner once; avoid replacing/recompiling its candidates; lazy distinct capital planning. | Broader matched native planning/decision measurements. |
 | #95 | Reuse a detached successful checkpoint capture only for exactly equal typed state and an unchanged on-disk stamp. Changed state retains synchronous durable writes. | Full causal-log serialization optimization and production latency measurement. |
 | #96 | Nested observation wall/process-CPU partition, separate trace operation/capture/emission counters, checkpoint copy counts, sanitized bounded quantile report. | Low-level opaque FLE transport/retry decomposition, complete record/sleep/iteration partition, fresh native baseline and final metrics. |
@@ -67,8 +85,11 @@ arbitrary full-load constant. After a receipt the next decision replans.
 
 The two-burner fixture has a combined eight-coal deficit rather than repeated
 four-coal acquisitions. This is **manual service**, not automated coal logistics.
-Unknown burn rate yields no invented reserve. Manhattan/catalog-policy lead
-estimates are labeled, not presented as observed travel time. Optional
+Unknown burn rate yields no invented reserve. The follow-on uses a bounded,
+identity-bound inventory-depletion proxy only with sufficient observations; it
+defers optional reserves for science/power deadlines. This proxy is not an
+attributed native consumption counter. Manhattan/catalog-policy lead estimates
+are labeled, not presented as observed travel time. Optional
 `inventory_insertable.coal` bounds acquisition when provided, but this patch does
 not claim the native adapter now supplies that measurement. Full #99 acceptance
 therefore remains unfinished even apart from deployment.

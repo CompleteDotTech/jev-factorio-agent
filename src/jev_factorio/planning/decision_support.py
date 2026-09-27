@@ -159,7 +159,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'research_deadline_tick': min((row['deadline_tick'] for row in schedules
                 if row['item'] in outputs and row['deadline_tick'] is not None), default=None),
             'requires_investment': any(s.action in {'factory_place', 'factory_connect',
-                                      'factory_buffer_build', 'factory_input_build'} for s in plan.steps),
+                                      'factory_buffer_build', 'factory_input_build', 'factory_solid_build'} for s in plan.steps),
             'estimate_basis': 'native_observation_and_catalog_with_declared_policy_heuristics',
         }
     # A nearer bulk pickup of the same currently needed material is not
