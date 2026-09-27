@@ -35,7 +35,9 @@ def commit(loop, plan, snapshot):
     state = loop.memory.capital_investment
     if state is None:
         if (not _available(loop, spec, snapshot) or loop.memory.pending
-                or getattr(loop.memory, 'background_job', None)):
+                or getattr(loop.memory, 'background_job', None)
+                or getattr(loop.memory, 'solid_funding', None) is not None
+                or getattr(loop.memory, 'coal_funding', None) is not None):
             raise ValueError('Cannot start capital commitment at this boundary')
         state = {'spec': deepcopy(spec), 'stage': marker['stage'], 'started_tick': snapshot.tick,
                  'deadline_tick': snapshot.tick + min(capital.MAX_INVESTMENT_TICKS,
@@ -215,6 +217,7 @@ def frontier(loop, snapshot):
             pass  # Never bypass capability guards with a less capable planner.
         return safe, blocker or 'No safe continuation for committed capital investment'
     if (getattr(loop.memory, 'solid_funding', None) is not None
+            or getattr(loop.memory, 'coal_funding', None) is not None
             or _protected_work(snapshot) or not snapshot.factory.get('research')
             or any(p.steps[0].action not in {'factory_wait', 'factory_gather'}
                    and capital.MARKER not in (p.materials or {}) for p in safe)):

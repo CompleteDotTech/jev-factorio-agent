@@ -305,6 +305,17 @@ class CoalSupplyMixin:
                     reason = "kit_catalog_changed"
             except (ValueError, KeyError, TypeError, AttributeError):
                 reason = "kit_catalog_unavailable"
+        if reason is None:
+            try:
+                solid_funding._acquire_bill(
+                    state["kit"], state["key"], snapshot, self.catalog,
+                    reserved=external, job=getattr(self, "_job", lambda: None)(),
+                    failures=self.memory.failures, budget_check=coal_funding.failure_count,
+                    protect_final_stock=True)
+            except solid_funding.KitBudgetExhausted:
+                reason = "kit_acquisition_failure_budget"
+            except (ValueError, KeyError, TypeError, AttributeError):
+                pass  # Temporary stock/queue visibility is not budget exhaustion.
         if reason:
             old = self.memory.failures.get(state["key"], 0)
             self.memory.failures[state["key"]] = max(2, old)

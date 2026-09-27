@@ -140,6 +140,22 @@ def seed_commit(loop, state, plan):
     return loop.memory.capital_investment
 
 
+@pytest.mark.parametrize('owner', ['coal_funding', 'solid_funding'])
+def test_outer_capital_frontier_and_commit_respect_retained_funding(owner):
+    data, state = scenario()
+    loop = make_loop(Backend(data, state), primary=lambda s: wait(data, s))
+    plans, _ = capital_controller.frontier(loop, state)
+    selected = next(p for p in plans if capital.MARKER in (p.materials or {}))
+    retained = {'key': 'retained-funding'}
+    setattr(loop.memory, owner, retained)
+    plans, _ = capital_controller.frontier(loop, state)
+    assert not any(capital.MARKER in (p.materials or {}) for p in plans)
+    with pytest.raises(ValueError, match='Cannot start capital commitment'):
+        capital_controller.commit(loop, selected, state)
+    assert loop.memory.capital_investment is None
+    assert getattr(loop.memory, owner) == retained
+
+
 def wait(data, state):
     return ReadyWorkPlanner(data, state, 'rocket_launch')._wait('research_progress', 'study', 0.1)
 

@@ -215,6 +215,22 @@ def test_unqualified_or_unfundable_proposals_make_no_mutation(tmp_path, change):
     loop = controller(backend, tmp_path)
     _, plans = offers(loop)
     assert not any(funding.MARKER in (p.materials or {}) for p in plans)
+
+
+@pytest.mark.parametrize('mode', ['output', 'craft'])
+@pytest.mark.parametrize('exhausted', [False, True])
+def test_retained_funding_releases_only_proven_acquisition_budget_exhaustion(tmp_path, mode, exhausted):
+    backend = Backend(mode); loop = controller(backend, tmp_path)
+    snapshot, plans = offers(loop)
+    plan = next(p for p in plans if funding.MARKER in (p.materials or {}))
+    loop._commit_solid(plan, snapshot)
+    step = plan.steps[0]
+    key = f"factory:{step.action}:{step.parameters.get('role', step.parameters.get('recipe', ''))}"
+    loop.memory.failures[key] = 2 if exhausted else 1
+    loop._observe()
+    assert (loop.memory.coal_funding is None) == exhausted
+    assert loop.memory.failures[key] == (2 if exhausted else 1)
+    assert loop.memory.status != 'uncertain' and not backend.calls
     assert not backend.calls
 
 
