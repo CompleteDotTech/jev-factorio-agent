@@ -42,6 +42,32 @@ class FairActions:
             raise ValueError("Position must be finite")
         return result
 
+    @staticmethod
+    def _approach_corridors(origin: dict, target: dict) -> list[list[dict]]:
+        """Bound two ordinary walking corridors around a distant obstruction."""
+        dx, dy = target["x"] - origin["x"], target["y"] - origin["y"]
+        if abs(dx) + abs(dy) < 40 or max(abs(dx), abs(dy)) > 120:
+            return []
+        primary, secondary = ("y", "x") if abs(dy) >= abs(dx) else ("x", "y")
+        distance = target[primary] - origin[primary]
+        direction = 1 if distance > 0 else -1
+        toward_origin = 1 if origin[secondary] >= target[secondary] else -1
+        corridors = []
+        for side in (toward_origin, -toward_origin):
+            lane = origin[secondary] + side * 12
+            coordinate = origin[primary] + direction * min(8, abs(distance))
+            points = [{primary: coordinate, secondary: lane}]
+            while abs(target[primary] - coordinate) > 45 and len(points) < 6:
+                coordinate += direction * 20
+                points.append({primary: coordinate, secondary: lane})
+            near = target[primary] - direction * min(8, abs(distance))
+            shoulder = target[secondary] + toward_origin * min(
+                25, max(8, abs(target[secondary] - origin[secondary]) / 2)
+            )
+            points.append({primary: near, secondary: shoulder})
+            corridors.append(points)
+        return corridors
+
     def wait(self, timeout: float = 180) -> dict:
         deadline = time.monotonic() + timeout
         try:
@@ -123,6 +149,18 @@ class FairActions:
             self.move_to(Position(**result))
             return
         expected_unit = "nil" if result.get("unit_number") is None else json.dumps(result["unit_number"])
+
+        def reached_entity() -> bool:
+            return json.loads(self.command(
+                "local player=storage.fair.actor(); local target=helpers.json_to_table("
+                + json.dumps(json.dumps(center)) + "); local entity=player.surface.find_entity("
+                + json.dumps(name) + ",target); "
+                "assert(entity and entity.valid, 'Interaction target is missing'); "
+                "assert(entity.unit_number==" + expected_unit + ", 'Interaction target identity changed'); "
+                "rcon.print(helpers.table_to_json({reachable=player.can_reach_entity(entity)}))"
+            ))["reachable"] is True
+
+        walked = False
         for candidate in result["positions"]:
             try:
                 self.move_to(Position(**candidate))
@@ -130,16 +168,45 @@ class FairActions:
                 if type(error) is not NativePathNotFound:
                     raise
                 continue
-            reached = json.loads(self.command(
-                "local player=storage.fair.actor(); local target=helpers.json_to_table("
-                + json.dumps(json.dumps(center)) + "); local entity=player.surface.find_entity("
-                + json.dumps(name) + ",target); "
-                "assert(entity and entity.valid, 'Interaction target is missing'); "
-                "assert(entity.unit_number==" + expected_unit + ", 'Interaction target identity changed'); "
-                "rcon.print(helpers.table_to_json({reachable=player.can_reach_entity(entity)}))"
-            ))
-            if reached["reachable"] is True:
+            walked = True
+            if reached_entity():
                 return
+        origin = json.loads(self.command(
+            "local p=storage.fair.actor(); "
+            "rcon.print(helpers.table_to_json({x=p.position.x,y=p.position.y}))"
+        ))
+        # Each leg uses begin_move's native collision and no-destruction path.
+        # Bound added travel separately from the direct interaction attempts.
+        corridor_started = time.monotonic()
+        corridor_attempts = 0
+        for corridor in self._approach_corridors(origin, center):
+            for waypoint in corridor:
+                if corridor_attempts >= 8 or time.monotonic() - corridor_started >= 300:
+                    break
+                corridor_attempts += 1
+                try:
+                    self.move_to(Position(**waypoint))
+                except NativePathNotFound as error:
+                    if type(error) is not NativePathNotFound:
+                        raise
+                    break
+                walked = True
+            else:
+                for candidate in result["positions"]:
+                    if corridor_attempts >= 8 or time.monotonic() - corridor_started >= 300:
+                        break
+                    corridor_attempts += 1
+                    try:
+                        self.move_to(Position(**candidate))
+                    except NativePathNotFound as error:
+                        if type(error) is not NativePathNotFound:
+                            raise
+                        continue
+                    walked = True
+                    if reached_entity():
+                        return
+        if walked:
+            raise RuntimeError("Native walking changed position without reaching the interaction target")
         raise NativePathNotFound("No native route to any reachable interaction approach")
 
     def harvest(self, resource: str, position: Any, quantity: int) -> int:
