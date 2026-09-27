@@ -246,11 +246,12 @@ class SolidRouteMixin:
         row = routes.routes(snapshot)[marker["route"]]
         if state is None:
             self.memory.solid_funding = solid_funding.start(row, marker, snapshot.tick)
-            self.memory.event("solid_kit_committed", key=plan.id, tick=snapshot.tick)
         else:
             if state["actions"] >= solid_funding.MAX_ACTIONS:
                 raise ValueError("Solid kit action budget exhausted")
             state["actions"] += 1
+        self.memory.event("solid_kit_committed", key=plan.id, tick=snapshot.tick,
+                          funding=deepcopy(self.memory.solid_funding))
         # The ordinary plan-commit save follows before fresh observation and the
         # prepared mutation save. No asynchronous or new durability path exists.
 
@@ -261,7 +262,8 @@ class SolidRouteMixin:
         solid_funding.validate_state(state, snapshot.tick, self._solid_intents)
         row = routes.routes(snapshot).get(state["route"])
         if row and row["state"] != "proposed" and state["route"] in self.memory.solid_commitments:
-            self.memory.event("solid_kit_paid_handoff", key=state["key"], tick=snapshot.tick)
+            self.memory.event("solid_kit_paid_handoff", key=state["key"], tick=snapshot.tick,
+                              funding=deepcopy(state))
             self.memory.solid_funding = None
             return
         reason = None
@@ -291,18 +293,21 @@ class SolidRouteMixin:
             key = state["key"] + ":kit"
             prior = self.memory.failures.get(key, 0)
             self.memory.failures[key] = max(2, prior)
-            if prior < 2:
-                self.memory.event("solid_kit_abandoned", key=key, reason=reason, tick=snapshot.tick)
             # Keep the funding/active-plan binding together across every save.
             # A fresh observer must not clear a plan the base dispatch path is
             # still inspecting. Its ordinary failed-precondition path clears it.
             if (self.memory.active_plan or {}).get("id") != key:
+                self.memory.event("solid_kit_abandoned", key=key, reason=reason, tick=snapshot.tick,
+                                  funding=deepcopy(state))
                 self.memory.solid_funding = None
 
     def _clear_plan(self):
         super()._clear_plan()
         state = getattr(self.memory, "solid_funding", None)
         if state and self.memory.failures.get(state["key"] + ":kit", 0) >= 2:
+            self.memory.event("solid_kit_abandoned", key=state["key"] + ":kit",
+                              reason="kit_failure_budget", tick=self.memory.last_tick,
+                              funding=deepcopy(state))
             self.memory.solid_funding = None
 
     def _execution_barrier(self, snapshot):
@@ -439,6 +444,7 @@ class SolidRouteMixin:
         return {**super()._record_extras(), "solid_routes": True,
                 "solid_route_evidence": deepcopy(self._solid_evidence), "solid_route_fault": self._solid_fault,
                 "solid_science_policy": self._solid_science_policy,
+                "solid_funding_schema": 1, "solid_funding": deepcopy(self.memory.solid_funding),
                 "solid_investment_evidence": deepcopy(self._solid_policy_evidence)}
 
     def _model_facts(self, snapshot):

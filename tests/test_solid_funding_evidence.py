@@ -1,0 +1,350 @@
+"""Synthetic funding/acceptance composition; never Factorio or provider evidence."""
+from copy import deepcopy
+from dataclasses import asdict
+
+import pytest
+
+from integration_evidence_fixtures import evidence
+from solid_routes_fixtures import fixture, row as route_row, SOURCE, TARGET
+from jev_factorio.integration_evidence import analyze_rows
+from jev_factorio.planning import solid_funding
+from test_solid_kit_acquisition import kit_loop
+
+
+def funded_evidence():
+    rows, trial, initial, final = evidence()
+    trial['configuration']['solid_science_policy'] = True
+    for cp in (initial, final):
+        cp['solid_science_policy'] = True
+    base = fixture()
+    route = deepcopy(route_row(base))
+    route.update(route='solid:105001:105002:iron-gear-wheel:input', layout='kit-layout:1')
+    entities = {}
+    for name, role, unit in (('source', 'fixture:kit-source', 105001),
+                             ('target', 'fixture:kit-target', 105002)):
+        endpoint = route[name]
+        entity = deepcopy(base.factory['entities'][endpoint['role']])
+        endpoint.update(role=role, unit_number=unit)
+        endpoint['position']['y'] += 60
+        for corner in endpoint['bounds'].values():
+            corner['y'] += 60
+        entity.update(unit_number=unit, position=deepcopy(endpoint['position']), products_finished=0)
+        entities[role] = entity
+    for step in route['steps']:
+        step['position']['y'] += 60
+    intent = solid_funding.intent(route)
+    trial['solid_intents'].append(deepcopy(intent))
+    funding = solid_funding.start(route, {'catalog_sha256': '1' * 64}, initial['last_tick'])
+    for cp in (initial, final):
+        cp['solid_intents'].append(deepcopy(intent))
+        cp['solid_funding'] = deepcopy(funding)
+    for record in rows:
+        record['acceptance_configuration']['solid_science_policy'] = True
+        record.update(solid_funding_schema=1, solid_funding=deepcopy(funding), history=[])
+        for label in ('state', 'after_state'):
+            factory = record[label]['factory']
+            factory['entities'].update(deepcopy(entities))
+            factory['solid_routes']['routes'][route['route']] = deepcopy(route)
+            factory['solid_routes']['diagnostics'].append(
+                {'intent_index': 4, 'state': 'proposed', 'reason': 'ready_layout'})
+    return rows, trial, initial, final
+
+
+def event(kind, funding, tick, **extras):
+    return {'kind': kind, 'key': funding['key'] + ('' if kind == 'solid_kit_paid_handoff' else ':kit'),
+            'tick': tick, 'funding': deepcopy(funding), **extras}
+
+
+def close_funding(data, index=3, kind='solid_kit_abandoned'):
+    rows, _, initial, final = data
+    funding = initial['solid_funding']
+    rows[index]['history'] = [event(kind, funding, rows[index]['after_state']['tick'], reason='kit_deadline')]
+    for record in rows[index:]:
+        record['solid_funding'] = None
+        if kind == 'solid_kit_abandoned':
+            record['failure_budgets'][funding['key'] + ':kit'] = 2
+    final['solid_funding'] = None
+    final['failures'] = deepcopy(rows[-1]['failure_budgets'])
+
+
+def assert_rejected(data):
+    result = analyze_rows(*data)
+    assert not result['integrity_checks_passed'], result['issues']
+    assert not result['measurement_checks_passed']
+    assert any('solid_funding' in issue for issue in result['issues']), result['issues']
+    assert result['native_acceptance'] == 'not_accepted'
+    assert result['deployment_authorized'] is False
+
+
+def test_held_funding_is_measurable_without_claiming_acceptance():
+    result = analyze_rows(*funded_evidence())
+    assert result['measurement_checks_passed'], result['issues']
+    assert result['native_acceptance'] == 'not_accepted'
+    assert result['deployment_authorized'] is False
+
+
+def test_valid_funding_abandonment_retains_budget_and_measurement():
+    data = funded_evidence(); close_funding(data)
+    result = analyze_rows(*data)
+    assert result['measurement_checks_passed'], result['issues']
+
+
+def test_initial_funding_paid_handoff_has_exact_observed_ownership():
+    rows, trial, initial, final = evidence()
+    trial['configuration']['solid_science_policy'] = True
+    for cp in (initial, final): cp['solid_science_policy'] = True
+    route = next(r for r in rows[0]['after_state']['factory']['solid_routes']['routes'].values()
+                 if r['item'] != 'coal')
+    funding = solid_funding.start(route, {'catalog_sha256': '1' * 64}, initial['last_tick'])
+    initial['solid_funding'] = deepcopy(funding)
+    for record in rows:
+        record['acceptance_configuration']['solid_science_policy'] = True
+        record.update(solid_funding_schema=1, solid_funding=None, history=[])
+    rows[0]['history'] = [event('solid_kit_paid_handoff', funding, initial['last_tick'])]
+    result = analyze_rows(rows, trial, initial, final)
+    assert result['measurement_checks_passed'], result['issues']
+
+
+def test_transient_funding_can_be_committed_then_abandoned_in_one_record():
+    data = funded_evidence(); rows, _, initial, final = data
+    funding = deepcopy(initial['solid_funding'])
+    funding['started_tick'] = rows[3]['after_state']['tick']
+    funding['deadline_tick'] = funding['started_tick'] + solid_funding.MAX_TICKS
+    initial['solid_funding'] = final['solid_funding'] = None
+    for record in rows: record['solid_funding'] = None
+    rows[3]['history'] = [event('solid_kit_committed', funding, funding['started_tick']),
+                          event('solid_kit_abandoned', funding, funding['started_tick'], reason='kit_evidence_unavailable')]
+    for record in rows[3:]: record['failure_budgets'][funding['key'] + ':kit'] = 2
+    final['failures'] = deepcopy(rows[-1]['failure_budgets'])
+    result = analyze_rows(*data)
+    assert result['measurement_checks_passed'], result['issues']
+
+
+def test_missing_funding_history_with_legacy_disabled_policy_stays_compatible():
+    data = evidence()
+    for cp in data[2:]: cp.pop('solid_funding', None)
+    result = analyze_rows(*data)
+    assert result['measurement_checks_passed'], result['issues']
+
+
+@pytest.mark.parametrize('mutation', [
+    'erase_initial', 'erase_final', 'invent_final', 'missing_record', 'missing_schema',
+    'schema_bool', 'schema_string', 'schema_future', 'record_bool', 'record_list',
+    'record_empty', 'action_bool', 'action_regression', 'layout_changed', 'catalog_changed',
+    'unit_changed', 'started_changed', 'deadline_changed', 'native_route_missing',
+    'unlogged_commit', 'disabled_policy',
+])
+def test_funding_history_corruption_is_not_a_passing_measurement(mutation):
+    data = funded_evidence(); rows, trial, initial, final = data
+    if mutation == 'erase_initial':
+        for record in rows: record['solid_funding'] = None
+        final['solid_funding'] = None
+    elif mutation == 'erase_final': final['solid_funding'] = None
+    elif mutation == 'invent_final':
+        initial['solid_funding'] = None
+        for record in rows: record['solid_funding'] = None
+    elif mutation == 'missing_record': rows[3].pop('solid_funding')
+    elif mutation == 'missing_schema': rows[3].pop('solid_funding_schema')
+    elif mutation.startswith('schema_'):
+        rows[3]['solid_funding_schema'] = {'schema_bool': True, 'schema_string': '1', 'schema_future': 2}[mutation]
+    elif mutation.startswith('record_'):
+        rows[3]['solid_funding'] = {'record_bool': True, 'record_list': [], 'record_empty': {}}[mutation]
+    elif mutation == 'action_bool': rows[3]['solid_funding']['actions'] = True
+    elif mutation == 'action_regression': rows[2]['solid_funding']['actions'] = 2
+    elif mutation == 'layout_changed': rows[3]['solid_funding']['layout'] = 'changed-layout'
+    elif mutation == 'catalog_changed': rows[3]['solid_funding']['catalog_sha256'] = '2' * 64
+    elif mutation == 'unit_changed': rows[3]['solid_funding']['source_unit'] += 1
+    elif mutation == 'started_changed': rows[3]['solid_funding']['started_tick'] -= 1
+    elif mutation == 'deadline_changed': rows[3]['solid_funding']['deadline_tick'] -= 1
+    elif mutation == 'native_route_missing':
+        for record in rows:
+            for label in ('state', 'after_state'):
+                record[label]['factory']['solid_routes']['routes'].pop(initial['solid_funding']['route'])
+    elif mutation == 'unlogged_commit':
+        initial['solid_funding'] = None
+        for record in rows[:3]: record['solid_funding'] = None
+    elif mutation == 'disabled_policy':
+        initial['solid_funding'] = final['solid_funding'] = None
+        initial['solid_science_policy'] = final['solid_science_policy'] = False
+        trial['configuration']['solid_science_policy'] = False
+        for record in rows: record['acceptance_configuration']['solid_science_policy'] = False
+    assert_rejected(data)
+
+
+@pytest.mark.parametrize('mutation', [
+    'missing_event', 'wrong_key', 'old_event', 'future_event', 'missing_proof',
+    'different_proof', 'missing_budget', 'insufficient_budget', 'handoff_without_payment',
+    'invented_kind', 'missing_reason',
+])
+def test_funding_release_requires_current_matching_reconciliation(mutation):
+    data = funded_evidence(); close_funding(data)
+    rows, _, initial, final = data
+    proof = rows[3]['history'][0]
+    if mutation == 'missing_event': rows[3]['history'] = []
+    elif mutation == 'wrong_key': proof['key'] = 'different-key'
+    elif mutation == 'old_event': proof['tick'] = initial['last_tick'] - 1
+    elif mutation == 'future_event': proof['tick'] = rows[3]['after_state']['tick'] + 1
+    elif mutation == 'missing_proof': proof.pop('funding')
+    elif mutation == 'different_proof': proof['funding']['catalog_sha256'] = '2' * 64
+    elif mutation in {'missing_budget', 'insufficient_budget'}:
+        for record in rows[3:]: record['failure_budgets'][initial['solid_funding']['key'] + ':kit'] = 0 if mutation == 'missing_budget' else 1
+        final['failures'] = deepcopy(rows[-1]['failure_budgets'])
+    elif mutation == 'handoff_without_payment':
+        proof['kind'] = 'solid_kit_paid_handoff'; proof['key'] = initial['solid_funding']['key']
+    elif mutation == 'invented_kind': proof['kind'] = 'solid_kit_cancelled'
+    elif mutation == 'missing_reason': proof.pop('reason')
+    assert_rejected(data)
+
+
+def test_real_kit_record_retains_detached_funding_and_transition_proof(tmp_path):
+    loop, backend = kit_loop(tmp_path)
+    record = loop.step()
+    assert record['solid_funding_schema'] == 1
+    assert record['solid_funding'] == loop.memory.solid_funding
+    committed = next(e for e in record['history'] if e['kind'] == 'solid_kit_committed')
+    assert committed['funding'] == loop.memory.solid_funding
+    record['solid_funding']['actions'] += 10
+    committed['funding']['actions'] += 10
+    assert loop.memory.solid_funding['actions'] == 1
+    assert next(e for e in loop.memory.history if e['kind'] == 'solid_kit_committed')['funding']['actions'] == 1
+
+
+def test_real_acquisition_and_paid_handoff_reconcile_every_record(tmp_path):
+    from jev_factorio.solid_funding_evidence import funding_history_issues
+    from solid_routes_fixtures import row
+    loop, backend = kit_loop(tmp_path)
+    loop._observe()
+    initial = asdict(loop.memory)
+    records = []
+    for _ in range(20):
+        records.append(loop.step())
+        assert not funding_history_issues(initial, records, asdict(loop.memory))
+        if row(backend.state)['state'] == 'ready':
+            break
+    assert row(backend.state)['state'] == 'ready'
+    assert loop.memory.solid_funding is None
+    proofs = [e['funding']['actions'] for e in loop.memory.history if e['kind'] == 'solid_kit_committed']
+    assert proofs == list(range(1, len(proofs) + 1)) and len(proofs) > 1
+
+
+@pytest.mark.parametrize('change', ['deadline', 'catalog', 'demand'])
+def test_real_fresh_guard_abandonment_in_one_record_reconciles(change, tmp_path):
+    from jev_factorio.solid_funding_evidence import funding_history_issues
+    loop, backend = kit_loop(tmp_path)
+    loop._observe()
+    initial = asdict(loop.memory)
+    def update():
+        if backend.observations == 3:
+            if change == 'deadline':
+                backend.state.tick += 216001
+                backend.state.factory['solid_routes']['tick'] = backend.state.tick
+            elif change == 'catalog':
+                loop.catalog.recipes['inserter']['ingredients'][0]['amount'] += 1
+            else:
+                backend.state.factory['research_progress'] = 1
+    backend.before_observe = update
+    result = loop.step()
+    assert not result['verified'] and not backend.calls
+    assert not funding_history_issues(initial, [result], asdict(loop.memory))
+    assert loop.memory.solid_funding is None
+
+
+def test_commit_increment_needs_an_exact_new_proof_and_retains_identity():
+    data = funded_evidence(); rows, _, initial, final = data
+    next_state = deepcopy(initial['solid_funding']); next_state['actions'] = 2
+    rows[3]['history'] = [event('solid_kit_committed', next_state, rows[3]['state']['tick'])]
+    for record in rows[3:]: record['solid_funding'] = deepcopy(next_state)
+    final['solid_funding'] = deepcopy(next_state)
+    result = analyze_rows(*data)
+    assert result['measurement_checks_passed'], result['issues']
+    rows[3]['history'] = []
+    assert_rejected(data)
+
+
+@pytest.mark.parametrize('mutation', ['reset_actions', 'skip_actions', 'repeat_old_proof',
+                                     'rewrite_old_proof', 'exhausted_budget'])
+def test_new_commit_cannot_reset_or_replay_funding(mutation):
+    data = funded_evidence(); rows, _, initial, final = data
+    funding = deepcopy(initial['solid_funding'])
+    funding['actions'] = 2
+    if mutation == 'reset_actions': funding['actions'] = 1
+    if mutation == 'skip_actions': funding['actions'] = 3
+    if mutation == 'rewrite_old_proof': funding['deadline_tick'] -= 1
+    proof = event('solid_kit_committed', funding, rows[3]['state']['tick'])
+    rows[3]['history'] = [proof]
+    if mutation == 'repeat_old_proof': initial['history'].append(deepcopy(proof))
+    if mutation == 'exhausted_budget':
+        initial['failures'][funding['key'] + ':kit'] = 2
+        for record in rows: record['failure_budgets'][funding['key'] + ':kit'] = 2
+        final['failures'] = deepcopy(rows[-1]['failure_budgets'])
+    for record in rows[3:]: record['solid_funding'] = deepcopy(funding)
+    final['solid_funding'] = deepcopy(funding)
+    assert_rejected(data)
+
+
+def test_history_ring_repetitions_do_not_repeat_abandonment():
+    data = funded_evidence(); close_funding(data)
+    rows = data[0]
+    for record in rows[4:10]: record['history'] = deepcopy(rows[3]['history'])
+    result = analyze_rows(*data)
+    assert result['measurement_checks_passed'], result['issues']
+
+
+def test_checked_evidence_is_not_mutated():
+    data = funded_evidence(); close_funding(data)
+    original = deepcopy(data)
+    analyze_rows(*data)
+    assert data == original
+
+
+@pytest.mark.parametrize('history', [None, {}, 1, 'private-marker', [None] * 65])
+def test_funding_history_shape_is_bounded_and_fail_closed(history):
+    from jev_factorio.solid_funding_evidence import funding_history_issues
+    data = funded_evidence(); data[0][3]['history'] = history
+    assert funding_history_issues(data[2], data[0], data[3])
+    # The parent analyzer may reject malformed common history before the
+    # funding checker is reached. Raising is also fail-closed.
+    with pytest.raises(ValueError, match='event history'):
+        analyze_rows(*data)
+
+
+def test_funding_issue_labels_never_echo_private_input():
+    data = funded_evidence(); data[0][3]['solid_funding']['layout'] = 'PRIVATE-PATH-AND-SESSION'
+    result = analyze_rows(*data)
+    assert not result['integrity_checks_passed']
+    assert all('PRIVATE-PATH-AND-SESSION' not in value for value in result['issues'])
+
+
+def test_transition_proof_has_no_unrecognized_fields():
+    data = funded_evidence(); close_funding(data)
+    data[0][3]['history'][0]['allow_without_budget'] = True
+    assert_rejected(data)
+
+def test_direct_checker_rejects_malformed_preceding_budget():
+    from jev_factorio.solid_funding_evidence import funding_history_issues
+    data = funded_evidence(); rows, _, initial, final = data
+    funding = deepcopy(initial['solid_funding']); funding['actions'] = 2
+    rows[3]['history'] = [event('solid_kit_committed', funding, rows[3]['state']['tick'])]
+    for record in rows[3:]: record['solid_funding'] = deepcopy(funding)
+    rows[2]['failure_budgets'][funding['key'] + ':kit'] = True
+    final['solid_funding'] = deepcopy(funding)
+    assert funding_history_issues(initial, rows, final)
+
+
+@pytest.mark.parametrize('release_path', ['observe', 'clear_plan'])
+def test_exhausted_existing_budget_emits_release_at_actual_clear(release_path, tmp_path):
+    from jev_factorio.solid_funding_evidence import funding_history_issues
+    loop, backend = kit_loop(tmp_path)
+    loop.step()
+    funding = deepcopy(loop.memory.solid_funding)
+    loop.memory.failures[funding['key'] + ':kit'] = 2
+    initial = asdict(loop.memory)
+    if release_path == 'clear_plan':
+        loop._clear_plan()
+    snapshot = loop._observe()
+    record = loop._record(snapshot, 'observe', 'Exhausted existing kit budget')
+    assert loop.memory.solid_funding is None
+    released = [e for e in record['history'] if e['kind'] == 'solid_kit_abandoned']
+    assert len(released) == 1 and released[0]['funding'] == funding
+    assert not funding_history_issues(initial, [record], asdict(loop.memory))
+    assert len(backend.calls) == 1  # Only the first, already verified paid action.
