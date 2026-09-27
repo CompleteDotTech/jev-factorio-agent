@@ -165,11 +165,12 @@ def validate_attempt(attempt: dict, *, finished: bool = False) -> None:
         attempt["outcome"] not in {
             "verified", "wait_replanned", "wait_expired", "partial_transfer_reconciled",
             "zero_effect_transfer_reconciled", "rejected_transfer_reconciled",
-            "connection_preflight_rejected",
+            "connection_preflight_rejected", "storage_preflight_rejected", "maintenance_preflight_rejected",
         }
         or (attempt["outcome"] not in {"verified", "partial_transfer_reconciled",
                                         "zero_effect_transfer_reconciled",
-                                        "rejected_transfer_reconciled", "connection_preflight_rejected"}
+                                        "rejected_transfer_reconciled", "connection_preflight_rejected",
+                                        "storage_preflight_rejected", "maintenance_preflight_rejected"}
             and attempt["action"] not in WAIT_ACTIONS)
         or (attempt["outcome"] in {"partial_transfer_reconciled", "zero_effect_transfer_reconciled"}
             and attempt["action"] not in {"factory_insert", "factory_extract"})

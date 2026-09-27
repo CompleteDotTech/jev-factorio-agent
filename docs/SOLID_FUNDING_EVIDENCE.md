@@ -236,8 +236,14 @@ coverage before they can supply payback samples or defer a funding deadline.
 Deadline deferrals also require an observed active plan and exact current step;
 a retained plan can dispatch without making a new model decision. Pending
 completions retain their original admission boundary. Catalog-dependent capacity
-admission, capital-held admission, and background-job admission without a
-complete captured before-boundary remain unproven rather than receiving forecast
-or missing-catalog credit. Deferred release diagnostics retain the first cause
+admission and capital-held admission without a complete captured before-boundary
+remain unproven rather than receiving forecast or missing-catalog credit. Retained
+background jobs replay their native receipt, monotonic progress and exact attempt
+identity; independent foreground work uses CraftJob.permits and keeps output
+locks. New background admission binds the owned craft step, paid inputs, native
+receipt and returned attempt. Explicit preflight rejection and retained wait
+closure require matching terminal outcomes and causal events; they do not count
+as successful service. New kit commitments are forbidden while a background job
+is active, including verify-only commits. Deferred release diagnostics retain the first cause
 for the exact funding proof until cleanup; this does not turn an uncaptured
 demand/catalog change into a measurable audit trigger.

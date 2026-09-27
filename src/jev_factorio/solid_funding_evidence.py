@@ -404,14 +404,162 @@ def _completed_dispatches(record, previous_pending, previous_attempt, seen):
     return values if len(values) == 1 else []
 
 
-def _dispatch_admitted(step: Step, record: dict, owner: str, reservations: dict) -> bool:
+def _background_observed(saved, attempt, record, fresh):
+    """Reconcile a retained craft independently of the foreground RPC."""
+    from .craft_jobs import CraftJob
+    if (record.get('background_job') is None) != (record.get('background_attempt') is None):
+        raise ValueError('Background job and attempt must coexist')
+    if saved is None:
+        if attempt is not None:
+            raise ValueError('Unowned background attempt')
+        return None, []
+    job = CraftJob.from_dict(saved)
+    if attempt is None:
+        raise ValueError('Missing background attempt')
+    validate_attempt(attempt)
+    if (attempt['action'] != 'factory_craft_job' or attempt['plan_id'] != job.plan_id
+            or attempt['step_index'] != 0 or attempt['receipt'] != job.parameters['receipt']):
+        raise ValueError('Background identity mismatch')
+    before = GameSnapshot(**record['state'])
+    after = GameSnapshot(**record['after_state'])
+    complete = job.observe(before)
+    dispatch_job = None if complete else job.to_dict()
+    tick = before.tick
+    if not complete:
+        complete = job.observe(after)
+        tick = after.tick
+    if not complete:
+        if not _same(job.to_dict(), record.get('background_job')) or not _same(attempt, record.get('background_attempt')):
+            raise ValueError('Background progress mismatch')
+        return dispatch_job, []
+    if record.get('background_job') is not None or record.get('background_attempt') is not None:
+        # Completion at the first observation can free the actor for a new job.
+        # Its admission is proved separately against the new foreground plan.
+        if (dispatch_job is not None or record.get('background_attempt', {}).get('id') == attempt['id']):
+            raise ValueError('Completed background retained')
+    events = [value for value in fresh if value.get('kind') == 'background_job_completed']
+    expected = dict(kind='background_job_completed', job=job.parameters['receipt'],
+                    plan=job.plan_id, outputs=job.outputs, tick=tick)
+    values = [value for value in record.get('attempt_outcomes', []) if value.get('id') == attempt['id']]
+    if len(events) != 1 or not _same(events[0], expected) or len(values) != 1:
+        raise ValueError('Background completion evidence missing')
+    value = values[0]
+    validate_attempt(value, finished=True)
+    if (value['outcome'] != 'verified' or value['finished_tick'] != tick
+            or value['latency_seconds'] is not None
+            or any(not _same(value.get(key), data) for key, data in attempt.items())):
+        raise ValueError('Background completion identity changed')
+    return dispatch_job, values
+
+
+def _background_admitted(record, plan, index, previous_pending, previous_attempt, seen, fresh, reservations, previous_job):
+    from .craft_jobs import CraftJob
+    saved, attempt = record.get('background_job'), record.get('background_attempt')
+    if saved is None or previous_job is not None:
+        return False
+    job = CraftJob.from_dict(saved)
+    if len(plan.steps) != 1 or index != 0 or plan.steps[0].action != 'factory_craft_job':
+        return False
+    step = plan.steps[0]
+    if (not isinstance(attempt, dict) or job.plan_id != plan.id or job.goal != plan.goal
+            or not _same(job.parameters, step.parameters) or not _same(job.inputs, step.costs)
+            or job.deadline_tick != job.started_tick + step.timeout_ticks
+            or record.get('pending') is not None or record.get('attempt') is not None):
+        return False
+    validate_attempt(attempt)
+    if (attempt['action'] != step.action or attempt['plan_id'] != plan.id or attempt['step_index'] != 0
+            or attempt['step_sha256'] != fingerprint(asdict(step)) or attempt['receipt'] != job.parameters['receipt']
+            or not _attempt_endpoint(attempt, asdict(step), record['state'])
+            or attempt['dispatch_phases'].get('dispatch', {}).get('status') != 'returned'):
+        return False
+    if previous_pending is not None:
+        if previous_pending.get('dispatch') != 'returned' or not _same(attempt, previous_attempt):
+            return False
+    elif (attempt['id'] in seen or attempt['origin'] != 'new' or attempt['process_id'] != record.get('process_id')
+            or record.get('action') != step.action
+            or not record['state']['tick'] <= attempt['started_tick'] <= record['after_state']['tick']
+            or not _dispatch_admitted(step, record, plan.id, reservations)):
+        return False
+    if job.started_tick < attempt['started_tick'] or job.observe(GameSnapshot(**record['after_state'])):
+        return False
+    event = dict(kind='background_job_admitted', job=job.parameters['receipt'], plan=plan.id,
+                 inputs_paid=job.inputs, outputs_locked=job.outputs, tick=record['after_state']['tick'])
+    return len([value for value in fresh if _same(value, event)]) == 1
+
+
+def _terminal_outcomes(record, plan, index, pending, attempt, seen, fresh, budgets, reservations, job):
+    """An explicit rejected or yielded attempt is terminal without verification."""
+    if (record.get('verified') is not False or record.get('pending') is not None
+            or record.get('attempt') is not None or index >= len(plan.steps)):
+        return [], False
+    step = plan.steps[index]
+    kinds = {'storage_preflight_rejected', 'maintenance_preflight_rejected',
+             'connection_preflight_rejected', 'wait_replanned', 'wait_expired'}
+    values = [value for value in record.get('attempt_outcomes', [])
+              if value.get('outcome') in kinds and value.get('finished_tick') == record['after_state']['tick']
+              and value.get('plan_id') == plan.id and value.get('step_index') == index
+              and value.get('action') == step.action and value.get('step_sha256') == fingerprint(asdict(step))]
+    if len(values) != 1:
+        return [], False
+    value = values[0]
+    validate_attempt(value, finished=True)
+    kind, now = value['outcome'], record['after_state']['tick']
+    failed = [event for event in fresh if event.get('kind') == 'plan_failed' and event.get('plan') == plan.id]
+    failure = (len(failed) == 1 and set(failed[0]) == {'kind', 'plan', 'reason', 'tick'}
+               and isinstance(failed[0]['reason'], str) and bool(failed[0]['reason']) and failed[0]['tick'] == now
+               and _budget(record.get('failure_budgets', {}), plan.id) == _budget(budgets, plan.id) + 1)
+    if kind in {'wait_replanned', 'wait_expired'}:
+        if (not isinstance(pending, dict) or not isinstance(attempt, dict)
+                or step.action not in {'idle', 'factory_wait'} or record.get('action') != 'observe'
+                or step.satisfied(GameSnapshot(**record['after_state']))
+                or any(not _same(value.get(key), data) for key, data in attempt.items())):
+            return [], False
+        if kind == 'wait_expired':
+            # The configured poll cap is not in legacy records. A retained
+            # pending identity, exact failure event and increment bind closure.
+            return ([value], True) if failure else ([], False)
+        events = [event for event in fresh if event.get('kind') in
+                  {'maintenance_required', 'passive_wait_yielded', 'background_wait_yielded'}]
+        if len(events) != 1 or events[0].get('tick') != now or failed:
+            return [], False
+        event = events[0]
+        if event['kind'] == 'maintenance_required':
+            boiler = record['after_state'].get('factory', {}).get('entities', {}).get('utility:boiler', {})
+            valid = (set(event) == {'kind', 'reason', 'tick'} and event['reason'] == 'boiler fuel'
+                     and bool(boiler) and boiler.get('fuel', {}).get('coal', 0) < 5)
+        else:
+            valid = event.get('plan') == plan.id and (event['kind'] != 'background_wait_yielded' or job is not None)
+            if event['kind'] == 'passive_wait_yielded':
+                valid = valid and isinstance(event.get('candidates'), list) and bool(event['candidates'])
+        return ([value], True) if valid else ([], False)
+    if (pending is not None or value['id'] in seen or value['origin'] != 'new'
+            or value['process_id'] != record.get('process_id')
+            or not record['state']['tick'] <= value['started_tick'] <= now
+            or not _attempt_endpoint(value, asdict(step), record['state'])
+            or value['dispatch_phases'].get('dispatch', {}).get('status') != 'failed'
+            or not _dispatch_admitted(step, record, plan.id, reservations, job)):
+        return [], False
+    events = [event for event in fresh if event.get('kind') == kind]
+    if (len(events) != 1 or events[0].get('attempt_id') != value['id'] or events[0].get('tick') != now):
+        return [], False
+    if kind == 'connection_preflight_rejected':
+        valid = (step.action == 'factory_connect' and record.get('action') == step.action and failure
+                 and set(events[0]) == {'kind', 'code', 'attempt_id', 'tick'}
+                 and isinstance(events[0]['code'], str) and bool(events[0]['code']))
+        return ([value], True) if valid else ([], False)
+    valid = record.get('action') == 'observe' and not failed and set(events[0]) == {'kind', 'attempt_id', 'tick'}
+    return ([value], False) if valid else ([], False)
+
+
+def _dispatch_admitted(step: Step, record: dict, owner: str, reservations: dict, job_data=None) -> bool:
     """Replay observable admission; missing catalog/job authority stays unknown."""
     from types import SimpleNamespace
     from . import solid_routes as routes, coal_supply as coal
     from .planning.demand import SupplyLedger
+    from .craft_jobs import CraftJob
     snapshot = GameSnapshot(**record['state'])
-    if (not step.allowed(snapshot) or record.get('capital_investment') is not None
-            or record.get('background_job') is not None
+    job = CraftJob.from_dict(job_data) if job_data is not None else None
+    if (job is not None and not job.permits(step) or not step.allowed(snapshot) or record.get('capital_investment') is not None
             or step.action == 'factory_place' and
                str((step.parameters or {}).get('role', '')).startswith('capacity:')):
         return False
@@ -428,7 +576,7 @@ def _dispatch_admitted(step: Step, record: dict, owner: str, reservations: dict)
     # An empty forecast catalog cannot add spendable supply. Only carried stock
     # is read; machine forecasts never authorize a dispatch.
     catalog = SimpleNamespace(recipes={})
-    ledger = SupplyLedger.capture(snapshot, catalog, reserved=dict(reserved))
+    ledger = SupplyLedger.capture(snapshot, catalog, reserved=dict(reserved), job=job)
     needed = routes.remaining(routes.routes(snapshot)[own]) if own else step.costs or {}
     if any(ledger.carried.get(item, 0) < count for item, count in needed.items()):
         return False
@@ -442,7 +590,7 @@ def _dispatch_admitted(step: Step, record: dict, owner: str, reservations: dict)
         for key, row in paid.items():
             if key != own and row['source']['role'] not in {coal.role(t, 'chest') for t in rows}:
                 reserved.update(routes.remaining(row))
-        ledger = SupplyLedger.capture(snapshot, catalog, reserved=dict(reserved))
+        ledger = SupplyLedger.capture(snapshot, catalog, reserved=dict(reserved), job=job)
         if any(ledger.carried.get(item, 0) < count for item, count in bill.items()):
             return False
     return True
@@ -450,7 +598,7 @@ def _dispatch_admitted(step: Step, record: dict, owner: str, reservations: dict)
 
 def _dispatch_crossed_deadline(record: dict, before: int, deadline: int, now: int,
                                seen: set[str], plan: dict | None, index: int,
-                               reservations: dict) -> bool:
+                               reservations: dict, job_data=None) -> bool:
     from .skills import Plan
     if not isinstance(plan, dict) or 'steps' not in plan:
         return False
@@ -466,7 +614,7 @@ def _dispatch_crossed_deadline(record: dict, before: int, deadline: int, now: in
             and candidates[0]['step_sha256'] == fingerprint(asdict(step))
             and _attempt_endpoint(candidates[0], asdict(step), record['state'])
             and (decision is None or isinstance(decision, dict) and decision.get('plan_id') == owned.id)
-            and _dispatch_admitted(step, record, owned.id, reservations))
+            and _dispatch_admitted(step, record, owned.id, reservations, job_data))
 
 
 def _initial_history_state(events: list[dict], working: dict | None, budgets: dict) -> bool:
@@ -572,6 +720,8 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
         previous_budgets = initial.get('failures', {})
         previous_pending = initial.get('pending')
         previous_attempt = initial.get('attempt')
+        background_job = deepcopy(initial.get('background_job'))
+        background_attempt = deepcopy(initial.get('background_attempt'))
         previous_routes = initial.get('solid_commitments', {})
         previous_history = initial.get('history', [])
         reservations = deepcopy(initial.get('reservations', {}))
@@ -580,6 +730,8 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
         ordinary_index = initial.get('step_index', 0)
         seen_attempts = {value['id'] for value in initial.get('attempt_outcomes', [])
                          if isinstance(value, dict) and isinstance(value.get('id'), str)}
+        if isinstance(background_attempt, dict) and isinstance(background_attempt.get('id'), str):
+            seen_attempts.add(background_attempt['id'])
         if isinstance(previous_attempt, dict) and isinstance(previous_attempt.get('id'), str):
             seen_attempts.add(previous_attempt['id'])
         active_kit = (working is not None and isinstance(initial.get('active_plan'), dict)
@@ -616,6 +768,12 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
             history = record.get('history', [])
             _funding_events(history)  # Validate before inspecting common events.
             fresh = _new_history(previous_history, history)
+            dispatch_job, background_completed = _background_observed(
+                background_job, background_attempt, record, fresh) if policy else (None, [])
+            for value in background_completed:
+                if value['finished_tick'] == before_tick:
+                    outcomes.append(deepcopy(value))
+                    outcomes = outcomes[-64:]
             selected_kits = {value.get('key') for value in fresh if value.get('kind') == 'solid_kit_committed'}
             ordinary_commits = [value for value in fresh if value.get('kind') == 'plan_committed'
                                 and policy and value.get('plan') not in selected_kits]
@@ -623,6 +781,9 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 if ordinary_plan is not None or active_kit or previous_pending is not None or len(ordinary_commits) != 1:
                     issues.add('solid_funding_ordinary_plan_replaced')
                 event = ordinary_commits[0]
+                count = _budget(previous_budgets, event.get('plan'))
+                if count is None or count >= 2:
+                    issues.add('solid_funding_ordinary_budget_exhausted')
                 if (set(event) != {'kind', 'plan', 'source', 'tick', 'definition'}
                         or not isinstance(event.get('source'), str)
                         or not _tick(event.get('tick')) or event['tick'] != before_tick
@@ -679,6 +840,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                             or prior_budget is None or prior_budget >= 2
                             or not _project_budget_open(proof, previous_budgets, event['step'])
                             or previous_pending is not None
+                            or dispatch_job is not None or record.get('background_job') is not None
                             or active_kit
                             or ordinary_plan is not None
                             or proof['key'] in abandoned_keys
@@ -781,7 +943,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     issues.add('solid_funding_failed_plan_not_reconciled')
                 if failed_once:
                     active_kit = False
-                if action_budget_due:
+                if action_budget_due and prior['key'] not in abandoned_keys:
                     issues.add('solid_funding_action_budget_release_missing')
                 if (previous_pending is None and _tick(before_tick)
                         and (before_tick >= current['deadline_tick']
@@ -790,7 +952,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                                  ({'id': current['key'] + ':kit', 'goal': 'rocket_launch',
                                    'description': 'Retained kit', 'steps': [active_step]}
                                   if active_kit and active_step is not None else ordinary_plan),
-                                 0 if active_kit else ordinary_index, reservations))):
+                                 0 if active_kit else ordinary_index, reservations, dispatch_job))):
                     issues.add('solid_funding_expired_state_retained')
             if not policy and (current is not None or working is not None
                                or _funding_events(record.get('history', []))):
@@ -798,10 +960,10 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
             if (policy and previous_pending is None and active_kit and active_step is not None
                     and _current_dispatch_attempts(record, before_tick, now, seen_attempts)
                     and not _dispatch_admitted(_kit_step(active_step), record,
-                                               current['key'] + ':kit', reservations)):
+                                               current['key'] + ':kit', reservations, dispatch_job)):
                 issues.add('solid_funding_kit_admission_unproven')
             completed = _completed_dispatches(record, previous_pending, previous_attempt, seen_attempts)
-            proven_outcomes = []
+            proven_outcomes = list(background_completed)
             if current is None:
                 active_kit = False
             elif active_kit and active_step is not None and _kit_clear_observed(
@@ -809,6 +971,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 proven_outcomes.extend(completed)
                 active_kit = False
                 reservations.pop(current['key'] + ':kit', None)
+            admitted_background = False
             if isinstance(ordinary_plan, dict) and 'steps' in ordinary_plan:
                 from .skills import Plan
                 plan = Plan.from_dict(ordinary_plan)
@@ -820,7 +983,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     and step is not None and value.get('step_index') == candidate_index and value.get('action') == step.action
                     and value.get('step_sha256') == fingerprint(asdict(step))
                     and _attempt_endpoint(value, asdict(step), record['state']) and step.satisfied(snapshot)
-                    and (previous_pending is not None or _dispatch_admitted(step, record, plan.id, reservations))]
+                    and (previous_pending is not None or _dispatch_admitted(step, record, plan.id, reservations, dispatch_job))]
                 if len(verified) == 1:
                     proven_outcomes.extend(verified)
                     ordinary_index = candidate_index + 1
@@ -831,10 +994,16 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                             and dispatched[0].get('step_index') == candidate_index
                             and dispatched[0].get('step_sha256') == fingerprint(asdict(step))
                             and _attempt_endpoint(dispatched[0], asdict(step), record['state'])
-                            and _dispatch_admitted(step, record, plan.id, reservations)):
+                            and _dispatch_admitted(step, record, plan.id, reservations, dispatch_job)):
                         ordinary_index = candidate_index
                     else:
                         issues.add('solid_funding_pending_admission_unproven')
+                terminal, terminal_clear = _terminal_outcomes(record, plan, candidate_index, previous_pending,
+                    previous_attempt, seen_attempts, fresh, previous_budgets, reservations, dispatch_job)
+                proven_outcomes.extend(terminal)
+                admitted_background = _background_admitted(record, plan, candidate_index, previous_pending,
+                    previous_attempt, seen_attempts, fresh, reservations,
+                    None if background_completed else background_job)
                 failures = [value for value in fresh if value.get('kind') == 'plan_failed' and value.get('plan') == plan.id]
                 prior_count = _budget(previous_budgets, plan.id)
                 failed = (len(failures) == 1 and set(failures[0]) == {'kind', 'plan', 'reason', 'tick'}
@@ -844,7 +1013,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     and record.get('action') == 'observe' and record.get('verified') is False
                     and previous_pending is None and record.get('pending') is None and record.get('attempt') is None
                     and step is not None and not step.satisfied(snapshot) and not step.allowed(snapshot))
-                if failures and not failed:
+                if failures and not failed and not terminal_clear:
                     issues.add('solid_funding_ordinary_failure_unproven')
                 if (len(verified) == 1 and ordinary_index == len(plan.steps) or record.get('action') == 'verify'
                         and record.get('verified') is True and previous_pending is None
@@ -852,9 +1021,12 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                         and all(step.satisfied(snapshot) for step in plan.steps[ordinary_index:])):
                     reservations.pop(plan.id, None)
                     ordinary_plan = None
-                elif failed:
+                elif failed or terminal_clear or admitted_background:
                     reservations.pop(plan.id, None)
                     ordinary_plan = None
+            if policy and (background_job is None or background_completed) and record.get('background_job') is not None:
+                if not admitted_background:
+                    issues.add('solid_funding_background_admission_unproven')
             for value in record.get('attempt_outcomes', []):
                 if isinstance(value, dict) and not any(previous.get('id') == value.get('id') for previous in outcomes):
                     if policy and not any(_same(value, candidate) for candidate in proven_outcomes):
@@ -868,15 +1040,20 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
             outcomes = outcomes[-64:]
             if policy and not _same(outcomes[-8:], record.get('attempt_outcomes', [])):
                 issues.add('solid_funding_record_outcome_history_mismatch')
-            for value in [record.get('attempt'), *record.get('attempt_outcomes', [])]:
+            for value in [record.get('attempt'), record.get('background_attempt'), *record.get('attempt_outcomes', [])]:
                 if isinstance(value, dict) and isinstance(value.get('id'), str):
                     seen_attempts.add(value['id'])
+            background_job = deepcopy(record.get('background_job'))
+            background_attempt = deepcopy(record.get('background_attempt'))
             previous_tick = now
             previous_budgets = current_budgets
             previous_pending = record.get('pending')
             previous_attempt = record.get('attempt')
             previous_routes = record.get('after_state', {}).get('factory', {}).get('solid_routes', {}).get('routes', {})
             previous_history = history
+        if policy and (not _same(background_job, final.get('background_job'))
+                       or not _same(background_attempt, final.get('background_attempt'))):
+            issues.add('solid_funding_final_background_mismatch')
         if policy and not _same(outcomes, final.get('attempt_outcomes', [])):
             issues.add('solid_funding_final_outcome_history_mismatch')
         final_active = (working is not None and isinstance(final.get('active_plan'), dict)
