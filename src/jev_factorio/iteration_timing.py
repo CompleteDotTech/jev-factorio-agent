@@ -289,6 +289,28 @@ _NATIVE_DEPTH: ContextVar[int] = ContextVar('jev_native_timing_depth', default=0
 _NATIVE_REQUEST: ContextVar[dict | None] = ContextVar('jev_native_request_size', default=None)
 
 
+@contextmanager
+def _request_frame(ledger: Ledger, request_bytes: int | None):
+    """Count terminal delegated content once, retaining partial known bytes."""
+    known = type(request_bytes) is int and 0 <= request_bytes <= 2**63 - 1
+    frame = {'bytes': request_bytes if known else 0,
+             'unknown': not known, 'delegated': False}
+    parent = _NATIVE_REQUEST.get()
+    token = _NATIVE_REQUEST.set(frame)
+    try:
+        yield
+    finally:
+        _NATIVE_REQUEST.reset(token)
+        if parent is not None:
+            if not parent['delegated']:
+                parent.update(bytes=0, unknown=False, delegated=True)
+            parent['bytes'] += frame['bytes']
+            parent['unknown'] = parent['unknown'] or frame['unknown']
+        else:
+            ledger.io['request_bytes'] += frame['bytes']
+            ledger.io['unknown_request_size_calls'] += int(frame['unknown'])
+
+
 def request_size(value: object) -> int | None:
     """Best-effort UTF-8 content bytes, not framing/packet size or permission."""
     try:
@@ -310,48 +332,41 @@ def native_io(name: str, operation: Callable[[], object], *, request_bytes: int 
     instrumentation never supplies permission or changes exception behavior.
     """
     ledger = _CURRENT.get()
-    if ledger is None or _NATIVE_DEPTH.get():
-        if ledger is not None and _NATIVE_DEPTH.get():
-            request = _NATIVE_REQUEST.get()
-            if request is not None:
-                # The innermost wrapper knows the bytes actually sent after
-                # session scoping; keep one logical call in the outer ledger.
-                request['bytes'] = request_bytes if type(request_bytes) is int and request_bytes >= 0 else None
+    if ledger is None:
         result = operation()
         if check_response is not None:
             check_response(result)
         return result
-    token = _NATIVE_DEPTH.set(1)
-    request = {'bytes': request_bytes if type(request_bytes) is int and request_bytes >= 0 else None}
-    request_token = _NATIVE_REQUEST.set(request)
-    name = name if name in {'native_command', 'native_batch'} else 'native_command'
-    ledger.io['batch_calls' if name == 'native_batch' else 'command_calls'] += 1
-    try:
-        with span(name):
-            received = False
-            try:
-                result = operation()
-                received = True
-                size = request_size(result)
-                if size is None:
-                    ledger.io['unknown_response_size_calls'] += 1
-                else:
-                    ledger.io['response_bytes'] += size
-                if check_response is not None:
-                    check_response(result)
-                return result
-            except BaseException:
-                ledger.io['failed_calls'] += 1
-                if not received:
-                    ledger.io['unknown_response_size_calls'] += 1
-                raise
-    finally:
-        if request['bytes'] is None:
-            ledger.io['unknown_request_size_calls'] += 1
-        else:
-            ledger.io['request_bytes'] += request['bytes']
-        _NATIVE_REQUEST.reset(request_token)
-        _NATIVE_DEPTH.reset(token)
+    with _request_frame(ledger, request_bytes):
+        if _NATIVE_DEPTH.get():
+            result = operation()
+            if check_response is not None:
+                check_response(result)
+            return result
+        token = _NATIVE_DEPTH.set(1)
+        name = name if name in {'native_command', 'native_batch'} else 'native_command'
+        ledger.io['batch_calls' if name == 'native_batch' else 'command_calls'] += 1
+        try:
+            with span(name):
+                received = False
+                try:
+                    result = operation()
+                    received = True
+                    size = request_size(result)
+                    if size is None:
+                        ledger.io['unknown_response_size_calls'] += 1
+                    else:
+                        ledger.io['response_bytes'] += size
+                    if check_response is not None:
+                        check_response(result)
+                    return result
+                except BaseException:
+                    ledger.io['failed_calls'] += 1
+                    if not received:
+                        ledger.io['unknown_response_size_calls'] += 1
+                    raise
+        finally:
+            _NATIVE_DEPTH.reset(token)
 
 
 def decode_native(value):

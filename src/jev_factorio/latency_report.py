@@ -165,6 +165,7 @@ def analyze(path: Path, *, max_records: int = MAX_RECORDS) -> dict:
                     else:
                         # The input can be a tail of a stream. These indices are
                         # unrepresented here, not proof the runtime lost records.
+                        counts['iteration:unobserved_before_first_sample'] += index - 1
                         counts['iteration:unpublished_between_records'] += index - 1
                     previous_iteration_index = index
                     for name, value in prior['native_io'].items():
