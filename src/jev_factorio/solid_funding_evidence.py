@@ -96,6 +96,8 @@ def _acquisition_matches(commit: dict, record: dict, proof: dict, budgets: dict,
     from .planning.catalog import Catalog
     from .planning import solid_investment
     from . import solid_routes
+    if record.get('capital_investment') is not None:
+        return False
     value = commit.get('acquisition')
     if not isinstance(value, dict) or set(value) != {'catalog', 'reserved', 'technologies', 'recipes', 'stack_sizes'}:
         return False
@@ -105,6 +107,7 @@ def _acquisition_matches(commit: dict, record: dict, proof: dict, budgets: dict,
         return False
     binding = bindings.get(proof['key'])
     if (not isinstance(binding, dict) or binding.get('catalog_sha256') != solid_funding.digest(data)
+            or binding['observed_tick'] > proof['started_tick']
             or binding.get('version') != data['version']
             or binding.get('acquisition_sha256') != solid_funding.digest({k: v for k, v in value.items() if k != 'reserved'})):
         return False
@@ -186,6 +189,8 @@ def _selection_matches(record: dict, plan_id: str, expected_source=None) -> bool
                    ('state', 'questions', 'answers', 'utilities', 'diagnostics'))):
         return False
     source, called, policy = decision['source'], decision['model_called'], record.get('policy')
+    if source == 'mock' and any(record.get(label, {}).get('world_kind') != 'mock' for label in ('state', 'after_state')):
+        return False
     if record.get('model_call') is not called or expected_source is not None and source != expected_source:
         return False
     if not ((policy == 'deterministic' and source == 'deterministic' and not called)
@@ -496,6 +501,8 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
             issues.add('solid_funding_new_catalog_declaration_unproven')
         if working is not None:
             solid_funding.validate_state(working, previous_tick, intents)
+            if working['key'] in bindings and bindings[working['key']]['observed_tick'] > working['started_tick']:
+                issues.add('solid_funding_catalog_declared_after_start')
         # The ring repeats old events. Seed it from the initial checkpoint and
         # process new event values only once. Hash storage is bounded by input
         # record count (already bounded by the parent analyzer's byte limits).
@@ -503,6 +510,9 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
         initial_events = _funding_events(initial.get('history', []))
         for event in initial_events:
             _validate_transition(event, 0, previous_tick, intents)
+            proof = event['funding']
+            if proof['key'] in bindings and bindings[proof['key']]['observed_tick'] > proof['started_tick']:
+                issues.add('solid_funding_catalog_declared_after_start')
             seen.add(hashlib.sha256(_encoded(event)).digest())
         if not _initial_history_state(initial_events, working, initial.get('failures', {})):
             issues.add('solid_funding_initial_history_mismatch')
@@ -541,6 +551,8 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 issues.add('solid_funding_record_missing')
             current = record.get('solid_funding')
             if current is not None:
+                if record.get('capital_investment') is not None:
+                    issues.add('solid_funding_capital_conflict')
                 try:
                     solid_funding.validate_state(current, now, intents)
                 except (ValueError, TypeError, KeyError, AttributeError):
@@ -739,26 +751,42 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 from .skills import Plan
                 plan = Plan.from_dict(ordinary_plan)
                 snapshot = GameSnapshot(**record['after_state'])
-                step = plan.steps[ordinary_index]
+                candidate_index = (plan.next_step(GameSnapshot(**record['state']), ordinary_index)
+                                   if previous_pending is None else ordinary_index)
+                step = plan.steps[candidate_index] if candidate_index < len(plan.steps) else None
                 verified = [value for value in completed if value.get('plan_id') == plan.id
-                    and value.get('step_index') == ordinary_index and value.get('action') == step.action
+                    and step is not None and value.get('step_index') == candidate_index and value.get('action') == step.action
                     and value.get('step_sha256') == fingerprint(asdict(step))
                     and _attempt_endpoint(value, asdict(step), record['state']) and step.satisfied(snapshot)]
                 if len(verified) == 1:
                     service_completed.extend(verified)
-                    ordinary_index += 1
+                    ordinary_index = candidate_index + 1
                     reservations.pop(plan.id, None)
-                if (ordinary_index == len(plan.steps) or record.get('action') == 'verify'
+                elif previous_pending is None and record.get('pending') is not None and step is not None:
+                    dispatched = _current_dispatch_attempts(record, before_tick, now, seen_attempts)
+                    if (len(dispatched) == 1 and dispatched[0].get('plan_id') == plan.id
+                            and dispatched[0].get('step_index') == candidate_index
+                            and dispatched[0].get('step_sha256') == fingerprint(asdict(step))
+                            and _attempt_endpoint(dispatched[0], asdict(step), record['state'])):
+                        ordinary_index = candidate_index
+                failures = [value for value in fresh if value.get('kind') == 'plan_failed' and value.get('plan') == plan.id]
+                prior_count = _budget(previous_budgets, plan.id)
+                failed = (len(failures) == 1 and set(failures[0]) == {'kind', 'plan', 'reason', 'tick'}
+                    and isinstance(failures[0]['reason'], str) and bool(failures[0]['reason'])
+                    and _tick(failures[0]['tick']) and failures[0]['tick'] == now
+                    and prior_count is not None and _budget(current_budgets, plan.id) == prior_count + 1
+                    and record.get('action') == 'observe' and record.get('verified') is False
+                    and previous_pending is None and record.get('pending') is None and record.get('attempt') is None
+                    and step is not None and not step.satisfied(snapshot) and not step.allowed(snapshot))
+                if failures and not failed:
+                    issues.add('solid_funding_ordinary_failure_unproven')
+                if (len(verified) == 1 and ordinary_index == len(plan.steps) or record.get('action') == 'verify'
                         and record.get('verified') is True and previous_pending is None
                         and record.get('pending') is None and record.get('attempt') is None
                         and all(step.satisfied(snapshot) for step in plan.steps[ordinary_index:])):
                     reservations.pop(plan.id, None)
                     ordinary_plan = None
-                elif (record.get('action') == 'observe' and record.get('verified') is False
-                      and previous_pending is None and record.get('pending') is None
-                      and record.get('attempt') is None and not step.allowed(snapshot)
-                      and any(value.get('kind') == 'plan_failed' and value.get('plan') == plan.id
-                              and value.get('tick') == now for value in fresh)):
+                elif failed:
                     reservations.pop(plan.id, None)
                     ordinary_plan = None
             for value in record.get('attempt_outcomes', []):
@@ -784,6 +812,8 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
             issues.add('solid_funding_final_active_plan_mismatch')
         if not final_active and not _same(ordinary_plan, final.get('active_plan')):
             issues.add('solid_funding_final_ordinary_plan_mismatch')
+        if ordinary_plan is not None and not _same(ordinary_index, final.get('step_index')):
+            issues.add('solid_funding_final_ordinary_progress_mismatch')
         final_events = _funding_events(final.get('history', []))
         if not _same(final.get('history', [])[-8:], rows[-1].get('history', [])):
             issues.add('solid_funding_final_history_record_mismatch')

@@ -160,6 +160,15 @@ Policy-enabled ordinary `plan_committed` events retain detached plan definitions
 for this replay; those definitions are removed from model-facing history. Every
 fresh ordinary commit must match the same record's complete selection decision,
 policy, model-call flag, plan identity, source and initial observation tick.
+Mock selections require mock-world observations. An initial catalog declaration
+must predate the matching funding start, including retained historical proofs.
+No new kit may be committed while an ordinary capital investment is active,
+even if the funding is released within the same record.
+Ordinary progress skips a prefix already satisfied in the before-observation,
+then binds the selected step to its exact dispatch/completion. Pending completion
+retains its original index; an observation barrier cannot advance progress. Final
+ordinary step indexes must match replay. Clearing a failed ordinary plan requires
+one fully shaped failure event and the exact prior-plus-one failure count.
 
 Detailed funding audit proofs stay in checkpoint/gameplay history. Model-facing
 history contains only compact event identity, tick and reason; unrelated research
