@@ -1,7 +1,7 @@
 """Optional native adapter; ordinary commands retain their original implementation."""
 from __future__ import annotations
 
-import json
+from ..iteration_timing import decode_native
 from importlib.resources import files
 
 from ..output_buffers import COMMAND, PARTS, validate
@@ -27,7 +27,7 @@ class OutputBufferFactory:
         # Preparation freezes observed geometry but creates no game entity.
         # The controller has already checkpointed this exact command as pending.
         with phase("entity_lookup", trace):
-            target = json.loads(self.native.call("prepare_output_buffer", parameters))
+            target = decode_native(self.native.call("prepare_output_buffer", parameters))
         with phase("approach", trace):
             self.native.backend._fair.approach(Position(**target["position"]), PARTS[parameters["part"]])
         # Place + register + paid receipt in one native RPC; never retry here.

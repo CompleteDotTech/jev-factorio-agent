@@ -162,6 +162,10 @@ def analyze(path: Path, *, max_records: int = MAX_RECORDS) -> dict:
                         if index <= previous_iteration_index:
                             raise ValueError('Duplicate or regressed iteration timing')
                         counts['iteration:unpublished_between_records'] += index - previous_iteration_index - 1
+                    else:
+                        # The input can be a tail of a stream. These indices are
+                        # unrepresented here, not proof the runtime lost records.
+                        counts['iteration:unpublished_between_records'] += index - 1
                     previous_iteration_index = index
                     for name, value in prior['native_io'].items():
                         counts['iteration_native_io:' + name] += value
@@ -226,6 +230,7 @@ def analyze(path: Path, *, max_records: int = MAX_RECORDS) -> dict:
                 'iteration_exclusive': 'nonoverlapping_components_of_completed_decorated_step',
                 'iteration_inclusive': 'nested_totals_not_additive_not_individual_call_quantiles',
                 'iteration_gap': 'nonoverlapping_intentional_loop_sleep_and_other_gap; not watchdog cadence',
+                'missing_iteration_indices': 'not_represented_in_input_since_index_1_including_prefix; not_proof_of_runtime_loss',
                 'thread_cpu': 'current_python_thread_not_native_server_cpu',
                 'observation_exclusive': 'within_each_single_ordered_observation_only',
                 'phase_inclusive': 'nested_phase_durations_not_additive',

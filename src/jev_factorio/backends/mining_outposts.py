@@ -1,7 +1,7 @@
 """Paid, native outpost builder; no retries or independent observer wrappers."""
 from __future__ import annotations
 
-import json
+from ..iteration_timing import decode_native
 from importlib.resources import files
 from types import SimpleNamespace
 
@@ -24,7 +24,7 @@ class MiningOutpostFactory:
             return self.native.execute(action, parameters, trace=trace)
         validate(parameters)
         with phase('entity_lookup', trace):
-            target = json.loads(self.native.call('prepare_mining_outpost', parameters))
+            target = decode_native(self.native.call('prepare_mining_outpost', parameters))
         with phase('approach', trace):
             self.native.backend._fair.approach(SimpleNamespace(**target['position']), target['name'])
         with phase('transfer_rpc', trace):

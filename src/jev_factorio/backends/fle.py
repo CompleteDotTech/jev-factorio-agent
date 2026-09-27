@@ -9,7 +9,7 @@ from uuid import uuid4
 from ..planning.catalog import Catalog
 from ..state import GameSnapshot
 from ..telemetry import Trace
-from ..iteration_timing import native_io, request_size
+from ..iteration_timing import native_io, request_size, decode_native
 
 
 class SessionRcon:
@@ -240,7 +240,7 @@ class FleBackend:
             "session_id=storage.jev_session_id,"
             "position={agent.position.x,agent.position.y}}))"
         )
-        live = self._observation_profile.decode(raw) if self._observation_profile else json.loads(raw)
+        live = self._observation_profile.decode(raw) if self._observation_profile else decode_native(raw)
         position = tuple(live["position"])
         # The installed craft-job adapter requires and validates native inventory
         # from the same observation as its receipt/tick. Unsupported configurations

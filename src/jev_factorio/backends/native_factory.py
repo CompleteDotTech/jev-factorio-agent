@@ -11,7 +11,7 @@ from ..factory_contract import validate_command
 from ..planning.catalog import Catalog
 from ..state import GameSnapshot
 from ..telemetry import Trace, phase
-from .errors import ConnectionPreflightRejected
+from .errors import ConnectionPreflightRejected, require_native_success
 
 
 class NativeFactory:
@@ -24,9 +24,12 @@ class NativeFactory:
         self.command("storage.campaign.discover()")
 
     def command(self, script: str) -> str:
-        result = native_io("native_command", lambda: self.backend._instance.rcon_client.send_command("/sc " + script), request_bytes=request_size("/sc " + script))
-        if result and result.startswith("Cannot execute command."):
-            raise RuntimeError(result)
+        command = "/sc " + script
+        result = native_io(
+            "native_command",
+            lambda: self.backend._instance.rcon_client.send_command(command),
+            request_bytes=request_size(command), check_response=require_native_success,
+        )
         return result or ""
 
     def call(self, function: str, *arguments: Any) -> str:

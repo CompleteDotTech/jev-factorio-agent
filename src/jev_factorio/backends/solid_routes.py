@@ -1,7 +1,7 @@
 """Explicit experimental solid-route adapter; ordinary fair actions own placement."""
 from __future__ import annotations
 
-import json
+from ..iteration_timing import decode_native
 from copy import deepcopy
 from importlib.resources import files
 from types import SimpleNamespace
@@ -62,7 +62,7 @@ class SolidRouteFactory:
             return self.native.execute(action, parameters, **({"trace": trace} if trace is not None else {}))
         validate(parameters)
         with phase("entity_lookup", trace):
-            target = json.loads(self.native.call("prepare_solid_route", parameters))
+            target = decode_native(self.native.call("prepare_solid_route", parameters))
         if not isinstance(target, dict) or target.get("name") not in {"inserter", "transport-belt"}:
             raise ValueError("Invalid native solid placement target")
         from ..solid_routes import point
