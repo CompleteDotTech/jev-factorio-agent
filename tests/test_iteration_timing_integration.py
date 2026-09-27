@@ -13,12 +13,13 @@ from jev_factorio.latency_report import analyze
 from jev_factorio.research_log import ResearchLog, RunConfiguration, verify_run
 from jev_factorio.causal_trace import CausalTrace
 from jev_factorio.backends.fle import SessionRcon
-from test_solid_route_integration import RouteBackend, controller
+from test_solid_route_integration import Backend, controller
+from solid_routes_fixtures import ROUTE
 from test_atomic_observation import setup
 
 
 def test_real_controller_record_checkpoint_research_and_gap(tmp_path):
-    backend=RouteBackend();loop=controller(backend,tmp_path)
+    backend=Backend();loop=controller(backend,tmp_path)
     loop.log_file=tmp_path/'gameplay.jsonl'
     with ResearchLog(tmp_path/'research',RunConfiguration('mock','hierarchical','deterministic'),
                      repo_dir=tmp_path,environ={}) as sink:
@@ -48,7 +49,7 @@ def test_real_controller_record_checkpoint_research_and_gap(tmp_path):
     assert report['counts']['checkpoint:bytes_written']>0
     assert verify_run(tmp_path/'research')['complete']
     assert len(backend.calls)==3 and loop.memory.pending is None
-    assert len(loop.memory.solid_commitments[backend.row['project']]['parts'])==3
+    assert len(loop.memory.solid_commitments[ROUTE]['parts'])==3
     public=json.dumps(report)
     assert backend.state.session_id not in public and 'private' not in public
     assert report['native_acceptance_proven'] is False
@@ -102,14 +103,14 @@ def test_process_cpu_bound_and_waiting_clocks_are_distinguishable():
     lambda r:r['previous_iteration_timing']['phases'].update(private={}),
     lambda r:r['previous_iteration_timing']['native_io'].update(failed_calls=999)])
 def test_report_rejects_malformed_timing_without_echo(tmp_path,tamper):
-    loop=controller(RouteBackend(),tmp_path)
+    loop=controller(Backend(),tmp_path)
     with redirect_stdout(io.StringIO()):loop.step();record=loop.step()
     tamper(record);path=tmp_path/'malformed.jsonl';path.write_text(json.dumps(record)+'\n')
     with pytest.raises(ValueError,match='^Invalid latency record at line 1$'):analyze(path)
 
 
 def test_report_rejects_duplicate_prior_iteration(tmp_path):
-    loop=controller(RouteBackend(),tmp_path)
+    loop=controller(Backend(),tmp_path)
     with redirect_stdout(io.StringIO()):loop.step();record=loop.step()
     path=tmp_path/'duplicate.jsonl';path.write_text((json.dumps(record)+'\n')*2)
     with pytest.raises(ValueError,match='line 2'):analyze(path)

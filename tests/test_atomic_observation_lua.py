@@ -4,10 +4,19 @@ from importlib.resources import files
 from pathlib import Path
 
 import pytest
-from test_solid_routes_lua import converted
 from test_atomic_observation import setup
 
 CODE = files('jev_factorio').joinpath('lua/observation_v2.lua').read_text()
+
+
+def converted(value):
+    """Convert synthetic Lua tables into the transport's JSON shape."""
+    if hasattr(value, 'items'):
+        entries = dict(value.items())
+        if entries and set(entries) == set(range(1, len(entries) + 1)):
+            return [converted(entries[i]) for i in range(1, len(entries) + 1)]
+        return {key: converted(item) for key, item in entries.items()}
+    return value
 
 
 def runtime():
