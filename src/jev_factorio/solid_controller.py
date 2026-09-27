@@ -521,6 +521,7 @@ def solid_loop_type(base):
                 if units & ids or receipts & new_receipts:
                     raise ValueError("Checkpoint double-owns a route component")
                 units.update(ids); receipts.update(new_receipts)
+            routes.validate_corridor_reservations(memory.solid_commitments)
             return memory
 
     return type("SolidRouteLoop", (SolidRouteMixin, base), {"memory_type": SolidMemory, "__module__": __name__})

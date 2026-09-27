@@ -3,11 +3,12 @@ local c, fair = storage.campaign, storage.fair
 assert(c and fair, "Solid routes require the existing campaign and fair actor")
 local r = storage.solid_routes
 if r then
-    assert(r.protocol == 1 and r.contract_family == "straight-solid-corridor-v1" and r.implementation_revision == 2 and c.observe == r.observer and c.transfer == r.transfer
+    assert(r.protocol == 1 and r.contract_family == "straight-solid-corridor-v1" and r.implementation_revision == 3
+        and r.reservation_contract == "full-corridor-manhattan-v1" and c.observe == r.observer and c.transfer == r.transfer
         and c.configure == r.configure, "Solid route runtime requires reconciliation")
     return
 end
-r = {protocol=1, contract_family="straight-solid-corridor-v1", implementation_revision=2, cells={}, offers={}, intents={}, serial=0}
+r = {protocol=1, contract_family="straight-solid-corridor-v1", implementation_revision=3, reservation_contract="full-corridor-manhattan-v1", cells={}, offers={}, intents={}, serial=0}
 storage.solid_routes = r
 local vectors = {{x=0,y=-1},{x=1,y=0},{x=0,y=1},{x=-1,y=0}}
 local source_names = {["wooden-chest"]=true,["iron-chest"]=true,["steel-chest"]=true,
@@ -181,7 +182,23 @@ local function powered_position(source,position)
     end
     return false
 end
+-- Preparing a route reserves its whole future footprint, not only paid cells.
+-- Retain faulted/ambiguous reservations until an authorized reconciliation.
+-- Uncommitted offers are alternatives and never reserve against each other.
+local function reservations_clear(cell)
+    for id,other in pairs(r.cells) do
+        if id~=cell.route then
+            for _,a in ipairs(cell.steps) do
+                for _,b in ipairs(other.steps) do
+                    local distance=math.abs(a.position.x-b.position.x)+math.abs(a.position.y-b.position.y)
+                    assert(distance>1.01,"Solid corridor reservation conflict")
+                end
+            end
+        end
+    end
+end
 local function clear(cell)
+    reservations_clear(cell)
     local source=paid_geometry(cell);foreign_connections(cell)
     for _,s in ipairs(cell.steps) do
         if not cell.parts[s.part] then
@@ -195,6 +212,7 @@ local function failure_code(value)
     local codes={
         {"is not owned","endpoint_unavailable"},{"role is aliased","aliased_identity"},
         {"Mixed source inventory","mixed_source_items"},{"lacks owned power","missing_owned_power"},
+        {"reservation conflict","reserved_corridor"},
         {"obstructed","obstructed_corridor"},{"Foreign","foreign_transport"},
         {"Wrong","incompatible_item_or_inventory"},{"Unsupported","unsupported_endpoint_or_recipe"},
         {"exceeds bound","survey_bound"},{"survey limit","survey_bound"}}
@@ -455,6 +473,7 @@ r.observer=function()
         local linked=false
         if not cell.fault then
             local ok,value=pcall(function()
+                reservations_clear(cell)
                 paid_geometry(cell)
                 if collection==r.cells then return sample(cell) end
                 clear(cell);return false

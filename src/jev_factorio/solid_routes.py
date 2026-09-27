@@ -19,7 +19,7 @@ MAX_FLOW_IDLE_TICKS = 600
 DIAGNOSTIC_REASONS = {"paid_or_pending_route", "ready_layout", "endpoint_unavailable", "aliased_identity",
                       "mixed_source_items", "missing_owned_power", "obstructed_corridor", "foreign_transport",
                       "incompatible_item_or_inventory", "unsupported_endpoint_or_recipe", "survey_bound",
-                      "qualification_failed", "no_supported_corridor"}
+                      "qualification_failed", "no_supported_corridor", "reserved_corridor"}
 DIRECTIONS = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}
 SOURCE_NAMES = {"wooden-chest", "iron-chest", "steel-chest", "assembling-machine-1", "assembling-machine-2"}
 TARGET_NAMES = {"assembling-machine-1", "assembling-machine-2", "stone-furnace", "steel-furnace",
@@ -164,6 +164,28 @@ def validate_row(row: dict, route: str) -> None:
             raise ValueError("Invalid solid-flow evidence")
 
 
+
+def validate_corridor_reservations(rows: dict) -> None:
+    """Check full footprints of already validated observations or commitments.
+
+    Unpaid proposals may overlap as alternatives. Once a route is prepared,
+    building, ready or faulted, all of its planned component cells and a one-tile
+    join clearance remain reserved. Missing state means a durable commitment,
+    not a proposal. This cannot release a pending/paid route or authorize a build.
+    """
+    values = list(rows.values())
+    for index, left in enumerate(values):
+        for right in values[index + 1:]:
+            if left.get("state") == right.get("state") == "proposed":
+                continue
+            for a in left["steps"]:
+                for b in right["steps"]:
+                    distance = sum(abs(a["position"][axis] - b["position"][axis])
+                                   for axis in ("x", "y"))
+                    if distance <= 1.01:
+                        raise ValueError("Solid corridor reservation conflict")
+
+
 def routes(snapshot) -> dict:
     data = snapshot.factory.get("solid_routes")
     if (not isinstance(data, dict) or set(data) != {"protocol", "session_id", "tick", "actor_index", "surface_index", "force_index", "routes", "diagnostics"}
@@ -198,6 +220,7 @@ def routes(snapshot) -> dict:
         endpoints.update(ids); components.update(new); receipts.update(new_receipts)
         if row["flow"] and row["flow"]["last_tick"] != snapshot.tick:
             raise ValueError("Solid flow evidence is not from this observation")
+    validate_corridor_reservations(data["routes"])
     return data["routes"]
 
 
