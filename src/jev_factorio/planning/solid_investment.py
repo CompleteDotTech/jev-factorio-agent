@@ -64,14 +64,24 @@ def requirements(snapshot, catalog, *, reserved=None, job=None) -> tuple[dict, s
         ledger = SupplyLedger.capture(snapshot, catalog, reserved=reserved, job=job)
         bill = catalog.material_demands(roots, ledger.forecast_stock(), snapshot.researched or [])
         demand = {}
+        # Expansion credits collectible source output, which still needs hauling.
+        # Reconstructed recipe input bills must distinguish it from spendable
+        # carried stock. Allocate the latter once, in stable expansion order;
+        # reserved/locked items were already excluded by the shared ledger.
+        carried = dict(ledger.carried)
         for name, batches in bill.batches.items():
             if name not in RECIPES:
                 continue
             recipe = catalog.recipes[name]
             if any(i.get("type") != "item" for i in recipe.get("ingredients", [])):
                 continue
-            demand[name] = {i["name"]: math.ceil(i["amount"] * batches)
-                            for i in recipe["ingredients"]}
+            demand[name] = {}
+            for ingredient in recipe["ingredients"]:
+                item = ingredient["name"]
+                wanted = math.ceil(ingredient["amount"] * batches)
+                used = min(wanted, math.floor(carried.get(item, 0)))
+                carried[item] = carried.get(item, 0) - used
+                demand[name][item] = wanted - used
         return demand, "current_research_recipe_bill"
     except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
         return {}, "bounded_demand_unavailable"

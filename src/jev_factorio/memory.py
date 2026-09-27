@@ -56,11 +56,23 @@ class CampaignMemory:
 
     @classmethod
     def load(cls, path: Path, session_id: str, target: str) -> CampaignMemory:
-        try:
-            def invalid_constant(value):
-                raise ValueError(f"Invalid numeric constant in checkpoint: {value}")
+        return cls.from_bytes(path.read_bytes(), session_id, target)
 
-            data = json.loads(path.read_text(encoding="utf-8"), parse_constant=invalid_constant)
+    @classmethod
+    def from_bytes(cls, raw: bytes, session_id: str, target: str) -> CampaignMemory:
+        """Validate one immutable checkpoint capture through the full composed loader."""
+        def invalid_constant(value):
+            raise ValueError(f"Invalid numeric constant in checkpoint: {value}")
+
+        try:
+            data = json.loads(raw.decode('utf-8'), parse_constant=invalid_constant)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError("Invalid controller checkpoint; refusing to reset it") from error
+        return cls._from_data(data, session_id, target)
+
+    @classmethod
+    def _from_data(cls, data: dict, session_id: str, target: str) -> CampaignMemory:
+        try:
             if not isinstance(data, dict) or type(data.get("version")) is not int:
                 raise ValueError("Invalid checkpoint version")
             if data["version"] == 1 and {"attempt", "attempt_outcomes"} & data.keys():
@@ -157,7 +169,8 @@ class CampaignMemory:
 def load_checkpoint(path: Path, session_id: str, target: str) -> CampaignMemory:
     from .controller import HierarchicalLoop
 
-    data = json.loads(path.read_text(encoding="utf-8"))
+    raw = path.read_bytes()
+    data = json.loads(raw.decode('utf-8'))
     if not isinstance(data, dict):
         raise ValueError("Invalid controller checkpoint")
     loop_type = HierarchicalLoop
@@ -181,4 +194,4 @@ def load_checkpoint(path: Path, session_id: str, target: str) -> CampaignMemory:
         if not CHECKPOINT_FIELDS <= data.keys():
             raise ValueError("Incomplete solid-route checkpoint extension")
         loop_type = solid_loop_type(loop_type)
-    return loop_type.memory_type.load(path, session_id, target)
+    return loop_type.memory_type.from_bytes(raw, session_id, target)

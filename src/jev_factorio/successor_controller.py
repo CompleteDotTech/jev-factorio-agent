@@ -276,13 +276,14 @@ def successor_loop_type(base):
         successor_receipts: dict = field(default_factory=dict)
 
         @classmethod
-        def load(cls, path, session_id, target):
-            data = json.loads(path.read_text(encoding='utf-8'))
+        def _from_data(cls, data, session_id, target):
+            if not isinstance(data, dict):
+                raise ValueError('Invalid successor checkpoint')
             keys = {'successor_schema', 'successor_projects', 'successor_receipts'}
             legacy = not keys.intersection(data)
             if not legacy and not keys <= data.keys():
                 raise ValueError('Incomplete successor checkpoint extension')
-            memory = super().load(path, session_id, target)
+            memory = super()._from_data(data, session_id, target)
             if legacy:
                 if (memory.status != 'running' or memory.active_plan or memory.pending or memory.reservations
                         or memory.capital_investment or getattr(memory, 'background_job', None)):

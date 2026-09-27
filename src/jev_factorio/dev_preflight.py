@@ -38,7 +38,7 @@ def checkpoint_read(path: Path, *, idle: bool = True) -> tuple[dict, str]:
     if not isinstance(data, dict): raise ValueError('Checkpoint must be an object')
     # Existing loaders validate schemas, owned receipts, failure history and session.
     # They do not contact a backend or write the input file.
-    checkpoint_type(data).load(path, data['session_id'], data['target'])
+    checkpoint_type(data).from_bytes(raw, data['session_id'], data['target'])
     if stable_read(path) != raw: raise ValueError('Checkpoint changed during validation')
     if idle and (data.get('status') != 'running' or data.get('target') != 'rocket_launch'
             or any(data.get(k) for k in ('active_plan', 'pending', 'attempt', 'reservations',

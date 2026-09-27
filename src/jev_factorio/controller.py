@@ -152,6 +152,11 @@ class HierarchicalLoop(AgentLoop):
         with phase(stage, self._diagnostic_trace):
             return self._observe_snapshot()
 
+    def _initial_memory(self, snapshot: GameSnapshot):
+        """Restore once at the first fresh observation, before any actor work."""
+        return (self.memory_type.load(self.checkpoint, snapshot.session_id, self.target)
+                if self.resume_controller else self.memory_type(snapshot.session_id, self.target))
+
     def _observe_snapshot(self) -> GameSnapshot:
         snapshot = self._trace.observe(self.backend, self._trace.observation_phase)
         if 'solid_routes' in snapshot.factory and not getattr(self, '_solid_routes_enabled', False):
@@ -169,8 +174,7 @@ class HierarchicalLoop(AgentLoop):
         # Validate serialized facts rather than allowing NaN into conditions.
         json.dumps(snapshot.for_jev(), allow_nan=False)
         if self.memory is None:
-            self.memory = (self.memory_type.load(self.checkpoint, snapshot.session_id, self.target)
-                           if self.resume_controller else self.memory_type(snapshot.session_id, self.target))
+            self.memory = self._initial_memory(snapshot)
         if self.memory.session_id != snapshot.session_id or snapshot.tick < self.memory.last_tick:
             raise ValueError("Session changed or observation tick regressed; refusing to act")
         self.memory.last_tick = snapshot.tick

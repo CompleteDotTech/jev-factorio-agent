@@ -51,6 +51,7 @@ class SolidRouteMixin:
         # session is a schema binding only; the first fresh observation still
         # checks the live session, tick, epoch, ownership and receipts.
         self._solid_resume_checkpoint = None
+        self._solid_resume_memory = None
         if options.get("resume_controller"):
             path = Path(options["checkpoint"])
             captured = path.read_bytes()
@@ -59,8 +60,8 @@ class SolidRouteMixin:
                     or saved["solid_intents"] != self._solid_intents
                     or saved.get("solid_science_policy", False) is not solid_science_policy):
                 raise ValueError("Solid treatment cannot silently replace or migrate a checkpoint")
-            restored = self.memory_type.load(path, saved.get("session_id"),
-                                             options.get("target", "rocket_launch"))
+            restored = self.memory_type.from_bytes(captured, saved.get("session_id"),
+                                                   options.get("target", "rocket_launch"))
             if path.read_bytes() != captured:
                 raise ValueError("Checkpoint changed during resume validation")
             if not restored.solid_epoch:
@@ -68,6 +69,7 @@ class SolidRouteMixin:
                 # not permission to install another runtime or adopt an epoch.
                 raise ValueError(UNBOUND_FAULT)
             self._solid_resume_checkpoint = captured
+            self._solid_resume_memory = restored
         super().__init__(backend, jev, **options)
         native = getattr(backend, "_factory", None)
         if native is not None:
@@ -81,13 +83,52 @@ class SolidRouteMixin:
         elif getattr(backend, "solid_routes_supported", False) is not True:
             raise ValueError("Backend does not support owned solid-route observations")
 
+    def _check_resume_checkpoint(self):
+        try:
+            unchanged = self.checkpoint.read_bytes() == self._solid_resume_checkpoint
+        except OSError:
+            unchanged = False
+        if not unchanged:
+            # Do not retain foreign memory or overwrite the other writer's file.
+            # A swallowed exception cannot permit a later step/save to continue.
+            self.memory = None
+            self._solid_fault = True
+            self._persistence_failed = True
+            raise ValueError("Checkpoint changed after resume validation; reconstruct before continuing")
+
+    def _initial_memory(self, snapshot):
+        if self._solid_resume_memory is not None:
+            # The preflight used the full composed loader. Reuse those validated
+            # bytes' value rather than reopening a mutable path (including ABA).
+            # The ordinary observer still checks the live session and tick.
+            return deepcopy(self._solid_resume_memory)
+        return super()._initial_memory(snapshot)
+
     def _observe_snapshot(self):
-        if (self.memory is None and self._solid_resume_checkpoint is not None
-                and self.checkpoint.read_bytes() != self._solid_resume_checkpoint):
-            raise ValueError("Checkpoint changed after resume validation")
+        initial_resume = self.memory is None and self._solid_resume_checkpoint is not None
+        if initial_resume:
+            self._check_resume_checkpoint()
         # Leave initialization in the ordinary observer so run() still performs
         # its first fresh receipt reconciliation even for a retained terminal state.
-        snapshot = super()._observe_snapshot()
+        try:
+            snapshot = super()._observe_snapshot()
+        except BaseException:
+            if initial_resume and self.memory is not None:
+                # The phase failure callback runs outside this method and may
+                # persist diagnostics against any provisional pending attempt.
+                # Reject that memory before the callback can write it.
+                self.memory = None
+                self._solid_fault = True
+                self._persistence_failed = True
+            raise
+        finally:
+            # Also runs when an observation/decoder/validator raises. Never let a
+            # successful earlier comparison authorize bytes replaced in flight.
+            if initial_resume:
+                self._check_resume_checkpoint()
+        if initial_resume:
+            self._solid_resume_memory = None
+            self._solid_resume_checkpoint = None
         # Inner composed observers may save their own new ownership before the
         # outer observation completes. Bind this extension first, so a crash
         # there leaves a reloadable checkpoint rather than empty treatment fields.
@@ -286,11 +327,10 @@ def solid_loop_type(base):
         solid_commitments: dict = field(default_factory=dict)
 
         @classmethod
-        def load(cls, path, session_id, target):
-            data = json.loads(Path(path).read_text())
+        def _from_data(cls, data, session_id, target):
             if not isinstance(data, dict) or not CHECKPOINT_FIELDS <= data.keys():
                 raise ValueError("Incomplete or legacy solid-route checkpoint")
-            memory = super().load(path, session_id, target)
+            memory = super()._from_data(data, session_id, target)
             if not routes.integer(memory.solid_routes_schema, 1, 1):
                 raise ValueError("Unsupported solid checkpoint version")
             if type(memory.solid_science_policy) is not bool:
