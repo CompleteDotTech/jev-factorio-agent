@@ -8,7 +8,7 @@ from importlib.resources import files
 from types import SimpleNamespace
 from typing import Any
 from ..iteration_timing import native_io, decode_native, span, request_size
-from .errors import ConnectionPreflightRejected
+from .errors import ConnectionPreflightRejected, require_native_success
 
 
 class NativePathNotFound(RuntimeError):
@@ -22,10 +22,13 @@ class FairActions:
         self.call("bind")
 
     def command(self, script: str) -> str:
-        result = native_io("native_command", lambda: self.backend._instance.rcon_client.send_command("/sc " + script), request_bytes=request_size("/sc " + script)) or ""
-        if result.startswith("Cannot execute command."):
-            raise RuntimeError(result)
-        return result
+        command = "/sc " + script
+        result = native_io(
+            "native_command",
+            lambda: self.backend._instance.rcon_client.send_command(command),
+            request_bytes=request_size(command), check_response=require_native_success,
+        )
+        return result or ""
 
     def call(self, function: str, *arguments: Any) -> dict:
         encoded = ", ".join(
@@ -153,7 +156,7 @@ class FairActions:
         expected_unit = "nil" if result.get("unit_number") is None else json.dumps(result["unit_number"])
 
         def reached_entity() -> bool:
-            return json.loads(self.command(
+            return decode_native(self.command(
                 "local player=storage.fair.actor(); local target=helpers.json_to_table("
                 + json.dumps(json.dumps(center)) + "); local entity=player.surface.find_entity("
                 + json.dumps(name) + ",target); "
@@ -173,7 +176,7 @@ class FairActions:
             walked = True
             if reached_entity():
                 return
-        origin = json.loads(self.command(
+        origin = decode_native(self.command(
             "local p=storage.fair.actor(); "
             "rcon.print(helpers.table_to_json({x=p.position.x,y=p.position.y}))"
         ))

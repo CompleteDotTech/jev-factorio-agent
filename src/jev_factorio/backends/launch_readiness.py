@@ -1,5 +1,5 @@
 """Paid native launch preparation without FLE prototype enumeration shortcuts."""
-import json
+from ..iteration_timing import decode_native
 from types import SimpleNamespace
 
 from ..launch_readiness import validate
@@ -10,7 +10,7 @@ def execute(native, action: str, parameters: dict, trace=None) -> str:
     validate(action, parameters)
     if action == 'factory_launch_pad':
         with phase('entity_lookup', trace):
-            target = json.loads(native.call('prepare_launch_pad', parameters))
+            target = decode_native(native.call('prepare_launch_pad', parameters))
         with phase('approach', trace):
             native.backend._fair.approach(SimpleNamespace(**target['position']), target['name'])
         with phase('transfer_rpc', trace):

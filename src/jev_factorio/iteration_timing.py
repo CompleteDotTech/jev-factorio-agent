@@ -234,7 +234,7 @@ def validate_timing(value: object) -> dict:
     if not isinstance(value, dict) or set(value) != fields:
         raise ValueError('Invalid iteration timing fields')
     if (type(value['schema']) is not int or value['schema'] != 1
-            or type(value['iteration_index']) is not int or value['iteration_index'] < 1
+            or type(value['iteration_index']) is not int or not 1 <= value['iteration_index'] <= 2**63 - 1
             or type(value['status']) is not str or value['status'] not in {'returned','error'} or value['clock'] != 'perf_counter_ns'
             or value['cpu_clock'] != 'process_time_ns' or value['thread_clock'] not in ('thread_time_ns',None)
             or value['scope'] != 'decorated_step_through_return_or_error'
@@ -286,6 +286,7 @@ def validate_timing(value: object) -> dict:
 
 
 _NATIVE_DEPTH: ContextVar[int] = ContextVar('jev_native_timing_depth', default=0)
+_NATIVE_REQUEST: ContextVar[dict | None] = ContextVar('jev_native_request_size', default=None)
 
 
 def request_size(value: object) -> int | None:
@@ -300,41 +301,56 @@ def request_size(value: object) -> int | None:
     return None
 
 
-def native_io(name: str, operation: Callable[[], object], *, request_bytes: int | None = None):
-    """One logical native call across nested wrappers, never a packet count."""
+def native_io(name: str, operation: Callable[[], object], *, request_bytes: int | None = None,
+              check_response: Callable[[object], None] | None = None):
+    """One logical call, including response-status validation, not a packet count.
+
+    A returned rejection still has measurable response bytes. A transport failure
+    does not. Validation also runs when timing is disabled or a wrapper is nested;
+    instrumentation never supplies permission or changes exception behavior.
+    """
     ledger = _CURRENT.get()
     if ledger is None or _NATIVE_DEPTH.get():
-        return operation()
+        if ledger is not None and _NATIVE_DEPTH.get():
+            request = _NATIVE_REQUEST.get()
+            if request is not None:
+                # The innermost wrapper knows the bytes actually sent after
+                # session scoping; keep one logical call in the outer ledger.
+                request['bytes'] = request_bytes if type(request_bytes) is int and request_bytes >= 0 else None
+        result = operation()
+        if check_response is not None:
+            check_response(result)
+        return result
     token = _NATIVE_DEPTH.set(1)
+    request = {'bytes': request_bytes if type(request_bytes) is int and request_bytes >= 0 else None}
+    request_token = _NATIVE_REQUEST.set(request)
     name = name if name in {'native_command', 'native_batch'} else 'native_command'
     ledger.io['batch_calls' if name == 'native_batch' else 'command_calls'] += 1
-    if type(request_bytes) is int and request_bytes >= 0:
-        ledger.io['request_bytes'] += request_bytes
-    else:
-        ledger.io['unknown_request_size_calls'] += 1
     try:
         with span(name):
+            received = False
             try:
                 result = operation()
+                received = True
+                size = request_size(result)
+                if size is None:
+                    ledger.io['unknown_response_size_calls'] += 1
+                else:
+                    ledger.io['response_bytes'] += size
+                if check_response is not None:
+                    check_response(result)
+                return result
             except BaseException:
                 ledger.io['failed_calls'] += 1
-                ledger.io['unknown_response_size_calls'] += 1
+                if not received:
+                    ledger.io['unknown_response_size_calls'] += 1
                 raise
-            try:
-                if type(result) is str:
-                    size = len(result.encode('utf-8'))
-                elif type(result) is dict and all(type(value) is str for value in result.values()):
-                    size = sum(len(value.encode('utf-8')) for value in result.values())
-                else:
-                    size = None
-            except (UnicodeError, TypeError, ValueError):
-                size = None
-            if size is None:
-                ledger.io['unknown_response_size_calls'] += 1
-            else:
-                ledger.io['response_bytes'] += size
-            return result
     finally:
+        if request['bytes'] is None:
+            ledger.io['unknown_request_size_calls'] += 1
+        else:
+            ledger.io['request_bytes'] += request['bytes']
+        _NATIVE_REQUEST.reset(request_token)
         _NATIVE_DEPTH.reset(token)
 
 

@@ -94,10 +94,12 @@ local function bootstrap(player, expected_unit)
         position=player.position, radius=1000, limit=129}
     assert(#found<=128,"Bootstrap observation budget exceeded")
     table.sort(found,function(a,b) return (a.unit_number or 0)<(b.unit_number or 0) end)
-    local names, selected={},nil
+    local names, selected, units={},nil,{}
     for _, entity in ipairs(found) do
         assert(entity.valid and entity.surface.index==player.surface.index and entity.force.index==player.force.index)
         assert(integer(entity.unit_number,1,9007199254740991),"Missing bootstrap identity")
+        assert(not units[entity.unit_number],"Duplicate bootstrap identity")
+        units[entity.unit_number]=true
         names[#names+1]=entity.name
         if entity.name=="burner-mining-drill" and
             ((expected_unit and entity.unit_number==expected_unit) or (not expected_unit and not selected)) then selected=entity end
@@ -110,12 +112,29 @@ local function bootstrap(player, expected_unit)
         result.drill={name=selected.name,unit_number=selected.unit_number,position=point(selected.position),
             drop_position=point(selected.drop_position),status=status,
             fuel=contents(assert(selected.get_fuel_inventory(),"Missing burner fuel inventory"))}
-        for _, entity in ipairs(found) do
-            if entity.name=="wooden-chest" and math.abs(entity.position.x-selected.drop_position.x)<=.1
+        -- The actor-radius scan finds the drill, not necessarily its output.
+        -- Query that one endpoint separately; never enlarge the broad scan.
+        -- Radius .15 covers the existing +/- .1 center tolerance. Two results
+        -- detect ambiguity; only one same-force, same-surface chest is accepted.
+        local outputs=player.surface.find_entities_filtered{
+            name="wooden-chest",force=player.force,position=result.drill.drop_position,
+            radius=.15,limit=2}
+        assert(#outputs<=1,"Ambiguous bootstrap output")
+        for _, entity in ipairs(outputs) do
+            assert(entity.valid and entity.name=="wooden-chest"
+                and entity.surface.index==player.surface.index and entity.force.index==player.force.index,
+                "Invalid bootstrap output identity")
+            assert(integer(entity.unit_number,1,9007199254740991),"Missing bootstrap output identity")
+            if math.abs(entity.position.x-selected.drop_position.x)<=.1
                 and math.abs(entity.position.y-selected.drop_position.y)<=.1 then
+                if not units[entity.unit_number] then
+                    assert(#names<128,"Bootstrap observation budget exceeded")
+                    units[entity.unit_number]=true
+                    names[#names+1]=entity.name
+                end
                 local items=contents(assert(entity.get_inventory(defines.inventory.chest)))
                 result.output_connected=true
-                result.iron_ore_collected=result.iron_ore_collected+(items["iron-ore"] or 0)
+                result.iron_ore_collected=items["iron-ore"] or 0
             end
         end
     end
@@ -190,7 +209,8 @@ campaign.observation_snapshot_v2=function(generation,expected_drill)
         controls=controls,position=point(player.position),bootstrap=initial,targets=targets,anchors=witness,
         session_id=storage.jev_session_id,actor_unit=player.character.unit_number,
         surface_index=player.surface.index,force_index=player.force.index,cache={hits=hits,misses=misses},
-        bounds={anchor_radius=256,anchor_limit=129,bootstrap_radius=1000,bootstrap_limit=129}})
+        bounds={anchor_radius=256,anchor_limit=129,bootstrap_radius=1000,bootstrap_limit=129,
+            bootstrap_output_radius=.15,bootstrap_output_limit=2}})
     assert(#encoded<=8*1024*1024,"Native observation payload budget exceeded")
     finish(timer,"serialize")
     rcon.print("JEV_SNAPSHOT|"..encoded)

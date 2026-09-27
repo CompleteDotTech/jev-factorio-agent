@@ -1,7 +1,7 @@
 """Native input-route decorator; existing controls own walking and construction."""
 from __future__ import annotations
 
-import json
+from ..iteration_timing import decode_native
 from importlib.resources import files
 from types import SimpleNamespace
 
@@ -24,7 +24,7 @@ class InputRouteFactory:
             validate_command(action, parameters)
             args = [parameters[key] for key in ("role", "name", "anchor")]
             with phase("entity_lookup", trace):
-                target = json.loads(self.native.call("prepare_production_site", *args))
+                target = decode_native(self.native.call("prepare_production_site", *args))
             with phase("approach", trace):
                 self.native.backend._fair.approach(SimpleNamespace(**target["position"]), target["name"])
             with phase("transfer_rpc", trace):
@@ -36,7 +36,7 @@ class InputRouteFactory:
             return self.native.execute(action, parameters, trace=trace)
         validate(parameters)
         with phase("entity_lookup", trace):
-            target = json.loads(self.native.call("prepare_input_route", parameters))
+            target = decode_native(self.native.call("prepare_input_route", parameters))
         with phase("approach", trace):
             self.native.backend._fair.approach(SimpleNamespace(**target["position"]), target["name"])
         with phase("transfer_rpc", trace):
