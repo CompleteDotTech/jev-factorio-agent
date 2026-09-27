@@ -245,7 +245,7 @@ class SolidRouteMixin:
                                 'acquisition_sha256': solid_funding.digest({k: v for k, v in declaration.items() if k != 'reserved'})}
                         except (ValueError, KeyError, TypeError, AttributeError):
                             pass  # Missing audit declaration cannot authorize or block a native action.
-            self._reconcile_solid_funding(snapshot)
+            self._finalize_solid_funding(snapshot)
         self._solid_evidence = deepcopy(snapshot.factory.get("solid_routes", {}))
         self._save()  # Exact paid prefix is durable before another actor mutation.
         return snapshot
@@ -274,7 +274,13 @@ class SolidRouteMixin:
         # The ordinary plan-commit save follows before fresh observation and the
         # prepared mutation save. No asynchronous or new durability path exists.
 
+    def _finalize_solid_funding(self, snapshot):
+        # Outer ownership mixins may defer this until their own checks complete.
+        self._reconcile_solid_funding(snapshot)
+
     def _reconcile_solid_funding(self, snapshot):
+        if self._solid_fault or self.memory.status == "uncertain":
+            return  # Persisted uncertainty remains a barrier after reconstruction.
         state = self.memory.solid_funding
         if state is None or (self._solid_funding_release is not None
                              and self._solid_funding_release[0] != state):
@@ -333,7 +339,9 @@ class SolidRouteMixin:
     def _clear_plan(self):
         super()._clear_plan()
         state = getattr(self.memory, "solid_funding", None)
-        if state and self.memory.failures.get(state["key"] + ":kit", 0) >= 2:
+        if (state and not self._solid_fault and self.memory.status != "uncertain"
+                and not self.memory.pending
+                and self.memory.failures.get(state["key"] + ":kit", 0) >= 2):
             observed = self._solid_funding_release
             reason = (observed[1] if observed and observed[0] == state
                       and observed[2] <= self.memory.last_tick else "kit_failure_budget")

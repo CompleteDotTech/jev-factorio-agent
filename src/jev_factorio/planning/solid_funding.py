@@ -146,17 +146,46 @@ def _positive(value: object) -> bool:
 
 
 def acquire(row: dict, snapshot: GameSnapshot, catalog: Catalog, *, reserved=None, job=None, failures=None) -> tuple[Plan | None, dict]:
-    """Prove a finite complete kit bill, then offer just its first legal action.
-
-    Hand crafting is restricted to enabled deterministic single-output recipes.
-    Missing materials may come from already observed, exclusively identified,
-    permitted owned output. No future production, machine input, research unlock,
-    exploration, fuel service, optional capital or manual native edit is credited.
-    """
+    """Preserve downstream funding semantics over the shared paid-bill solver."""
     boiler = snapshot.factory.get('entities', {}).get('utility:boiler', {})
     if (row['state'] != 'proposed' or row['pending'] or job is not None
             or boiler and boiler.get('fuel', {}).get('coal', 0) < 5):
         raise ValueError('Kit acquisition requires an unstarted proposal')
+    plan, estimates, collected = _acquire_bill(
+        routes.remaining(row), project_key(row) + ':kit', snapshot, catalog,
+        reserved=reserved, job=job, failures=failures, budget_check=failure_count)
+    if plan is None:
+        return None, estimates
+    source_draw = collected.get((row['source']['role'], row['item']), 0)
+    estimates = {**estimates, 'source_draw_for_kit': int(source_draw),
+        'source_units_after_kit': max(0, snapshot.factory['entities'][row['source']['role']]
+                                      .get('output', {}).get(row['item'], 0) - source_draw)}
+    return Plan(plan.id, plan.goal, 'Acquire the next paid downstream kit prerequisite',
+                plan.steps, materials={'solid_kit': estimates}), estimates
+
+
+def bill_catalog_digest(kit: dict, snapshot: GameSnapshot, catalog: Catalog) -> str:
+    bill = catalog.material_demands(kit, {}, snapshot.researched or [])
+    if len(bill.batches) > MAX_EXPANSIONS:
+        raise ValueError('Kit catalog graph exceeds bound')
+    return digest({'recipes': {name: catalog.recipes[name] for name in sorted(bill.batches)},
+                   'hand_categories': catalog.hand_categories, 'version': catalog.version})
+
+
+def _acquire_bill(kit: dict, plan_id: str, snapshot: GameSnapshot, catalog: Catalog, *,
+                  reserved=None, job=None, failures=None, budget_check=failure_count,
+                  protect_final_stock=False) -> tuple[Plan | None, dict, Counter]:
+    """Simulate one bounded complete paid bill; only its first step may dispatch.
+
+    This internal solver supplies no project admission or mutation permission.
+    Callers must revalidate their owned topology, treatment, budgets and funding
+    state at selection and fresh dispatch, using the unchanged native contract.
+    """
+    if (not isinstance(kit, dict) or not 1 <= len(kit) <= 32
+            or any(not isinstance(k, str) or not 0 < len(k) <= 128
+                   or not routes.integer(v, 1, 200) for k, v in kit.items())
+            or job is not None):
+        raise ValueError('Invalid bounded paid kit bill')
     ledger = SupplyLedger.capture(snapshot, catalog, reserved=reserved, job=job)
     stock = dict(ledger.carried)
     actions, collected = [], Counter()
@@ -177,8 +206,8 @@ def acquire(row: dict, snapshot: GameSnapshot, catalog: Catalog, *, reserved=Non
         nonlocal service_ticks
         if len(actions) >= MAX_ACTIONS:
             raise ValueError('Kit acquisition action bound exceeded')
-        probe = Plan(project_key(row) + ':kit', 'rocket_launch', 'Budget check', (step,))
-        if failure_count(probe, failures or {}) >= 2:
+        probe = Plan(plan_id, 'rocket_launch', 'Budget check', (step,))
+        if budget_check(probe, failures or {}) >= 2:
             raise KitBudgetExhausted('Existing kit, action or construction failure budget exhausted')
         actions.append(step)
         service_ticks += estimate
@@ -256,11 +285,21 @@ def acquire(row: dict, snapshot: GameSnapshot, catalog: Catalog, *, reserved=Non
         craft_ticks += duration
         stock[item] = stock.get(item, 0) + output * batches - missing
 
-    kit = routes.remaining(row)
-    for item, amount in sorted(kit.items()):
-        consume(item, amount)
+    # A bundle caller can retain already-carried final components while funding
+    # missing ones. Preallocate every final item before expanding any recipe,
+    # so e.g. a carried belt cannot silently fund an inserter recipe later in
+    # the bill. This is simulated allocation, not a native reservation.
+    required = dict(kit)
+    if protect_final_stock:
+        for item, amount in required.items():
+            kept = min(stock.get(item, 0), amount)
+            stock[item] = stock.get(item, 0) - kept
+            required[item] -= kept
+    for item, amount in sorted(required.items()):
+        if amount:
+            consume(item, amount)
     if not actions:
-        return None, {'reason': 'complete_carried_kit', 'acquisition_actions_estimate': 0}
+        return None, {'reason': 'complete_carried_kit', 'acquisition_actions_estimate': 0}, collected
     if craft_ticks + service_ticks > MAX_TICKS:
         raise ValueError('Complete kit acquisition horizon exceeded')
     first = actions[0]
@@ -274,20 +313,15 @@ def acquire(row: dict, snapshot: GameSnapshot, catalog: Catalog, *, reserved=Non
         raise ValueError('Observed inventory cannot receive the next kit output')
     if not first.allowed(snapshot) or any(ledger.carried.get(k, 0) < v for k,v in (first.costs or {}).items()):
         raise ValueError('First kit action is not currently spendable')
-    source_draw = collected.get((row['source']['role'], row['item']), 0)
     estimates = {'acquisition_actions_estimate': len(actions),
                  'acquisition_game_ticks_estimate': math.ceil(craft_ticks + service_ticks),
                  'acquisition_basis': 'owned_output_geometry_and_catalog_hand_craft_estimates',
-                 'source_draw_for_kit': int(source_draw),
                  'next_output_headroom_basis': ('observed_item_headroom' if product in headroom
                                                 else 'unknown_native_must_validate'),
-                 'catalog_sha256': catalog_digest(row, snapshot, catalog),
-                 'acquisition_service_ticks_estimate': math.ceil(service_ticks),
-                 'source_units_after_kit': max(0, snapshot.factory['entities'][row['source']['role']]
-                                              .get('output', {}).get(row['item'], 0) - source_draw)}
-    return Plan(project_key(row) + ':kit', 'rocket_launch',
-                'Acquire the next paid downstream kit prerequisite', (first,),
-                materials={'solid_kit': estimates}), estimates
+                 'catalog_sha256': bill_catalog_digest(kit, snapshot, catalog),
+                 'acquisition_service_ticks_estimate': math.ceil(service_ticks)}
+    return Plan(plan_id, 'rocket_launch', 'Acquire the next paid kit prerequisite',
+                (first,), materials={'paid_kit': estimates}), estimates, collected
 
 
 def validate_state(state: dict, last_tick: int, intents: list) -> None:

@@ -32,8 +32,9 @@ fuel consumers, shared endpoints, and invented `coal:` roles are rejected.
 
 Mixed configuration is explicit source-level composition, not a new CLI flag or
 permission to modify a running treatment. It does not introduce splitters,
-shared-source fan-out, automatic coal-kit acquisition or investment payback for
-coal mining. The separately qualified downstream funding policy is retained. Existing downstream science-policy admission remains opt-in.
+shared-source fan-out or autonomous investment payback for coal mining.
+A separate, default-disabled `coal_kit_policy` can fund a configured bundle from
+current owned stock; see [paid coal-kit funding](COAL_KIT_FUNDING.md). The separately qualified downstream funding policy is retained. Existing downstream science-policy admission remains opt-in.
 
 ## Preconditions, costs and bootstrap
 
@@ -52,9 +53,11 @@ once, not also subtracted as another project's reservation. An unpaid optional
 proposal does not reserve inventory. Pending coal preparation blocks unrelated
 solid placement; no simultaneous actor or RCON operations are introduced.
 
-This version requires the kit to be already carried. It does not acquire/craft the
-kit, construct a power trunk, establish burner self-fueling, or estimate economic
-payback from measured coal demand and avoided trips. These are remaining policy
+The default configuration requires the kit to be already carried. The explicit
+`coal_kit_policy=True` source-level composition can acquire or handcraft a missing
+kit from currently owned stock under the bounded funding contract. Neither mode
+constructs a power trunk, establishes burner self-fueling, or estimates economic
+payback from measured coal demand and avoided trips. Those are remaining policy
 and integration work, not claims supplied by the fixtures.
 
 Each drill and inserter requires observed coverage by an owned energized electric
@@ -225,8 +228,9 @@ Both a normal reply and modeled lost reply preserve exactly one gather and leave
 the chest's 20 coal untouched. These are source regressions, not Factorio mining,
 physics, actual provider execution, measured hauling savings, or native acceptance.
 No production feature, immutable treatment, checkpoint schema, receipt, failure
-identity, or native permission is changed by this correction. Automatic coal-kit
-acquisition, coal demand/payback investment and native qualification remain outstanding for the experimental coal implementation.
+identity, or native permission is changed by this private-stock correction. The
+separate coal-kit funding extension is documented in COAL_KIT_FUNDING.md; coal
+demand/payback investment and native qualification remain outstanding.
 
 
 ## Current-main reconciliation

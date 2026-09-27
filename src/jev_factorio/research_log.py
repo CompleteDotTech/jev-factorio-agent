@@ -43,7 +43,7 @@ _CORRELATION_KEYS = {"decision_id", "model_call_id", "plan_id", "action_id"}
 _TREATMENT_FIELDS = {"factory_scheduling", "background_work",
                      "furnace_output_buffers", "furnace_input_belts", "mining_outposts",
                      "campaign_diagnostics", "profile_observations", "consolidated_observations",
-                     "lead_time_supply", "coverage_margin_lookahead", "solid_routes", "solid_science_policy", "coal_supply"}
+                     "lead_time_supply", "coverage_margin_lookahead", "solid_routes", "solid_science_policy", "coal_supply", "coal_kit_policy"}
 
 
 class ResearchLogError(RuntimeError):
@@ -108,6 +108,7 @@ class RunConfiguration:
     solid_routes: bool = False
     solid_science_policy: bool = False
     coal_supply: bool = False
+    coal_kit_policy: bool = False
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -294,6 +295,8 @@ def _configuration(configuration: dict) -> None:
     for key in _TREATMENT_FIELDS - {"factory_scheduling"}:
         if type(configuration.get(key, False)) is not bool:
             raise ValueError("Invalid run treatment flag")
+    if configuration.get("coal_kit_policy", False) and not configuration.get("coal_supply", False):
+        raise ResearchLogError("Coal kit policy requires its coal supply treatment")
     if configuration.get("coal_supply", False) and not configuration.get("solid_routes", False):
         raise ResearchLogError("Coal supply requires its solid route treatment")
     if configuration.get("solid_science_policy", False) and not configuration.get("solid_routes", False):
