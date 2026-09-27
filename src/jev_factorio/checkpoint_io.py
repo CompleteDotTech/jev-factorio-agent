@@ -52,8 +52,7 @@ def _managed_stream(stream):
 
 
 @contextmanager
-def _descriptor_stream(fd: int):
-    owned_identity = _identity(os.fstat(fd))[:2]
+def _descriptor_stream(fd: int, owned_identity: tuple):
     try:
         stream = os.fdopen(fd, 'w+b')
     except BaseException:
@@ -246,9 +245,19 @@ def save_checkpoint(memory, path: Path | None) -> None:
         _provision_parent(path.parent, metrics)
         parent_identity = path.parent.stat()
         fd, temporary = tempfile.mkstemp(prefix=path.name + '.', dir=path.parent)
-        temporary_identity = _identity(os.fstat(fd))[:2]
+        try:
+            temporary_identity = _identity(os.fstat(fd))[:2]
+        except BaseException:
+            # mkstemp transferred this raw descriptor to us. No wrapper has
+            # received it yet; close it even if identity capture fails. The
+            # unknown pathname remains evidence rather than deletion authority.
+            try:
+                os.close(fd)
+            except BaseException:
+                pass
+            raise
         with ExitStack() as handles:
-            stream = handles.enter_context(_descriptor_stream(fd))
+            stream = handles.enter_context(_descriptor_stream(fd, temporary_identity))
             with span("checkpoint_write"):
                 stream.write(payload)
                 stream.flush()

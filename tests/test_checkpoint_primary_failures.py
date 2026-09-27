@@ -219,3 +219,43 @@ def test_fdopen_failure_cleans_only_original_temporary_entry(tmp_path, monkeypat
         assert retained[0].read_bytes() == b'other owner evidence'
     else:
         assert not retained[0].exists()
+
+
+@pytest.mark.parametrize('interrupt', [False, True])
+@pytest.mark.parametrize('close_fails', [False, True])
+def test_initial_identity_failure_closes_raw_descriptor_and_preserves_unknown_entry(
+        tmp_path, monkeypatch, interrupt, close_fails):
+    primary = KeyboardInterrupt('identity') if interrupt else OSError(errno.EIO, 'identity')
+    real_create, real_stat, real_close = checkpoint.tempfile.mkstemp, os.fstat, os.close
+    created, closed = [], []
+
+    def create(*args, **kwargs):
+        result = real_create(*args, **kwargs)
+        created.append(result)
+        return result
+
+    def inspect(fd):
+        if created and fd == created[0][0]:
+            raise primary
+        return real_stat(fd)
+
+    def close(fd):
+        closed.append(fd)
+        real_close(fd)
+        if close_fails:
+            raise OSError(errno.EIO, 'secondary close')
+
+    monkeypatch.setattr(checkpoint.tempfile, 'mkstemp', create)
+    monkeypatch.setattr(checkpoint.os, 'fstat', inspect)
+    monkeypatch.setattr(checkpoint.os, 'close', close)
+    memory = CampaignMemory('fixture', 'rocket_launch')
+    with pytest.raises(BaseException) as caught:
+        memory.save(tmp_path / 'state.json')
+    assert caught.value is primary
+    assert closed == [created[0][0]]
+    with pytest.raises(OSError):
+        real_stat(created[0][0])
+    assert not (tmp_path / 'state.json').exists()
+    assert len(list(tmp_path.glob('state.json.*'))) == 1
+    assert memory._checkpoint_cache is None
+    assert memory._checkpoint_metrics['status'] == 'failed'

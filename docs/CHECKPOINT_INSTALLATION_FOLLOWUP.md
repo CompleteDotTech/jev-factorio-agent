@@ -161,3 +161,10 @@ sync whose timestamp tuple remained unchanged. Final byte verification therefore
 follows directory sync; it is the first read from the retained stream, avoiding
 stale buffered readback. This retains one bounded read per successful changed
 save while detecting that reproduced metadata collision.
+
+A raw descriptor is owned immediately when `mkstemp` returns. If its first
+identity lookup fails, the writer closes that descriptor while preserving the
+primary exception. The unverified temporary pathname remains for reconciliation;
+failure to establish identity is not authority to delete a potentially substituted
+entry. Successful identity capture transfers the descriptor to the stream wrapper
+without a second unguarded lookup.
