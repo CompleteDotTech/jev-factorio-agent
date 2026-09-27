@@ -12,9 +12,19 @@ shared WSL, restart a shared VM or stop another workload.
 
 Do not stage integration until each prerequisite's implementation is available
 and independently reviewed. Issues may stay evidence-pending while source is
-merged/staged; they need not be closed before the shared native run. In this packet,
-#100/#101/#102 are unimplemented and several other leaves are partial. They are
-real implementation blockers, not just native-evidence formalities.
+merged/staged; they need not be closed before the shared native run. Current source
+contains #100's narrow paid straight-corridor foundation and #102's explicit,
+kit-funded science-investment policy; neither establishes native acceptance or a
+complete logistics network. #101's coal-source bootstrap and multi-consumer fuel
+distribution remain unfinished engineering, and broader automatic kit/source/network
+support remains limited. Check the current issues and reviewed source rather than
+treating an older packet's status table as today's implementation state. Missing
+engineering is a real blocker, not just a native-evidence formality.
+
+Before deploying the solid composition, include the first-observation publication
+barrier described in `SOLID_INITIAL_OBSERVATION_TRANSACTION.md` and qualify its
+prepared/pending/receipt recovery on the actual backend. Local filesystem fixtures
+are not a substitute for the native restart tests below.
 
 Use the established authorized deployment/handoff process only. Read back the
 actual source and configuration; a merge SHA alone is not deployment evidence.
