@@ -186,7 +186,7 @@ def profile_backend(backend):
         backend.last_observation_profile = profile.summary()
 
 
-def parse_snapshot(raw: str, profile: ObservationProfile) -> dict:
+def parse_snapshot(raw: str, profile: ObservationProfile, *, schemas: tuple[int, ...] = (1,)) -> dict:
     if not isinstance(raw, str) or len(raw.encode("utf-8")) > MAX_PAYLOAD_BYTES:
         raise ValueError("Invalid bounded native observation")
     payloads = []
@@ -204,7 +204,7 @@ def parse_snapshot(raw: str, profile: ObservationProfile) -> dict:
     if len(payloads) != 1:
         raise ValueError("Missing or ambiguous native observation envelope")
     result = profile.decode(payloads[0])
-    if not isinstance(result, dict) or type(result.get("schema")) is not int or result["schema"] != 1:
+    if not isinstance(result, dict) or type(result.get("schema")) is not int or result["schema"] not in schemas:
         raise ValueError("Unsupported native observation envelope")
     return result
 

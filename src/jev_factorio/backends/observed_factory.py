@@ -13,6 +13,10 @@ class ObservedFactory(NativeFactory):
         super().__init__(backend)
         self._discovery_epoch = 0
         self.command(files("jev_factorio").joinpath("lua/observation.lua").read_text())
+        ready = self.command(files("jev_factorio").joinpath("lua/observation_v2.lua").read_text())
+        if ready.strip() != 'JEV_ATOMIC_READY|2':
+            raise RuntimeError('Native coherent observation negotiation failed')
+        self.coherent_observation_version = 2
 
     def execute(self, action, parameters, trace=None):
         # Invalidate before attempted topology/mining changes, including ambiguous failures.
@@ -22,6 +26,9 @@ class ObservedFactory(NativeFactory):
         return super().execute(action, parameters, trace=trace)
 
     def observe(self, snapshot):
+        if getattr(self, 'coherent_observation_version', None) == 2:
+            from .atomic_observation import observe_atomic
+            return observe_atomic(self, snapshot)
         from fle.env import Position, Resource
 
         profile = self.backend._observation_profile

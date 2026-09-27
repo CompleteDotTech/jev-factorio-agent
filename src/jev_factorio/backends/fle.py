@@ -198,8 +198,33 @@ class FleBackend:
         if self.profile_observations or self.consolidated_observations:
             from ..observation import profile_backend
             with profile_backend(self):
+                if self._has_coherent_observation():
+                    return self._observe_coherent()
                 return self._observe_legacy()
         return self._observe_legacy()
+
+    def _has_coherent_observation(self) -> bool:
+        from .observed_factory import ObservedFactory
+        native = self._factory
+        while native is not None:
+            if isinstance(native, ObservedFactory):
+                return (self.consolidated_observations
+                        and getattr(native, 'coherent_observation_version', None) == 2)
+            native = getattr(native, 'native', None)
+        return False
+
+    def _observe_coherent(self) -> GameSnapshot:
+        from . import has_adapter
+        from .craft_jobs import CraftJobFactory
+        snapshot = GameSnapshot(world_kind='fle', alerts=[self._error] if self._error else [])
+        snapshot = self._factory.observe(snapshot)
+        identity = (snapshot.session_id, snapshot.tick)
+        if getattr(snapshot, '_coherent_observation_verified', None) != identity:
+            raise ValueError('Coherent observation provider did not validate this snapshot')
+        if (has_adapter(self._factory, CraftJobFactory)
+                and getattr(snapshot, '_atomic_inventory_verified', None) != identity):
+            raise ValueError('Atomic inventory provider did not validate this snapshot')
+        return snapshot
 
     def _observe_legacy(self) -> GameSnapshot:
         from fle.env import Prototype
@@ -267,6 +292,14 @@ class FleBackend:
 
         tools = self._tools
         self._error = ""
+        if action != "idle" and self._has_coherent_observation():
+            from .observed_factory import ObservedFactory
+            native = self._factory
+            while native is not None:
+                if isinstance(native, ObservedFactory):
+                    native._discovery_epoch += 1
+                    break
+                native = getattr(native, "native", None)
         try:
             if action == "idle":
                 return "Waiting for production"

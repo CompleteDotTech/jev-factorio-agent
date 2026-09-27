@@ -400,11 +400,15 @@ fair.place = function(name, position, direction)
         drop_position = entity.type == "mining-drill" and entity.drop_position or nil}
 end
 
-fair.insert = function(name, position, item, quantity)
+fair.insert = function(name, position, item, quantity, expected_unit)
     local player = fair.actor()
     local entity = player.surface.find_entity(name, position)
     assert(entity and entity.valid and player.can_reach_entity(entity),
         "Interaction target is outside normal reach")
+    if expected_unit ~= nil then
+        assert(type(expected_unit) == "number" and expected_unit > 0 and expected_unit % 1 == 0
+            and entity.unit_number == expected_unit, "Transfer target identity changed")
+    end
     local inventory = player.get_main_inventory()
     assert(inventory.get_item_count(item) >= quantity, "Missing transfer items")
     assert(entity.can_insert{name = item, count = quantity}, "Transfer destination is full")

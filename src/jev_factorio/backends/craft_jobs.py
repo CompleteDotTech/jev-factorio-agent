@@ -21,11 +21,16 @@ class CraftJobFactory:
         if not isinstance(evidence, dict) or evidence.get("tick") != snapshot.tick:
             raise ValueError("Missing atomic crafting inventory observation")
         inventory = evidence.get("items")
+        if inventory == []:
+            inventory = {}  # Empty native Lua map, never a non-empty array.
         if (not isinstance(inventory, dict) or len(inventory) > 4096
                 or any(not isinstance(item, str) or not item or len(item) > 128
                        or type(amount) is not int or amount < 0
                        for item, amount in inventory.items())):
             raise ValueError("Invalid atomic crafting inventory observation")
+        if (getattr(snapshot, '_coherent_observation_verified', None)
+                == (snapshot.session_id, snapshot.tick) and snapshot.inventory != inventory):
+            raise ValueError("Atomic crafting inventory disagrees with coherent snapshot")
         snapshot.inventory = dict(inventory)
         snapshot._atomic_inventory_verified = (snapshot.session_id, snapshot.tick)
         return snapshot

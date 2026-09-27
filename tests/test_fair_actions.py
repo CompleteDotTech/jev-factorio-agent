@@ -737,3 +737,15 @@ def test_failed_path_reports_failure_without_moving(fair_runtime):
         assert(not player.walking_state.walking)
         assert(player.position.x == 0)
     """)
+
+
+def test_identity_bound_insert_rejects_replaced_entity_before_payment(fair_runtime):
+    fair_runtime.execute('''
+        quantities.coal=8
+        built_entity={valid=true,name="burner-mining-drill",unit_number=19,
+            can_insert=function() return true end,insert=function(stack) return stack.count end}
+        assert(not pcall(storage.fair.insert,"burner-mining-drill",{x=0,y=0},"coal",3,20))
+        assert(quantities.coal==8)
+        local receipt=storage.fair.insert("burner-mining-drill",{x=0,y=0},"coal",3,19)
+        assert(receipt.quantity==3 and quantities.coal==5)
+    ''')

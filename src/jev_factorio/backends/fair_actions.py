@@ -309,13 +309,19 @@ class FairActions:
         result = self.call("place", name, target, direction_value)
         return SimpleNamespace(
             name=result["name"], position=Position(**result["position"]),
+            unit_number=result.get("unit_number"),
             drop_position=Position(**result["drop_position"]) if result.get("drop_position") else None,
         )
 
     def insert_item(self, prototype: Any, entity: Any, quantity: int) -> int:
         self.approach(entity.position, entity.name)
-        return self.call("insert", entity.name, self.position(entity.position),
-                         prototype.value[0], quantity)["quantity"]
+        arguments = [entity.name, self.position(entity.position), prototype.value[0], quantity]
+        expected_unit = getattr(entity, "unit_number", None)
+        if expected_unit is not None:
+            if type(expected_unit) is not int or expected_unit <= 0:
+                raise ValueError("Invalid native transfer target identity")
+            arguments.append(expected_unit)
+        return self.call("insert", *arguments)["quantity"]
 
     @staticmethod
     def _connection_corridor(start: dict, end: dict, *, horizontal_first: bool) -> list[tuple[int, int, int, int]]:
