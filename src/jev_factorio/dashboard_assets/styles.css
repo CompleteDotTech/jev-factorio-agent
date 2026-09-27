@@ -24,7 +24,7 @@ small{display:block;font-size:11px;color:var(--muted)}
 .brand-caption small{font:8px var(--mono);letter-spacing:1.4px;margin-top:7px}
 .top-context{min-width:85px;max-width:230px}
 .top-context strong{font:12px var(--mono);display:block;overflow:hidden;text-overflow:ellipsis;margin-top:6px}
-.deadline strong{color:var(--amber)}
+.run-time strong{color:var(--amber)}
 .connection{display:grid;grid-template-columns:8px 1fr;align-items:center;gap:0 8px;min-width:150px}
 .connection strong{font-size:12px}
 .connection small{grid-column:2}
@@ -208,7 +208,7 @@ to{transform:scaleY(1);opacity:1}
 .workflow{display:grid;grid-template-columns:1fr 1fr}
 .workflow-node:after{display:none}
 .topbar{padding:15px 18px;gap:18px}
-.top-context.deadline{display:none}
+.top-context.run-time{display:none}
 .toolbar{padding:12px 18px}
 .game-stage{min-height:340px}
 .thinking{min-height:750px}
