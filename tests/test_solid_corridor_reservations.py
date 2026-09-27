@@ -75,10 +75,12 @@ def test_committed_corridor_cannot_share_planned_cells_or_join_clearance(phase, 
 
 
 @pytest.mark.parametrize('offset', [2, -2, 10])
-def test_spatially_separate_reservation_does_not_block_other_route(offset):
+def test_separate_layouts_remain_valid_but_pending_work_blocks_fresh_plans(offset):
     state, _ = pair(horizontal=True, offset=offset)
     reserve(row(state))
-    assert len(routes.routes(state)) == 2
+    assert len(routes.routes(state)) == 2  # Geometry is still spatially disjoint.
+    assert candidates(state, 'rocket_launch') == []  # Recovery owns the actor.
+    row(state)['pending'] = {}  # Modeled reconciliation; geometry is unchanged.
     assert len(candidates(state, 'rocket_launch')) == 2
 
 

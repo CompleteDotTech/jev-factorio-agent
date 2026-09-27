@@ -18,8 +18,10 @@ def source_project(target: str, part: str) -> str:
 
 def candidates(snapshot, goal: str, *, failures: dict | None = None) -> list[Plan]:
     rows = coal.sources(snapshot)
-    if not rows or not all(coal.current(row, snapshot) for row in rows.values()):
-        return []
+    if (not rows or not all(coal.current(row, snapshot) for row in rows.values())
+            or any(row["pending"] for row in rows.values())
+            or any(row["pending"] for row in solid.routes(snapshot).values())):
+        return []  # Native journals belong only to the retained recovery path.
     bill = coal.remaining_kit(rows, snapshot)
     if not all(snapshot.inventory.get(item, 0) >= n for item, n in bill.items()):
         return []
@@ -38,8 +40,7 @@ def candidates(snapshot, goal: str, *, failures: dict | None = None) -> list[Pla
             plan = corridors.get(route["route"])
         else:
             parameters = {"target": target, "layout": row["layout"], "part": spec["part"],
-                "receipt": (row["pending"]["receipt"] if row["pending"].get("phase") == "prepared"
-                            else f"{snapshot.tick}:{target}:{spec['part']}")}
+                "receipt": f"{snapshot.tick}:{target}:{spec['part']}"}
             plan = (Plan(source_project(target, spec["part"]), goal,
                 f"Build paid coal {spec['part']} for {target}",
                 (Step(coal.COMMAND, "coal_component", costs={spec["name"]: 1},

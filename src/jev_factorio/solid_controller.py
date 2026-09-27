@@ -207,7 +207,10 @@ class SolidRouteMixin:
             for key, saved in self.memory.solid_commitments.items():
                 if key not in rows or not routes.reconciles(saved, rows[key]):
                     raise ValueError("Paid solid commitment disappeared or regressed")
+            from .construction_journal import require_owner
             for key, row in rows.items():
+                require_owner(self.memory, action=routes.COMMAND, binding={"route": key},
+                              layout=row["layout"], journal=row["pending"])
                 if not routes.current(row, snapshot):
                     raise ValueError("Solid route requires native reconciliation")
                 if (row["source"]["role"], row["target"]["role"], row["item"], row["target"]["inventory"]) not in intents:
