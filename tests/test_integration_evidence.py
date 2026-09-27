@@ -443,6 +443,43 @@ def test_belt_drainage_without_new_sends_is_not_new_flow():
     assert 'two_distinct_fuel_consumers_not_measured' in value['issues']
 
 
+def test_final_checkpoint_cannot_invent_goal():
+    args = evidence()
+    args[3]['completed_goals']['stockpile_fuel'] = args[3]['last_tick']
+    assert 'completed_goal_history_regressed' in report.analyze_rows(*args)['issues']
+
+
+def test_completed_status_requires_target_goal_history():
+    args = evidence()
+    args[0][-1]['status'] = args[3]['status'] = 'completed'
+    assert 'completed_target_history_missing' in report.analyze_rows(*args)['issues']
+
+
+def test_final_cleared_plan_requires_zero_step_index():
+    args = evidence()
+    args[3]['step_index'] = 1
+    assert 'final_step_index_not_cleared' in report.analyze_rows(*args)['issues']
+
+
+def test_new_receipt_cannot_be_backdated_before_previous_observation():
+    args = evidence()
+    args[0][4]['after_state']['factory']['receipts']['science:4']['tick'] = 1001
+    assert 'unbound_science_delivery' in report.analyze_rows(*args)['issues']
+
+
+def test_early_belt_drainage_and_late_sends_do_not_prove_delivery():
+    args = evidence()
+    for index, row in enumerate(args[0]):
+        for label in ('state', 'after_state'):
+            for route in row[label]['factory']['solid_routes']['routes'].values():
+                route['flow'].update(sent=100 + (10 if index > 30 or index == 30 and label == 'after_state' else 0),
+                                     received=90 + min(index, 10), positive_samples=3 + index)
+    value = report.analyze_rows(*args)
+    assert value['transport']['coal_consumers_with_new_flow'] == 0
+    assert value['transport']['coal_inventory_delivery_lower_bound'] == 0
+    assert 'two_distinct_fuel_consumers_not_measured' in value['issues']
+
+
 @pytest.mark.parametrize('field,value', [
     ('capacity_profile_sha256', '1'*64), ('initial_save_sha256', '1'*64),
     ('workload_sha256', '1'*64), ('experiment_sha256', '1'*64),

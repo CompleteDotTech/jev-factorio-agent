@@ -163,7 +163,9 @@ A legitimate science delivery batch may span multiple observations.
 
 Coal corridor measurements require new positive flow at three or more observation
 boundaries into at least two distinct fuel-consumer identities. Both new sends and
-new receipts are required; the conservative delivered lower bound is their minimum.
+new receipts are required. The conservative delivered lower bound subtracts
+the maximum stock already outstanding on the belt at the first observation,
+and it needs attributable delivery increases at three later boundaries.
 Downstream
 measurements require new route flow plus increasing output at an allowlisted
 recipe. Old counters, an alias of one consumer, a stale route, changed flow epoch,
