@@ -55,10 +55,11 @@ def _funding_events(history: object) -> list[dict]:
             and event['kind'].startswith('solid_kit_')]
 
 
-def _validate_transition(event: dict, minimum: int, maximum: int, intents: list) -> None:
+def _validate_transition(event: dict, minimum: int, maximum: int, intents: list,
+                         *, new: bool = False) -> None:
     kind = event['kind']
     fields = {'kind', 'key', 'tick', 'funding'} | ({'reason'} if kind == 'solid_kit_abandoned' else set())
-    if kind == 'solid_kit_committed' and 'step' in event:
+    if kind == 'solid_kit_committed' and (new or 'step' in event):
         fields.add('step')
         _kit_step(event['step'])
     if (kind not in KINDS or set(event) != fields or not _tick(event.get('tick'))
@@ -79,27 +80,17 @@ def _kit_step(value: dict) -> Step:
     return step
 
 
-def _project_budget_open(proof: dict, budgets: dict, action: str, step_value: dict | None) -> bool:
+def _project_budget_open(proof: dict, budgets: dict, step_value: dict) -> bool:
     from .solid_routes import MAX_BELTS
     parts = ['kit', 'receive', 'send', *[f'belt:{index}' for index in range(1, MAX_BELTS + 1)]]
     counts = [_budget(budgets, proof['key'] + ':' + part) for part in parts]
     if any(count is None or count >= 2 for count in counts):
         return False
-    if step_value is not None:
-        step = _kit_step(step_value)
-        parameters = step.parameters or {}
-        ordinary = 'factory:' + step.action + ':' + parameters.get('role', parameters.get('recipe', ''))
-        count = _budget(budgets, ordinary)
-        return count is not None and counts[0] + count < 2
-    # The retained event does not carry recipe/role parameters. If an ordinary
-    # acquisition budget could exhaust this commit, its identity is unproven.
-    actions = {action} if action in {'factory_craft', 'factory_extract'} else {'factory_craft', 'factory_extract'}
-    for key in budgets:
-        if any(key.startswith('factory:' + value + ':') for value in actions):
-            count = _budget(budgets, key)
-            if count is None or count + counts[0] >= 2:
-                return False
-    return True
+    step = _kit_step(step_value)
+    parameters = step.parameters or {}
+    ordinary = 'factory:' + step.action + ':' + parameters.get('role', parameters.get('recipe', ''))
+    count = _budget(budgets, ordinary)
+    return count is not None and counts[0] + count < 2
 
 
 def _native_bound(state: dict, record: dict, *, paid: bool = False,
@@ -143,9 +134,9 @@ def _kit_plan_observed(proof: dict, record: dict, tick: int, fresh: list,
     commit = next((value for value in fresh if value.get('kind') == 'solid_kit_committed'
                    and _same(value.get('funding'), proof) and value.get('tick') == tick), {})
     step_value = commit.get('step')
-    step = _kit_step(step_value) if step_value is not None else None
-    if action == 'verify' and (step is None or step.satisfied(GameSnapshot(**record['state']))
-                              or not step.satisfied(GameSnapshot(**record['after_state']))):
+    step = _kit_step(step_value)
+    if step.satisfied(GameSnapshot(**record['state'])) or (
+            action == 'verify' and not step.satisfied(GameSnapshot(**record['after_state']))):
         return False
     if action in {'factory_craft', 'factory_extract'}:
         verified = record.get('verified') is True
@@ -254,12 +245,12 @@ def _paid_growth_observed(before: dict, after: dict, proof: dict, attempts: list
     return False
 
 
-def _current_build_attempts(record: dict, before: int, now: int, seen: set[str]) -> list:
+def _current_dispatch_attempts(record: dict, before: int, now: int, seen: set[str]) -> list:
     verified = record.get('verified') is True
     values = record.get('attempt_outcomes', []) if verified else [record.get('attempt')]
     candidates = []
     for value in values:
-        if (not isinstance(value, dict) or value.get('action') != 'factory_solid_build'
+        if (not isinstance(value, dict) or value.get('action') != record.get('action')
                 or value.get('id') in seen or value.get('origin') != 'new'
                 or value.get('process_id') != record.get('process_id')
                 or not _tick(value.get('started_tick')) or not before <= value['started_tick'] <= now):
@@ -273,7 +264,7 @@ def _current_build_attempts(record: dict, before: int, now: int, seen: set[str])
                 continue
         else:
             pending = record.get('pending')
-            if (not isinstance(pending, dict) or pending.get('action') != 'factory_solid_build'
+            if (not isinstance(pending, dict) or pending.get('action') != record.get('action')
                     or pending.get('started_tick') != value['started_tick']
                     or pending.get('dispatch') not in {'returned', 'ambiguous'}
                     or dispatch.get('status') != ('returned' if pending['dispatch'] == 'returned' else 'failed')):
@@ -282,31 +273,40 @@ def _current_build_attempts(record: dict, before: int, now: int, seen: set[str])
     return candidates if len(candidates) == 1 else []
 
 
-def _dispatch_crossed_deadline(record: dict, before: int, deadline: int, now: int) -> bool:
+def _dispatch_crossed_deadline(record: dict, before: int, deadline: int, now: int,
+                               seen: set[str]) -> bool:
     # Any ordinary controller action may run while optional funding is held;
     # infrastructure does not replace the science/maintenance frontier. Mere
     # action labels, or old outcomes repeated in the ring, do not prove dispatch.
     action = record.get('action')
     if not isinstance(action, str) or action in {'observe', 'verify'}:
         return False
-    def started(value):
-        return (isinstance(value, dict) and value.get('action') == action
-                and _tick(value.get('started_tick'))
-                and before <= value['started_tick'] < deadline)
-    pending = record.get('pending')
-    if started(pending) and pending.get('dispatch') in {'returned', 'ambiguous'}:
-        attempt = record.get('attempt')
-        if started(attempt) and attempt['started_tick'] == pending['started_tick']:
-            validate_attempt(attempt)
-            return True
-    outcomes = record.get('attempt_outcomes', [])
-    if record.get('verified') is True and isinstance(outcomes, list):
-        for value in outcomes:
-            if (started(value) and value.get('outcome') == 'verified'
-                    and _tick(value.get('finished_tick')) and value['finished_tick'] == now):
-                validate_attempt(value, finished=True)
-                return True
-    return False
+    candidates = _current_dispatch_attempts(record, before, now, seen)
+    decision = record.get('decision')
+    return (len(candidates) == 1 and candidates[0]['started_tick'] < deadline
+            and isinstance(decision, dict) and candidates[0]['plan_id'] == decision.get('plan_id'))
+
+
+def _initial_history_state(events: list[dict], working: dict | None) -> bool:
+    # A bounded ring may begin mid-project. Its first proof anchors that
+    # suffix, but all following transitions and its final ownership must agree.
+    state = None
+    last_tick = -1
+    for index, event in enumerate(events):
+        proof = event['funding']
+        if event['tick'] < last_tick:
+            return False
+        last_tick = event['tick']
+        if event['kind'] == 'solid_kit_committed':
+            if index and (state is None and proof['actions'] != 1 or state is not None and (
+                    not _same(_identity(state), _identity(proof)) or proof['actions'] != state['actions'] + 1)):
+                return False
+            state = proof
+        else:
+            if index and not _same(state, proof):
+                return False
+            state = None
+    return not events or _same(state, working)
 
 
 def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list[str]:
@@ -341,9 +341,12 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
         # process new event values only once. Hash storage is bounded by input
         # record count (already bounded by the parent analyzer's byte limits).
         seen = set()
-        for event in _funding_events(initial.get('history', [])):
+        initial_events = _funding_events(initial.get('history', []))
+        for event in initial_events:
             _validate_transition(event, 0, previous_tick, intents)
             seen.add(hashlib.sha256(_encoded(event)).digest())
+        if not _initial_history_state(initial_events, working):
+            issues.add('solid_funding_initial_history_mismatch')
         previous_budgets = initial.get('failures', {})
         previous_pending = initial.get('pending')
         previous_attempt = initial.get('attempt')
@@ -355,6 +358,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
             seen_attempts.add(previous_attempt['id'])
         active_kit = (working is not None and isinstance(initial.get('active_plan'), dict)
                       and initial['active_plan'].get('id') == working['key'] + ':kit')
+        active_step = initial['active_plan']['steps'][0] if active_kit else None
         if any(value.get('kind') == 'plan_committed' and (
                 not _tick(value.get('tick')) or value['tick'] > previous_tick)
                for value in previous_history):
@@ -408,7 +412,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 proof = event.get('funding')
                 event_tick = event.get('tick')
                 try:
-                    _validate_transition(event, previous_tick, now, intents)
+                    _validate_transition(event, previous_tick, now, intents, new=True)
                 except (ValueError, TypeError, KeyError, AttributeError):
                     issues.add('solid_funding_transition_invalid')
                     continue
@@ -426,8 +430,9 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                             or not starting and (not _same(_identity(working), _identity(proof))
                                                  or proof['actions'] != working['actions'] + 1)
                             or prior_budget is None or prior_budget >= 2
-                            or not _project_budget_open(proof, previous_budgets, record.get('action'), event.get('step'))
+                            or not _project_budget_open(proof, previous_budgets, event['step'])
                             or previous_pending is not None
+                            or active_kit
                             or proof['key'] in abandoned_keys
                             or not _tick(before_tick) or event_tick != before_tick
                             or event_tick >= proof['deadline_tick']
@@ -438,6 +443,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                         working = deepcopy(proof)
                         committed_proof = proof
                         active_kit = True
+                        active_step = event['step']
                 else:
                     if working is None or not _same(working, proof):
                         issues.add('solid_funding_release_proof_mismatch')
@@ -492,7 +498,7 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     issues.add('solid_funding_paid_prefix_without_dispatch')
                 dispatched = list(carried)
                 if record.get('action') == 'factory_solid_build':
-                    current_attempts = _current_build_attempts(record, before_tick, now, seen_attempts)
+                    current_attempts = _current_dispatch_attempts(record, before_tick, now, seen_attempts)
                     if not current_attempts:
                         issues.add('solid_funding_paid_dispatch_not_reconciled')
                     dispatched.extend(current_attempts)
@@ -507,16 +513,31 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                 issues.add('solid_funding_owned_proposal_not_observed')
             if current is not None:
                 budget = _budget(current_budgets, current['key'] + ':kit')
+                prior_budget = _budget(previous_budgets, current['key'] + ':kit')
+                failures = [value for value in fresh if value.get('kind') == 'plan_failed'
+                            and value.get('plan') == current['key'] + ':kit']
+                failed_once = (active_kit and prior_budget == 0 and budget == 1
+                    and len(failures) == 1 and set(failures[0]) == {'kind', 'plan', 'reason', 'tick'}
+                    and isinstance(failures[0]['reason'], str) and bool(failures[0]['reason'])
+                    and _tick(failures[0]['tick']) and failures[0]['tick'] == now
+                    and record.get('action') == 'observe' and record.get('verified') is False
+                    and previous_pending is None and record.get('pending') is None
+                    and record.get('attempt') is None and active_step is not None
+                    and not _kit_step(active_step).satisfied(GameSnapshot(**record['after_state'])))
                 if budget is None or budget >= 2:
                     issues.add('solid_funding_retained_budget_exhausted')
-                if budget != _budget(previous_budgets, current['key'] + ':kit'):
+                if budget != prior_budget and not failed_once:
                     issues.add('solid_funding_retained_budget_change_unproven')
+                if failures and not failed_once:
+                    issues.add('solid_funding_failed_plan_not_reconciled')
+                if failed_once:
+                    active_kit = False
                 if action_budget_due:
                     issues.add('solid_funding_action_budget_release_missing')
                 if (previous_pending is None and _tick(before_tick)
                         and (before_tick >= current['deadline_tick']
                              or now >= current['deadline_tick'] and not _dispatch_crossed_deadline(
-                                 record, before_tick, current['deadline_tick'], now))):
+                                 record, before_tick, current['deadline_tick'], now, seen_attempts))):
                     issues.add('solid_funding_expired_state_retained')
             if not policy and (current is not None or working is not None
                                or _funding_events(record.get('history', []))):
@@ -532,9 +553,8 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     seen_attempts.add(value['id'])
             if current is None:
                 active_kit = False
-            elif any(value.get('kind') in {'plan_failed', 'step_verified'}
-                     and value.get('plan') == current['key'] + ':kit' for value in fresh) or (
-                         record.get('action') == 'verify' and record.get('verified') is True):
+            elif (active_kit and record.get('verified') is True and active_step is not None
+                  and _kit_step(active_step).satisfied(GameSnapshot(**record['after_state']))):
                 active_kit = False
         if not _same(working, final.get('solid_funding')) or not _same(
                 rows[-1].get('solid_funding'), final.get('solid_funding')):

@@ -120,11 +120,11 @@ def test_retained_budget_cannot_increase_without_proven_failure():
 
 
 @pytest.mark.parametrize('ordinary,kit_count', [(2, 0), (1, 1)])
-def test_unbound_ordinary_acquisition_budget_cannot_authorize_a_commit(ordinary, kit_count):
+def test_exact_ordinary_acquisition_budget_cannot_authorize_a_commit(ordinary, kit_count):
     data = funded_evidence()
     records, _, initial, final = data
     proof = deepcopy(initial['solid_funding']); proof['actions'] = 2
-    counts = {proof['key'] + ':kit': kit_count, 'factory:factory_craft:inserter': ordinary}
+    counts = {proof['key'] + ':kit': kit_count, 'factory:factory_craft:iron-gear-wheel': ordinary}
     for checkpoint in (initial, final): checkpoint['failures'].update(counts)
     for record in records: record['failure_budgets'].update(counts)
     tick = records[3]['state']['tick']
@@ -140,6 +140,9 @@ def test_last_allowed_actual_kit_action_finishes_before_budget_reconciliation(tm
     assert loop.step()['verified']
     # Seed the retained boundary immediately before the last allowed commit.
     loop.memory.solid_funding['actions'] = solid_funding.MAX_ACTIONS - 1
+    for value in loop.memory.history:
+        if value.get('kind') == 'solid_kit_committed':
+            value['funding']['actions'] = solid_funding.MAX_ACTIONS - 1
     initial = asdict(loop.memory)
     records = [loop.step()]
     assert records[0]['verified']

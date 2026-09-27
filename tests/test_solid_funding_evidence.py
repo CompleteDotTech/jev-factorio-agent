@@ -8,6 +8,7 @@ from integration_evidence_fixtures import evidence
 from solid_routes_fixtures import fixture, row as route_row, SOURCE, TARGET
 from jev_factorio.integration_evidence import analyze_rows
 from jev_factorio.judgments import Decision
+from jev_factorio.skills import Step
 from jev_factorio.planning import solid_funding
 from test_solid_kit_acquisition import kit_loop
 
@@ -52,6 +53,9 @@ def funded_evidence():
 
 
 def event(kind, funding, tick, **extras):
+    if kind == 'solid_kit_committed':
+        extras.setdefault('step', asdict(Step('factory_craft', 'inventory', 'iron-gear-wheel', 1,
+            costs={'iron-plate': 2}, parameters={'recipe': 'iron-gear-wheel', 'batches': 1})))
     return {'kind': kind, 'key': funding['key'] + ('' if kind == 'solid_kit_paid_handoff' else ':kit'),
             'tick': tick, 'funding': deepcopy(funding), **extras}
 

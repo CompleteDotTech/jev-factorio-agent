@@ -103,11 +103,20 @@ budget changes without such evidence fail measurement. A maxed action budget
 with an incomplete carried kit requires release at the first eligible observation
 without an active kit plan; a complete carried kit can still be commissioned.
 
+The ordered initial funding suffix must also end at the checkpoint's ownership.
+Its first proof can anchor a truncated earlier project, but later increments,
+releases and project switches must reconcile. An observation-only commit retains
+its active plan; another commit needs a causal clear first. A matching fresh
+failed-plan event can account for the first exact kit budget increment from zero
+to one while retaining funding. It cannot justify an exhausted-budget release.
+Deadline deferral requires one unseen current-process attempt, matching the
+selected plan, action, dispatch phase and observation interval.
+
 New commits check receive/send/belt project budgets as well as the kit budget.
 Ordinary acquisition failure counts also matter. New commit events capture a
 detached selected `step`, allowing its exact recipe/role counter to be checked.
-Older events without that field remain conservative: if an ordinary count could
-exhaust the selected action, eligibility is unproven and measurement fails.
+Every new commit must include that step; omitting it fails measurement. Older
+events already retained in the initial checkpoint do not prove a new commitment.
 The controller's exact budget scope is unchanged.
 
 Each new commit also binds to the complete recorded decision and selection

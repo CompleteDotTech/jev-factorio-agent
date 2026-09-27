@@ -53,13 +53,17 @@ def test_project_switch_checks_new_project_paid_growth_as_well_as_old(tmp_path):
     records[3]['state']['factory']['solid_routes']['routes'][new['route']].update(state='proposed', parts={}, flow={})
     records[3]['state']['factory']['solid_routes']['routes'][old['route']]['layout'] = 'changed-layout'
     history = [event('solid_kit_abandoned', old, tick, reason='kit_endpoint_or_layout_changed'),
-               event('solid_kit_committed', new, tick), plan_event(new, tick)]
+               event('solid_kit_committed', new, tick,
+                     step=deepcopy(next(value['step'] for value in prototype['history'] if value['kind'] == 'solid_kit_committed'))),
+               plan_event(new, tick)]
     record = records[3]
     record.update(action='factory_craft', verified=True, history=deepcopy(history), solid_funding=deepcopy(new))
     decision_for(record, new)
     attempt = deepcopy(prototype['attempt_outcomes'][-1])
     attempt.update(plan_id=new['key'] + ':kit', started_tick=tick, finished_tick=record['after_state']['tick'])
     record['attempt_outcomes'] = [attempt]
+    step = history[1]['step']
+    record['after_state']['inventory'][step['item']] = step['threshold']
     for value in records: value['process_id'] = prototype['process_id']
     history.append(event('solid_kit_paid_handoff', new, records[4]['state']['tick']))
     for record in records[3:]: record['failure_budgets'][old['key'] + ':kit'] = 2

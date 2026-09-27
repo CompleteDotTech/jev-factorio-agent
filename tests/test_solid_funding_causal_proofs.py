@@ -96,6 +96,8 @@ def test_identical_plan_event_values_can_describe_new_occurrences_at_same_tick()
         history.extend([event('solid_kit_committed', proof, tick), deepcopy(plan)])
         record['history'] = deepcopy(history[-8:])
         record['solid_funding'] = deepcopy(proof)
+        record.update(action='verify', verified=True)
+        record['after_state']['inventory']['iron-gear-wheel'] = 1
         decision_for(record, proof)
         previous = record['history'][-2]
     final['solid_funding'] = deepcopy(proof)
