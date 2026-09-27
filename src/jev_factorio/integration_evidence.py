@@ -18,7 +18,7 @@ import re
 import tempfile
 from types import SimpleNamespace
 
-from . import solid_routes
+from . import input_routes, mining_outposts, solid_routes
 from .acceptance_io import MAX_JSON, MAX_LOG, canonical, load_json, records, sha256, stable_read, write_new
 from .acceptance_boundaries import (final_successor_issues, project_history_issues,
                                     successor_history_issues)
@@ -27,6 +27,7 @@ from .campaign_progress import SCIENCE
 from .iteration_timing import NAMES, validate_timing
 from .latency_report import distribution
 from .memory import load_checkpoint
+from .planning import capital
 from .telemetry import validate_phase
 
 SCHEMA = 'jev-factorio.integration-evidence.v1'
@@ -261,6 +262,7 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
     observed_flows, pending_routes = {}, {}
     previous_failures = _failure_counter(initial.get('failures', {}))
     previous_goals = deepcopy(initial.get('completed_goals', {}))
+    previous_capital = deepcopy(initial.get('capital_investment'))
     final_failures = _failure_counter(final.get('failures', {}))
     route_history, route_statistics, observed_products = {}, {}, {}
     committed = deepcopy(initial.get('solid_commitments', {}))
@@ -348,6 +350,41 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
         previous_goals = deepcopy(goals)
         reject(record.get('status') == 'completed' and 'rocket_launch' not in goals,
                'completed_target_history_missing')
+        current_capital = record.get('capital_investment')
+        if current_capital is not None:
+            capital.validate_state(current_capital, record['after_state']['tick'])
+        history = record.get('history', [])
+        if not isinstance(history, list) or any(not isinstance(event, dict) for event in history):
+            raise ValueError('Invalid capital event history')
+        if previous_capital is not None:
+            spec = previous_capital['spec']
+            entity = record['after_state']['factory'].get('entities', {}).get(spec['role'], {})
+            unit = previous_capital['unit_number']
+            reject(unit is not None and (not isinstance(entity, dict)
+                   or entity.get('unit_number') != unit), 'capital_paid_ownership_regressed')
+            if current_capital is None:
+                completed_event = any(event.get('kind') == 'capital_completed'
+                    and event.get('key') == spec['key'] and event.get('unit_number') == unit
+                    for event in history)
+                abandoned_event = any(event.get('kind') == 'capital_abandoned'
+                    and event.get('key') == spec['key'] for event in history)
+                produced = (isinstance(entity, dict) and _integer(entity.get('products_finished'))
+                    and previous_capital['products_baseline'] is not None
+                    and entity['products_finished'] > previous_capital['products_baseline']
+                    and _number(entity.get('output', {}).get(spec['item']), 0.000001))
+                reject(not (completed_event and produced or abandoned_event and budgets.get(spec['key'], 0) >= 2),
+                       'capital_reconciliation_missing')
+            else:
+                reject(any(previous_capital[k] != current_capital[k] for k in
+                       ('spec', 'started_tick', 'deadline_tick'))
+                       or previous_capital['unit_number'] not in (None, current_capital['unit_number'])
+                       or previous_capital['products_baseline'] not in (None, current_capital['products_baseline']),
+                       'capital_paid_ownership_regressed')
+        elif current_capital is not None:
+            reject(not any(event.get('kind') == 'capital_committed'
+                           and event.get('spec') == current_capital['spec'] for event in history),
+                   'capital_commitment_unlogged')
+        previous_capital = deepcopy(current_capital)
         # Check every before/after state, not just endpoints or unique ticks.
         for label in ('state', 'after_state'):
             state = record.get(label)
@@ -531,7 +568,11 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                     stats['positive_samples'] += max(0, flow['positive_samples'] - old['flow']['positive_samples'])
                     attributable = max(0, flow['received'] - stats['baseline_sent'])
                     if attributable > stats['attributed_received']:
-                        stats['attributed_positive_boundaries'] += 1
+                        if (flow['positive_samples'] > old['flow']['positive_samples']
+                                and flow['last_positive_tick'] > old['flow']['last_positive_tick']):
+                            stats['attributed_positive_boundaries'] += 1
+                        else:
+                            issues.add('route_positive_sample_history_mismatch')
                         stats['attributed_received'] = attributable
                 else:
                     route_statistics[key] = {'sent': 0, 'received': 0, 'positive_samples': 0,
@@ -602,10 +643,21 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
     reject(final.get('status') != rows[-1].get('status'), 'final_checkpoint_status_mismatch')
     reject(final.get('completed_goals') != previous_goals,
            'completed_goal_history_regressed')
+    reject(final.get('capital_investment') != previous_capital,
+           'final_capital_history_mismatch')
     last_factory = rows[-1]['after_state']['factory']
-    for field, envelope in (('input_commitments', 'input_routes'),
-                            ('outpost_commitments', 'mining_outposts')):
+    for field, envelope, parser in (('input_commitments', 'input_routes', input_routes.sources),
+                                    ('outpost_commitments', 'mining_outposts', mining_outposts.sources)):
         observed = last_factory.get(envelope, {}).get('sources', {})
+        if envelope in last_factory:
+            try:
+                parser(SimpleNamespace(session_id=session, tick=last_tick, factory=last_factory))
+            except (ValueError, KeyError, TypeError, AttributeError):
+                issues.add('invalid_final_composed_observation')
+        for key, row in observed.items() if isinstance(observed, dict) else ():
+            reject(not isinstance(row, dict) or row.get('state') not in {'proposed', 'building', 'ready', 'depleted'}
+                   or row.get('state') != 'proposed' and key not in final.get(field, {}),
+                   'observed_composed_commitment_missing')
         for key, saved in final.get(field, {}).items():
             reject(not isinstance(observed, dict) or key not in observed
                    or not _retains_prefix(saved, observed[key]),

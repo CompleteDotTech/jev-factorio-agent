@@ -480,6 +480,42 @@ def test_early_belt_drainage_and_late_sends_do_not_prove_delivery():
     assert 'two_distinct_fuel_consumers_not_measured' in value['issues']
 
 
+def test_native_positive_samples_must_advance_with_attributed_receipts():
+    args = evidence()
+    for row in args[0]:
+        for label in ('state', 'after_state'):
+            for route in row[label]['factory']['solid_routes']['routes'].values():
+                route['flow'].update(positive_samples=3, last_positive_tick=1000)
+    value = report.analyze_rows(*args)
+    assert 'route_positive_sample_history_mismatch' in value['issues']
+    assert value['transport']['coal_consumers_with_new_flow'] == 0
+
+
+def test_observed_input_commitment_cannot_be_omitted_from_final_checkpoint():
+    args = evidence()
+    for checkpoint in args[2:]:
+        checkpoint.update(input_routes_schema=1, input_commitments={})
+    args[1]['configuration'].update(furnace_output_buffers=True, furnace_input_belts=True)
+    for row in args[0]:
+        row['acceptance_configuration'] = deepcopy(args[1]['configuration'])
+    args[0][-1]['after_state']['factory']['input_routes'] = {
+        'sources': {'recipe:iron-plate': {'state': 'building'}}}
+    assert 'observed_composed_commitment_missing' in report.analyze_rows(*args)['issues']
+
+
+def test_initial_capital_cannot_disappear_without_reconciliation():
+    from test_capital_investments import scenario, offer
+    from jev_factorio.planning import capital
+    args = evidence()
+    catalog, state = scenario()
+    spec = offer(catalog, state).materials[capital.MARKER]['spec']
+    args[2]['active_goal'] = 'rocket_launch'
+    args[2]['capital_investment'] = {
+        'spec': spec, 'stage': 'kit', 'started_tick': 1000,
+        'deadline_tick': 8200, 'unit_number': None, 'products_baseline': None}
+    assert 'capital_reconciliation_missing' in report.analyze_rows(*args)['issues']
+
+
 @pytest.mark.parametrize('field,value', [
     ('capacity_profile_sha256', '1'*64), ('initial_save_sha256', '1'*64),
     ('workload_sha256', '1'*64), ('experiment_sha256', '1'*64),

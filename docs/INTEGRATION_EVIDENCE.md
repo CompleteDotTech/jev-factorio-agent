@@ -148,6 +148,9 @@ change. Pending placement phases cannot regress; a cleared pending identity must
 match its paid receipt. Final checkpoints must contain the observed commitments
 and failure history, completed-goal history, and terminal status, with no unresolved action, attempt, reservation or background
 work. A valid final checkpoint alone cannot erase a mid-window fault or reset.
+Retained capital investments must preserve their paid identity until an observed
+completion or recorded abandonment reconciles them. Final input-route and
+outpost commitments must cover paid native observations.
 This analyzer conservatively rejects any retained initial or in-window pending
 action or ambiguous attempt. A clean final checkpoint cannot establish that
 such an operation was reconciled; retain it for native recovery review before
@@ -166,6 +169,7 @@ boundaries into at least two distinct fuel-consumer identities. Both new sends a
 new receipts are required. The conservative delivered lower bound subtracts
 the maximum stock already outstanding on the belt at the first observation,
 and it needs attributable delivery increases at three later boundaries.
+Those boundaries must also advance the native positive-sample counters and tick.
 Downstream
 measurements require new route flow plus increasing output at an allowlisted
 recipe. Old counters, an alias of one consumer, a stale route, changed flow epoch,
