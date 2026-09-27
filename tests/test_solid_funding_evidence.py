@@ -108,12 +108,12 @@ def test_initial_funding_paid_handoff_has_exact_observed_ownership():
 def test_transient_funding_can_be_committed_then_abandoned_in_one_record():
     data = funded_evidence(); rows, _, initial, final = data
     funding = deepcopy(initial['solid_funding'])
-    funding['started_tick'] = rows[3]['after_state']['tick']
+    funding['started_tick'] = rows[3]['state']['tick']
     funding['deadline_tick'] = funding['started_tick'] + solid_funding.MAX_TICKS
     initial['solid_funding'] = final['solid_funding'] = None
     for record in rows: record['solid_funding'] = None
     rows[3]['history'] = [event('solid_kit_committed', funding, funding['started_tick']),
-                          event('solid_kit_abandoned', funding, funding['started_tick'], reason='kit_evidence_unavailable')]
+                          event('solid_kit_abandoned', funding, rows[3]['after_state']['tick'], reason='kit_evidence_unavailable')]
     for record in rows[3:]: record['failure_budgets'][funding['key'] + ':kit'] = 2
     final['failures'] = deepcopy(rows[-1]['failure_budgets'])
     result = analyze_rows(*data)
@@ -369,7 +369,7 @@ def test_abandonment_budget_cannot_be_reused_by_same_record_recommit(retain_reco
     data = funded_evidence()
     rows, _, initial, final = data
     original = deepcopy(initial['solid_funding'])
-    tick = rows[3]['after_state']['tick']
+    tick = rows[3]['state']['tick']
     restarted = deepcopy(original)
     restarted.update(started_tick=tick, deadline_tick=tick + solid_funding.MAX_TICKS, actions=1)
     history = [event('solid_kit_abandoned', original, tick, reason='kit_failure_budget'),
@@ -393,7 +393,7 @@ def test_one_record_cannot_claim_multiple_new_funding_commits(last_action):
     proof = deepcopy(initial['solid_funding'])
     for action in range(2, last_action + 1):
         proof['actions'] = action
-        history.append(event('solid_kit_committed', proof, rows[3]['after_state']['tick']))
+        history.append(event('solid_kit_committed', proof, rows[3]['state']['tick']))
     rows[3]['history'] = history
     for record in rows[3:]:
         record['solid_funding'] = deepcopy(proof)
@@ -408,7 +408,7 @@ def test_repeated_history_commit_does_not_consume_current_record_commit_limit():
     initial['history'].append(deepcopy(old))
     new = deepcopy(initial['solid_funding'])
     new['actions'] = 2
-    history = [old, event('solid_kit_committed', new, rows[3]['after_state']['tick'])]
+    history = [old, event('solid_kit_committed', new, rows[3]['state']['tick'])]
     for record in rows[3:]:
         record['history'] = deepcopy(history)
         record['solid_funding'] = deepcopy(new)

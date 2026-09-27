@@ -50,21 +50,16 @@ def _funding_events(history: object) -> list[dict]:
 
 
 def _native_bound(state: dict, record: dict, *, paid: bool = False,
-                  allow_before: bool = False) -> bool:
-    for label in (('state', 'after_state') if allow_before else ('after_state',)):
-        factory = record.get(label, {}).get('factory', {})
-        row = factory.get('solid_routes', {}).get('routes', {}).get(state['route'])
-        if not isinstance(row, dict) or not solid_funding.bound(state, row):
-            continue
-        # The parent analyzer separately validates the full paid prefix, native
-        # receipts and exact initial/final controller commitments.  We require
-        # that proof here, not merely a proposed route with the same string ID.
-        if paid:
-            if row.get('state') in {'building', 'ready'} and row.get('parts'):
-                return True
-        elif row.get('state') == 'proposed':
-            return True
-    return False
+                  observation: str = 'after_state') -> bool:
+    factory = record.get(observation, {}).get('factory', {})
+    row = factory.get('solid_routes', {}).get('routes', {}).get(state['route'])
+    if not isinstance(row, dict) or not solid_funding.bound(state, row):
+        return False
+    # The parent analyzer separately validates the full paid prefix, native
+    # receipts and exact initial/final controller commitments.
+    if paid:
+        return row.get('state') in {'building', 'ready'} and bool(row.get('parts'))
+    return row.get('state') == 'proposed'
 
 
 def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list[str]:
@@ -84,6 +79,8 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
             return []
         if policy and any('solid_funding' not in checkpoint for checkpoint in (initial, final)):
             issues.add('solid_funding_checkpoint_field_missing')
+        if policy and 'pending' not in initial:
+            issues.add('solid_funding_pending_evidence_missing')
         if not rows:
             return ['solid_funding_records_missing']
         intents = initial.get('solid_intents', [])
@@ -99,7 +96,10 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
         seen = {hashlib.sha256(_encoded(e)).digest()
                 for e in _funding_events(initial.get('history', []))}
         previous_budgets = initial.get('failures', {})
+        previous_pending = initial.get('pending')
         for record in rows:
+            if policy and 'pending' not in record:
+                issues.add('solid_funding_pending_evidence_missing')
             now = record.get('after_state', {}).get('tick')
             if not _tick(now) or now < previous_tick:
                 issues.add('solid_funding_record_tick_invalid')
@@ -116,6 +116,10 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                     issues.add('solid_funding_record_invalid')
                     continue
             current_budgets = record.get('failure_budgets', {})
+            before_tick = record.get('state', {}).get('tick')
+            handoff_due = (working is not None and previous_pending is None
+                           and _native_bound(working, record, paid=True, observation='state'))
+            handed_off = False
             new_commits = 0
             abandoned_keys: set[str] = set()
             for event in _funding_events(record.get('history', [])):
@@ -151,12 +155,16 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                         continue
                     starting = working is None
                     prior_budget = _budget(previous_budgets, proof['key'] + ':kit')
-                    if (starting and (proof['actions'] != 1 or proof['started_tick'] != event_tick)
+                    if (starting and (proof['actions'] != 1 or proof['started_tick'] != event_tick
+                                      or proof['deadline_tick'] != event_tick + solid_funding.MAX_TICKS)
                             or not starting and (not _same(_identity(working), _identity(proof))
                                                  or proof['actions'] != working['actions'] + 1)
                             or prior_budget is None or prior_budget >= 2
+                            or previous_pending is not None
                             or proof['key'] in abandoned_keys
-                            or not _native_bound(proof, record, allow_before=True)):
+                            or not _tick(before_tick) or event_tick != before_tick
+                            or event_tick >= proof['deadline_tick']
+                            or not _native_bound(proof, record, observation='state')):
                         issues.add('solid_funding_commit_not_reconciled')
                     else:
                         working = deepcopy(proof)
@@ -173,10 +181,16 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
                         # Later events cannot reuse the pre-record budget after
                         # this transition established that the project is spent.
                         abandoned_keys.add(proof['key'])
-                    elif not _native_bound(proof, record, paid=True):
-                        issues.add('solid_funding_paid_handoff_not_observed')
-                        continue
+                    else:
+                        if (new_commits or previous_pending is not None
+                                or not _tick(before_tick) or event_tick != before_tick
+                                or not _native_bound(proof, record, paid=True, observation='state')):
+                            issues.add('solid_funding_paid_handoff_not_observed')
+                            continue
+                        handed_off = True
                     working = None
+            if handoff_due and not handed_off:
+                issues.add('solid_funding_paid_handoff_missing')
             if not _same(working, current):
                 issues.add('solid_funding_record_history_mismatch')
             # A receipt may clear pending only after the observer's funding
@@ -185,11 +199,19 @@ def funding_history_issues(initial: dict, rows: list[dict], final: dict) -> list
             if current is not None and not (_native_bound(current, record)
                                             or _native_bound(current, record, paid=True)):
                 issues.add('solid_funding_owned_proposal_not_observed')
+            if current is not None:
+                budget = _budget(current_budgets, current['key'] + ':kit')
+                if budget is None or budget >= 2:
+                    issues.add('solid_funding_retained_budget_exhausted')
+                if (previous_pending is None and _tick(before_tick)
+                        and before_tick >= current['deadline_tick']):
+                    issues.add('solid_funding_expired_state_retained')
             if not policy and (current is not None or working is not None
                                or _funding_events(record.get('history', []))):
                 issues.add('solid_funding_disabled_policy_has_state')
             previous_tick = now
             previous_budgets = current_budgets
+            previous_pending = record.get('pending')
         if not _same(working, final.get('solid_funding')) or not _same(
                 rows[-1].get('solid_funding'), final.get('solid_funding')):
             issues.add('solid_funding_final_checkpoint_mismatch')

@@ -50,6 +50,22 @@ An abandonment establishes an exhausted project budget for later transitions
 in that record, so a same-record recommit cannot reuse the preceding record's
 unexhausted count. A valid commit followed by abandonment remains supported.
 
+Each new commit binds to the exact proposed route and tick in the record's
+pre-action observation. A new lock uses the controller's fixed funding horizon;
+increments cannot commit after that deadline. Retained locks must have a current
+kit failure count below two. A kit acquisition and paid construction cannot be
+collapsed into a commit followed by a paid handoff in one record.
+
+Paid ownership visible at a step's initial observation requires handoff when no
+controller action was pending on entry. The preceding record (or initial
+checkpoint) supplies that pending state. A lost reply may defer release while
+verification resolves it; the next eligible observation must release the lock.
+Enabled-policy evidence must explicitly retain that pending field; omission is
+not proof that the actor was idle. A pending-verification step cannot introduce
+a new kit-plan commit.
+Expiry follows the same pending-reconciliation boundary. Neither missing handoff
+events nor overdue funding may be carried across an otherwise eligible window.
+
 ## Evidence boundary and rollout
 
 Tests exercise fabricated retained evidence and the actual Python controller with
