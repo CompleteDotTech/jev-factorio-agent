@@ -20,7 +20,8 @@ def candidates(snapshot, goal: str, *, limit: int = 4) -> list[Plan]:
             continue  # Full/backpressured/no-power routes never rebuild or wait forever.
         step = todo[0]
         parameters = {"route": key, "layout": row["layout"], "part": step["part"],
-                      "receipt": f"{snapshot.tick}:{key}:{step['part']}"}
+                      "receipt": (row["pending"]["receipt"] if row["pending"].get("phase") == "prepared"
+                                  else f"{snapshot.tick}:{key}:{step['part']}")}
         # Project failure identity binds the immutable intent, not replaceable
         # unit IDs, geometry, quantity or tick. Action preconditions still bind
         # the exact observed physical endpoints/layout/receipt.

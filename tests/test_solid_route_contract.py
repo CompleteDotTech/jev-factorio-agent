@@ -115,8 +115,8 @@ def test_whole_kit_and_fresh_actor_are_required():
     assert not allowed(r.COMMAND, p, state)
 
 
-def test_committed_item_and_recipe_locks_preserve_other_ingredients():
-    state = fixture(); build(state)
+def test_connected_item_and_recipe_locks_preserve_other_ingredients():
+    state = fixture(); full(state)
     assert not r.permits("factory_insert", {"role": TARGET, "item": "iron-gear-wheel"}, state)
     assert not r.permits("factory_extract", {"role": SOURCE, "item": "iron-gear-wheel"}, state)
     assert not r.permits("factory_configure", {"role": TARGET, "recipe": "different"}, state)

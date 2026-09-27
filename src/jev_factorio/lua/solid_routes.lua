@@ -3,11 +3,11 @@ local c, fair = storage.campaign, storage.fair
 assert(c and fair, "Solid routes require the existing campaign and fair actor")
 local r = storage.solid_routes
 if r then
-    assert(r.protocol == 1 and r.contract_family == "straight-solid-corridor-v1" and c.observe == r.observer and c.transfer == r.transfer
+    assert(r.protocol == 1 and r.contract_family == "straight-solid-corridor-v1" and r.implementation_revision == 2 and c.observe == r.observer and c.transfer == r.transfer
         and c.configure == r.configure, "Solid route runtime requires reconciliation")
     return
 end
-r = {protocol=1, contract_family="straight-solid-corridor-v1", cells={}, offers={}, intents={}, serial=0}
+r = {protocol=1, contract_family="straight-solid-corridor-v1", implementation_revision=2, cells={}, offers={}, intents={}, serial=0}
 storage.solid_routes = r
 local vectors = {{x=0,y=-1},{x=1,y=0},{x=0,y=1},{x=-1,y=0}}
 local source_names = {["wooden-chest"]=true,["iron-chest"]=true,["steel-chest"]=true,
@@ -476,7 +476,15 @@ local old_transfer,old_configure=c.transfer,c.configure
 local function guard(role,item,configure)
     for _,cell in pairs(r.cells) do
         if role==cell.source.role or role==cell.target.role then
-            assert(not configure and item~=cell.item,"Solid route owns endpoint item and recipe")
+            assert(not configure,"Solid route owns endpoint recipe")
+            if item==cell.item then
+                -- Construction is downstream first, sender last. No transport
+                -- baseline exists yet, so useful sequential service remains safe
+                -- until sender takeover. Never interleave a pending placement.
+                assert(not cell.fault and not cell.pending and not cell.parts.send,
+                    "Solid route owns connected endpoint item")
+                paid_geometry(cell)
+            end
         end
         for _,part in pairs(cell.parts) do assert(role~=part.role,"Solid component is exclusively owned") end
     end

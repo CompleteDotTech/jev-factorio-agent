@@ -250,3 +250,12 @@ not exposed as a production CLI/supervisor treatment. Python/Lua fixtures do not
 establish native transport, coal-network capability or campaign acceptance; see
 #100 and #92 for the remaining gates.
 See [negotiated atomic observation v2](docs/ATOMIC_OBSERVATION.md) for the optional single-command read contract, query bounds and native qualification boundary.
+
+### Bounded downstream solid investment (source-only follow-up)
+
+The experimental solid-route composition can opt into `solid_science_policy=True`
+with its explicit intent allowlist. It preserves ready science, requires the paid
+kit already carried, and labels estimated payback separately from verified
+service-history evidence. See [policy boundaries](docs/SOLID_INVESTMENT_102.md)
+and [resume review corrections](docs/SOLID_RESUME_REVIEW.md). This does not enable
+a production CLI treatment or qualify a native campaign.

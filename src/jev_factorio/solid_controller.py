@@ -14,18 +14,24 @@ from pathlib import Path
 from . import solid_routes as routes
 from .backends.solid_routes import SolidRouteFactory, validate_intents
 from .planning.solid_routes import candidates
+from .planning import solid_investment
 from .planning.demand import SupplyLedger
 from .skills import Plan
 from .research_log import ResearchLogError, RunConfiguration
 from .telemetry import phase
 
 CHECKPOINT_FIELDS = {"solid_routes_schema", "solid_intents", "solid_epoch", "solid_commitments"}
+UNBOUND_FAULT = "Solid-route epoch unbound; native reconciliation required"
 
 
 class SolidRouteMixin:
     _solid_routes_enabled = True
 
-    def __init__(self, backend, jev=None, *, solid_intents, **options) -> None:
+    def __init__(self, backend, jev=None, *, solid_intents, solid_science_policy=False, **options) -> None:
+        if type(solid_science_policy) is not bool:
+            raise ValueError("Solid science policy must be an explicit boolean")
+        self._solid_science_policy = solid_science_policy
+        self._solid_policy_evidence = {}
         self._solid_intents = validate_intents(solid_intents)
         self._solid_fault = False
         self._solid_evidence = {}
@@ -37,14 +43,31 @@ class SolidRouteMixin:
         if sink is not None:
             configuration = getattr(sink, "configuration", None)
             if (not isinstance(configuration, RunConfiguration) or configuration.solid_routes is not True
-                    or configuration.factory_scheduling != "ready-work"):
+                    or configuration.factory_scheduling != "ready-work"
+                    or configuration.solid_science_policy is not solid_science_policy):
                 raise ValueError("Research manifest must explicitly declare the solid-route treatment")
-        # Validate immutable treatment before attaching any native extension.
+        # Validate the entire composed memory, not just its treatment labels,
+        # before even enable_factory can install a native extension. The saved
+        # session is a schema binding only; the first fresh observation still
+        # checks the live session, tick, epoch, ownership and receipts.
+        self._solid_resume_checkpoint = None
         if options.get("resume_controller"):
-            saved = json.loads(Path(options["checkpoint"]).read_text())
+            path = Path(options["checkpoint"])
+            captured = path.read_bytes()
+            saved = json.loads(captured)
             if (not isinstance(saved, dict) or not CHECKPOINT_FIELDS <= saved.keys()
-                    or saved["solid_intents"] != self._solid_intents):
+                    or saved["solid_intents"] != self._solid_intents
+                    or saved.get("solid_science_policy", False) is not solid_science_policy):
                 raise ValueError("Solid treatment cannot silently replace or migrate a checkpoint")
+            restored = self.memory_type.load(path, saved.get("session_id"),
+                                             options.get("target", "rocket_launch"))
+            if path.read_bytes() != captured:
+                raise ValueError("Checkpoint changed during resume validation")
+            if not restored.solid_epoch:
+                # This is valid retained fault evidence for offline inspection,
+                # not permission to install another runtime or adopt an epoch.
+                raise ValueError(UNBOUND_FAULT)
+            self._solid_resume_checkpoint = captured
         super().__init__(backend, jev, **options)
         native = getattr(backend, "_factory", None)
         if native is not None:
@@ -59,19 +82,28 @@ class SolidRouteMixin:
             raise ValueError("Backend does not support owned solid-route observations")
 
     def _observe_snapshot(self):
+        if (self.memory is None and self._solid_resume_checkpoint is not None
+                and self.checkpoint.read_bytes() != self._solid_resume_checkpoint):
+            raise ValueError("Checkpoint changed after resume validation")
+        # Leave initialization in the ordinary observer so run() still performs
+        # its first fresh receipt reconciliation even for a retained terminal state.
         snapshot = super()._observe_snapshot()
         # Inner composed observers may save their own new ownership before the
         # outer observation completes. Bind this extension first, so a crash
         # there leaves a reloadable checkpoint rather than empty treatment fields.
         if not self.memory.solid_intents:
             self.memory.solid_intents = deepcopy(self._solid_intents)
+            self.memory.solid_science_policy = self._solid_science_policy
         if not self.memory.solid_epoch:
             try:
                 routes.routes(snapshot)
                 self.memory.solid_epoch = {key: snapshot.factory["solid_routes"][key]
                                           for key in ("actor_index", "surface_index", "force_index")}
             except (ValueError, KeyError, TypeError, AttributeError):
-                pass  # The outer observer records an uncertain state, never acts.
+                # An inner observer can persist before the outer observer runs.
+                # Preserve a reloadable, explicitly unbound fault at that point.
+                self._solid_fault = True
+                self.memory.status, self.memory.reason = "uncertain", UNBOUND_FAULT
         return snapshot
 
     def _observe(self, stage="observe"):
@@ -82,8 +114,9 @@ class SolidRouteMixin:
                      for key in ("actor_index", "surface_index", "force_index")}
             if self.memory.solid_epoch and self.memory.solid_epoch != epoch:
                 raise ValueError("Solid route actor/surface/force changed")
-            if self.memory.solid_intents and self.memory.solid_intents != self._solid_intents:
-                raise ValueError("Solid route intent binding changed")
+            if (self.memory.solid_intents and self.memory.solid_intents != self._solid_intents
+                    or self.memory.solid_science_policy is not self._solid_science_policy):
+                raise ValueError("Solid route intent or policy binding changed")
             intents = {(i["source"], i["target"], i["item"], i["destination"]) for i in self._solid_intents}
             for key, saved in self.memory.solid_commitments.items():
                 if key not in rows or not routes.reconciles(saved, rows[key]):
@@ -106,7 +139,9 @@ class SolidRouteMixin:
             self.memory.solid_intents = deepcopy(self._solid_intents)
         except (ValueError, TypeError, KeyError, AttributeError):
             self._solid_fault = True
-            self.memory.status, self.memory.reason = "uncertain", "Solid-route evidence invalid; preserve pending state and ownership"
+            self.memory.status = "uncertain"
+            self.memory.reason = ("Solid-route evidence invalid; preserve pending state and ownership"
+                                  if self.memory.solid_epoch else UNBOUND_FAULT)
         self._solid_evidence = deepcopy(snapshot.factory.get("solid_routes", {}))
         self._save()  # Exact paid prefix is durable before another actor mutation.
         return snapshot
@@ -144,10 +179,42 @@ class SolidRouteMixin:
             return plans, blocker
         # Compile the existing production frontier exactly once. Infrastructure
         # is appended, never an exclusive override of science or maintenance.
-        extras = candidates(snapshot, self.memory.active_goal)
+        if self._solid_science_policy:
+            extras, self._solid_policy_evidence = solid_investment.candidates(
+                snapshot, self.catalog, self.memory.active_goal,
+                outcomes=self.memory.attempt_outcomes, reserved=self._solid_reservations(),
+                job=getattr(self, "_job", lambda: None)(),
+                capital_active=self.memory.capital_investment is not None)
+            # Decision-local ranking evidence, not checkpoint state or a grant.
+            snapshot._solid_investment_annotations = {
+                plan.id: deepcopy(plan.materials[solid_investment.MARKER]) for plan in extras}
+        else:
+            extras = candidates(snapshot, self.memory.active_goal)
         merged = plans + [p for p in extras if p.id not in {p.id for p in plans}]
         allowed = [p for p in merged if self._step_allowed(p.steps[0], snapshot)]
         return allowed, blocker if not allowed else ""
+
+    def _solid_reservations(self):
+        reserved = Counter()
+        for saved in self.memory.solid_commitments.values():
+            reserved.update(routes.remaining(saved))
+        for held in self.memory.reservations.values():
+            reserved.update(held)
+        return dict(reserved)
+
+    def _investment_step_allowed(self, plan, step, snapshot):
+        if self._solid_science_policy and step.action == routes.COMMAND:
+            # Do not double-reserve the active one-component plan and its paid
+            # project's remaining kit while assessing current downstream demand.
+            reserved = Counter(self._solid_reservations())
+            held = self.memory.reservations.get(plan.id, {})
+            reserved.subtract(held)
+            if not solid_investment.fresh_permission(
+                    plan, step, snapshot, self.catalog, outcomes=self.memory.attempt_outcomes,
+                    reserved={key: value for key, value in reserved.items() if value > 0},
+                    job=getattr(self, "_job", lambda: None)()):
+                return False
+        return super()._investment_step_allowed(plan, step, snapshot)
 
     def _verify_pending(self, snapshot):
         pending = self.memory.pending
@@ -190,7 +257,9 @@ class SolidRouteMixin:
 
     def _record_extras(self):
         return {**super()._record_extras(), "solid_routes": True,
-                "solid_route_evidence": deepcopy(self._solid_evidence), "solid_route_fault": self._solid_fault}
+                "solid_route_evidence": deepcopy(self._solid_evidence), "solid_route_fault": self._solid_fault,
+                "solid_science_policy": self._solid_science_policy,
+                "solid_investment_evidence": deepcopy(self._solid_policy_evidence)}
 
     def _model_facts(self, snapshot):
         facts = super()._model_facts(snapshot)
@@ -211,6 +280,7 @@ def solid_loop_type(base):
     @dataclass
     class SolidMemory(base.memory_type):
         solid_routes_schema: int = 1
+        solid_science_policy: bool = False
         solid_intents: list = field(default_factory=list)
         solid_epoch: dict = field(default_factory=dict)
         solid_commitments: dict = field(default_factory=dict)
@@ -223,11 +293,22 @@ def solid_loop_type(base):
             memory = super().load(path, session_id, target)
             if not routes.integer(memory.solid_routes_schema, 1, 1):
                 raise ValueError("Unsupported solid checkpoint version")
+            if type(memory.solid_science_policy) is not bool:
+                raise ValueError("Invalid solid policy binding")
             validate_intents(memory.solid_intents)
             if (not isinstance(memory.solid_epoch, dict)
-                    or set(memory.solid_epoch) != {"actor_index", "surface_index", "force_index"}
-                    or any(not routes.integer(v, 1) for v in memory.solid_epoch.values())
-                    or not isinstance(memory.solid_commitments, dict) or len(memory.solid_commitments) > routes.MAX_ROUTES):
+                    or not isinstance(memory.solid_commitments, dict)
+                    or len(memory.solid_commitments) > routes.MAX_ROUTES):
+                raise ValueError("Invalid solid checkpoint binding")
+            if not memory.solid_epoch:
+                # A failed first observation has no authoritative native epoch.
+                # Keep every base-memory lock/history field; refuse construction
+                # on resume until an operator-owned reconciliation is available.
+                if (memory.status != "uncertain" or memory.reason != UNBOUND_FAULT
+                        or memory.solid_commitments):
+                    raise ValueError("Invalid unbound solid checkpoint")
+            elif (set(memory.solid_epoch) != {"actor_index", "surface_index", "force_index"}
+                  or any(not routes.integer(v, 1) for v in memory.solid_epoch.values())):
                 raise ValueError("Invalid solid checkpoint binding")
             units, receipts = set(), set()
             intents = {(i["source"], i["target"], i["item"], i["destination"]) for i in memory.solid_intents}

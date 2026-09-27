@@ -309,6 +309,7 @@ class HierarchicalLoop(AgentLoop):
             }
             if getattr(self, "_solid_routes_enabled", False):
                 record["acceptance_configuration"]["solid_routes"] = True
+                record["acceptance_configuration"]["solid_science_policy"] = self._solid_science_policy
         previous = previous_timing(self)
         if previous is not None:
             record["previous_iteration_timing"] = previous

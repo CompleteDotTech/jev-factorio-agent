@@ -17,7 +17,7 @@ import subprocess
 import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
@@ -43,7 +43,7 @@ _CORRELATION_KEYS = {"decision_id", "model_call_id", "plan_id", "action_id"}
 _TREATMENT_FIELDS = {"factory_scheduling", "background_work",
                      "furnace_output_buffers", "furnace_input_belts", "mining_outposts",
                      "campaign_diagnostics", "profile_observations", "consolidated_observations",
-                     "lead_time_supply", "coverage_margin_lookahead", "solid_routes"}
+                     "lead_time_supply", "coverage_margin_lookahead", "solid_routes", "solid_science_policy"}
 
 
 class ResearchLogError(RuntimeError):
@@ -106,6 +106,7 @@ class RunConfiguration:
     lead_time_supply: bool = False
     coverage_margin_lookahead: bool = False
     solid_routes: bool = False
+    solid_science_policy: bool = False
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -292,6 +293,8 @@ def _configuration(configuration: dict) -> None:
     for key in _TREATMENT_FIELDS - {"factory_scheduling"}:
         if type(configuration.get(key, False)) is not bool:
             raise ValueError("Invalid run treatment flag")
+    if configuration.get("solid_science_policy", False) and not configuration.get("solid_routes", False):
+        raise ValueError("Solid science policy requires solid routes")
     for key in ("backend", "controller", "policy"):
         if type(configuration[key]) is not str or not configuration[key]:
             raise ValueError("Invalid run configuration label")
@@ -505,7 +508,9 @@ class ResearchLog:
             "durability": "file-fsync-only" if os.name == "nt" else "file-and-directory-fsync",
         }
         validate_manifest(manifest)
-        self._configuration = configuration
+        # Retain precisely the validated, redacted manifest values. Neither the
+        # caller's object nor a later public snapshot can change this treatment.
+        self._configuration = RunConfiguration(**manifest["configuration"])
         self._manifest_hash = digest(manifest)
         self._previous_hash = self._manifest_hash
         _make_parents(self.run_dir.parent)
@@ -524,7 +529,7 @@ class ResearchLog:
     @property
     def configuration(self) -> RunConfiguration:
         """The frozen, validated configuration written to this run's manifest."""
-        return self._configuration
+        return replace(self._configuration)
 
     def _timestamp(self) -> str:
         value = self._utc_now()

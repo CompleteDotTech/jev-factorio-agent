@@ -2,7 +2,8 @@
 
 This implements a bounded solid-route foundation in Python and Lua. It is
 **not a completed #100 native acceptance result**, a production deployment, a
-coal-mining network (#101), or an automatic downstream investment policy (#102).
+coal-mining network (#101), or completed downstream investment acceptance (#102).
+The optional bounded policy is documented separately in `SOLID_INVESTMENT_102.md`.
 The production CLI and supervisor do not expose this treatment. All new runtime
 paths are opt-in through the Python composition API; existing CLI runs remain
 unchanged. A native qualification and reviewed immutable-treatment handoff are
@@ -61,7 +62,9 @@ budgets still apply. All remaining components of a route must be affordable, not
 merely its next component. SupplyLedger accounts for held inventory and background
 crafting; the route's durable remaining kit remains reserved when a one-component
 plan is cleared. An intent requests the foundation capability explicitly:
-**payback is not calculated**, and no automatic #101/#102 candidate is claimed.
+**payback is not calculated in the default explicit-intent mode**. The opt-in
+`solid_science_policy=True` mode adds the bounded #102 policy documented in
+`SOLID_INVESTMENT_102.md`; it does not implement coal mining/distribution.
 
 A project's failure identity binds the immutable source/target roles, transported
 item, destination inventory and component ordinal, rather than observation tick,
@@ -96,7 +99,7 @@ payment; this extension does not create free construction items.
 | Checkpoint/fsync failure | Propagate the durability failure; do not authorize another mutation. |
 
 The controller checkpoint extension has `solid_routes_schema`, `solid_intents`,
-`solid_epoch`, and `solid_commitments`. Commitments contain detached immutable
+`solid_epoch`, `solid_commitments`, and the strict boolean `solid_science_policy`. Commitments contain detached immutable
 layout/endpoints/steps and the monotone paid prefix, not advisory flow metrics.
 The intent and epoch are bound before inner composed observers can write their
 own checkpoint. Extension-aware loads validate all fields; a legacy reader
@@ -105,8 +108,9 @@ existing campaign, native world reset, cutoff change or failure-history reset is
 implemented. `lua/factory.lua` is unchanged. Actual native game-save/controller
 crash consistency still requires isolated engine qualification.
 
-Manual configure/transfer actions that would change a committed endpoint recipe
-or the transported-item inventory are rejected. Other required recipe ingredients
+Manual recipe changes remain locked once committed. Transported-item transfers
+remain allowed while a valid partial route has no pending mutation and no paid
+sender; they become exclusive when the sender is paid. Other required recipe ingredients
 can still be supplied by ordinary allowed transfers. Topology/ownership and
 conservation faults are sticky; replenishing a source or recovery from unexplained
 external edits requires a separately reviewed reconciliation path. A spatial
@@ -116,8 +120,8 @@ conflicting placement is rejected or reported as a route fault, not demolished.
 ## What flow evidence means
 
 The native installer also binds the explicit `straight-solid-corridor-v1` contract
-family; a different experimental protocol-1 implementation is not a compatible
-reattachment. Do not stack implementations that share command/storage names.
+family and implementation revision 2; an older revision or a different
+experimental protocol-1 implementation is not a compatible reattachment. Do not stack implementations that share command/storage names.
 
 The observer returns a versioned coherent route envelope bound to session, game
 tick, actor, surface and force. It records proposed layout, paid prefix, connected
@@ -197,7 +201,9 @@ and campaign rollout qualification. Source tests do not satisfy those outcomes.
 
 #101 still needs coal mining/bootstrap, network self-fuel accounting and fair
 multi-consumer distribution; this contract deliberately does not share endpoints.
-#102 still needs actual recurring dependency discovery, haul/payback economics,
-route selection and proof of contribution to science/research. #92 still needs
+#102 has the separate local bounded current-research/payback policy, but still
+needs reviewed production integration and native proof of contribution to
+science/research. Automatic kit/bootstrap and broader route discovery are not
+implemented. #92 still needs
 matched component measurements and its full authorized 30-minute useful-progress
 window. Keep the tracker and unmet leaves open until their stated criteria pass.
