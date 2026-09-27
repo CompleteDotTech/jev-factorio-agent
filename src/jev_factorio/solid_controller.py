@@ -34,6 +34,7 @@ class SolidRouteMixin:
         self._solid_policy_evidence = {}
         self._solid_intents = validate_intents(solid_intents)
         self._solid_fault = False
+        self._solid_resume_observing = False
         self._solid_evidence = {}
         if options.get("factory_scheduling") != "ready-work":
             raise ValueError("Solid routes require explicit ready-work scheduling")
@@ -126,7 +127,7 @@ class SolidRouteMixin:
             # successful earlier comparison authorize bytes replaced in flight.
             if initial_resume:
                 self._check_resume_checkpoint()
-        if initial_resume:
+        if initial_resume and not self._solid_resume_observing:
             self._solid_resume_memory = None
             self._solid_resume_checkpoint = None
         # Inner composed observers may save their own new ownership before the
@@ -147,7 +148,50 @@ class SolidRouteMixin:
                 self.memory.status, self.memory.reason = "uncertain", UNBOUND_FAULT
         return snapshot
 
+    def _save(self):
+        if self._persistence_failed:
+            raise RuntimeError("Checkpoint persistence failed; reconstruct before continuing")
+        if self._solid_resume_observing:
+            # Only the first read-only resumed observation can defer a save.
+            # Inner layers reconcile receipts/ownership, but their tentative
+            # state cannot replace the capture until every observer returns.
+            # The outer synchronous flush still precedes the next actor action.
+            return
+        return super()._save()
+
     def _observe(self, stage="observe"):
+        if self._persistence_failed:
+            raise RuntimeError("Checkpoint persistence failed; reconstruct before continuing")
+        if self._solid_resume_observing:
+            raise RuntimeError("Reentrant initial resume observation; reconstruct before continuing")
+        initial_resume = self.memory is None and self._solid_resume_checkpoint is not None
+        if not initial_resume:
+            return self._observe_solid(stage)
+        self._solid_resume_observing = True
+        try:
+            snapshot = self._observe_solid(stage)
+            # Cover post-snapshot validation and ownership saves in every inner
+            # composed observer, not just the base native read/memory load.
+            self._check_resume_checkpoint()
+        except BaseException:
+            if self.memory is not None:
+                # A rejected partially initialized observation cannot be retried
+                # or persisted, even after the original pathname is restored.
+                self.memory = None
+                self._solid_fault = True
+                self._persistence_failed = True
+            # Preserve the existing retry for a failed read *before* memory was
+            # initialized, but only when the validated checkpoint is unchanged.
+            self._check_resume_checkpoint()
+            raise
+        finally:
+            self._solid_resume_observing = False
+        self._save()  # Exact reconciled state is durable before action admission.
+        self._solid_resume_memory = None
+        self._solid_resume_checkpoint = None
+        return snapshot
+
+    def _observe_solid(self, stage="observe"):
         snapshot = super()._observe(stage)
         try:
             rows = routes.routes(snapshot)
@@ -188,7 +232,8 @@ class SolidRouteMixin:
         return snapshot
 
     def _execution_barrier(self, snapshot):
-        return self._solid_fault or super()._execution_barrier(snapshot)
+        return (self._persistence_failed or self._solid_resume_observing or self._solid_fault
+                or super()._execution_barrier(snapshot))
 
     def _step_allowed(self, step, snapshot):
         if self._execution_barrier(snapshot) or not routes.permits(step.action, step.parameters or {}, snapshot):
