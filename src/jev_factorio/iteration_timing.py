@@ -24,6 +24,7 @@ NAMES = frozenset({
     'research_serialize', 'research_hash', 'research_assemble', 'research_write', 'research_fsync',
     'checkpoint', 'checkpoint_compare', 'checkpoint_capture', 'checkpoint_serialize',
     'checkpoint_write', 'checkpoint_file_sync', 'checkpoint_replace', 'checkpoint_directory_sync',
+    'checkpoint_installation_check', 'checkpoint_parent_sync',
     'native_command', 'native_batch', 'native_decode', 'fle_helper', 'action_poll_wait',
     'operational_state', 'operational_encode', 'operational_write',
     'operational_file_sync', 'operational_directory_sync', 'operational_replace',

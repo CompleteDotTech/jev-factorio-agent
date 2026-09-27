@@ -15,7 +15,10 @@ from pathlib import Path
 
 CALLS = {'observation', 'model_response', 'candidate_set_created', 'checkpoint_written',
          'trace_capture', 'trace_emit', 'action_returned', 'verification'}
-CHECKPOINT_TIMINGS = {'serialize_ns', 'file_sync_ns', 'directory_sync_ns', 'total_ns', 'compare_ns'}
+CHECKPOINT_TIMINGS = {'serialize_ns', 'file_sync_ns', 'directory_sync_ns', 'total_ns', 'compare_ns',
+                      'installation_check_ns'}
+CHECKPOINT_IO_OPERATIONS = {'file_sync_calls', 'directory_sync_calls', 'parent_directory_sync_calls',
+                            'verification_read_calls', 'verification_read_bytes'}
 CHECKPOINT_STATUSES = {'written', 'unchanged', 'failed', 'disabled'}
 
 
@@ -54,6 +57,10 @@ class PerformanceCounters:
         if 'capture_calls' in metrics and 'serialization_calls' in metrics:
             self.checkpoint_operations['measured_calls'] += 1
             for key in ('capture_calls', 'serialization_calls'):
+                self.checkpoint_operations[key] += metrics[key]
+        if CHECKPOINT_IO_OPERATIONS <= metrics.keys():
+            self.checkpoint_operations['io_measured_calls'] += 1
+            for key in CHECKPOINT_IO_OPERATIONS:
                 self.checkpoint_operations[key] += metrics[key]
 
     def snapshot(self) -> dict:
@@ -127,7 +134,7 @@ def summarize(path: Path) -> dict:
                         merge(summary['cpu_calls'], name, value['count'], value['total_ns'], value['max_ns'])
                 for category, permitted in (('checkpoints', CHECKPOINT_STATUSES | {'bytes_written'}),
                                            ('checkpoint_ns', CHECKPOINT_TIMINGS),
-                                           ('checkpoint_operations', {'capture_calls', 'serialization_calls', 'measured_calls'})):
+                                           ('checkpoint_operations', {'capture_calls', 'serialization_calls', 'measured_calls', 'io_measured_calls'} | CHECKPOINT_IO_OPERATIONS)):
                     for key, value in metrics.get(category, {}).items():
                         if key not in permitted or type(value) is not int or value < 0:
                             raise ValueError('Invalid checkpoint metric')
