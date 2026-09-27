@@ -110,6 +110,20 @@ def service_plan(planner, primary: str, source: str, path, acquire):
                 role = route.get('parts', {}).get(part, {}).get('role')
                 if role:
                     add(role)
+    if 'mining_outposts' in snapshot.factory:
+        from ..mining_outposts import current, flow_complete, role as outpost_role, sources as outpost_sources
+        # Other outposts join only for currently uncovered ore demand. The
+        # primary may still need bootstrap fuel before its first flow proof;
+        # optional uncommissioned machinery is not speculative reserve demand.
+        for item, row in sorted(outpost_sources(snapshot).items()):
+            if (row['state'] != 'ready' or not row['topology'] or not row['remaining']
+                    or not current(row, snapshot)
+                    or not flow_complete(item, row['layout'], snapshot)):
+                continue
+            needed = demands.get(item, 0) - planner.ledger.carried.get(item, 0)
+            ready = entities.get(outpost_role(item, 'chest'), {}).get('output', {}).get(item, 0)
+            if needed > 0 and _quantity(ready) < needed:
+                add(outpost_role(item, 'drill'))
     if not due or len(due) > MAX_CONSUMERS:
         raise ValueError('Fuel service group unavailable or over budget')
     origin = position(snapshot.player_position)

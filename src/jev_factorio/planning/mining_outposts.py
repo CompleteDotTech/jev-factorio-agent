@@ -59,23 +59,30 @@ class MiningOutpostPlanner(InputRoutePlanner):
             self._buffer_service = True
             return self._wait('outpost_flow', row['layout'], 3, item, timeout=1800,
                               identity=f"commission:{row['layout']}")
-        drill = self.entities[role(item, 'drill')]
-        if row['remaining'] and drill.get('fuel', {}).get('coal', 0) < 2:
-            self._buffer_service = True
-            count = min(20 if row['flow'] else 5, self.catalog.stack_sizes.get('coal', 50)) - drill.get('fuel', {}).get('coal', 0)
-            return self._acquire_outpost('coal', count, path) or self._transfer(role(item, 'drill'), 'coal', count)
-        if not flow_complete(item, row['layout'], self.snapshot):
-            self._buffer_service = True
-            return self._wait('outpost_flow', row['layout'], 3, item, timeout=3600,
-                              identity=f"commission:{row['layout']}")
         chest = role(item, 'chest')
         available = self.entities[chest].get('output', {}).get(item, 0)
         missing = math.ceil(amount - self.snapshot.inventory.get(item, 0))
-        # Never wait beyond remaining native ore. An exhausted outpost stays owned;
-        # a small tail is collectible, then ordinary observed gathering may resume.
+        # A certified, currently owned output is already paid for. Preserve the
+        # existing bounded collection/tail policy, but do not make its collection
+        # depend on upstream fuel that is unnecessary for this request.
         target = min(50, missing, available + row['remaining'])
-        if available >= target and available:
-            return self._transfer(chest, item, min(50, available, max(missing, self.collection_batch)), extracting=True)
+        commissioned = flow_complete(item, row['layout'], self.snapshot)
+        if commissioned and available >= target and available:
+            plan = self._transfer(chest, item, min(50, available, max(missing, self.collection_batch)), extracting=True)
+            return replace(plan, materials={**(plan.materials or {}), 'maintenance_policy': {
+                'schema': 1, 'reason': 'collect_ready_owned_outpost_before_upstream_refill',
+                'observed_tick': self.snapshot.tick, 'required': missing,
+                'ready': available, 'source': RESOURCES[item],
+            }})
+        drill = self.entities[role(item, 'drill')]
+        if row['remaining'] and drill.get('fuel', {}).get('coal', 0) < 2:
+            self._buffer_service = True
+            from .fuel_service import service_plan
+            return service_plan(self, role(item, 'drill'), RESOURCES[item], path, self._acquire_outpost)
+        if not commissioned:
+            self._buffer_service = True
+            return self._wait('outpost_flow', row['layout'], 3, item, timeout=3600,
+                              identity=f"commission:{row['layout']}")
         if row['remaining']:
             return self._wait('machine_output', item, target, chest, timeout=18000,
                               identity=f"outpost-collect:{row['layout']}:{target}")

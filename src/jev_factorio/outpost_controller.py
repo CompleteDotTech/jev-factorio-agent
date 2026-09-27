@@ -80,22 +80,10 @@ class MiningOutpostMixin:
 
     def _compile_candidates(self, snapshot):
         original, blocker = super()._compile_candidates(snapshot)
-        if self.memory.active_goal != 'rocket_launch':
-            return original, blocker
-        boiler = snapshot.factory.get('entities', {}).get('utility:boiler', {})
-        if boiler and boiler.get('fuel', {}).get('coal', 0) < 5:
-            return original, blocker
-        planner = self.planner_type(self.catalog, snapshot, self.memory.active_goal)
-        for row in sources(snapshot).values():
-            part = row['parts'].get('drill')
-            if not part or not row['topology'] or not row['remaining']:
-                continue
-            fuel = snapshot.factory['entities'][part['role']].get('fuel', {}).get('coal', 0)
-            if fuel < 2:
-                count = min(20 if row['flow'] else 5, self.catalog.stack_sizes.get('coal', 50)) - fuel
-                plan = planner._acquire_outpost('coal', count, ()) or planner._transfer(part['role'], 'coal', count)
-                if self._step_allowed(plan.steps[0], snapshot):
-                    return [plan], ''
+        # The effective composed planner already sees the outpost capability.
+        # Do not discard its science/ready-output frontier for an unrelated low
+        # burner, or rebuild that planner just to replace the result. Required
+        # maintenance is selected at the resource dependency in _need().
         return [plan for plan in original if self._step_allowed(plan.steps[0], snapshot)], blocker
 
 
