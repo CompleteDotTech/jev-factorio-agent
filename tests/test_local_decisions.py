@@ -284,7 +284,7 @@ def test_new_owned_copper_furnace_requests_bounded_startup_coal_with_current_evi
     state, data = snapshot(inventory={}, player_position=(0, 0)), catalog()
     data.recipes['copper-plate'] = recipe('copper-plate', {'copper-ore': 1}, 'smelting')
     role = 'recipe:copper-plate'
-    state.factory['entities'][role] = machine(unit_number=2546, fuel={'coal': 0},
+    state.factory['entities'][role] = machine(unit_number=2546, fuel={},
                                                products_finished=0)
     state.factory['output_buffers'] = {'protocol': 1, 'session_id': state.session_id,
                                        'tick': state.tick, 'sources': {}}

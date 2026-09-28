@@ -376,7 +376,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             recipe = catalog.recipes.get(recipe_name, {})
             prototype = catalog.machines.get(machine.get('name'), {})
             path = fuel.get('planner_item_path')
-            current = machine.get('fuel', {}).get('coal')
+            current = machine.get('fuel', {}).get('coal', 0)
             startup = current == 0 and machine.get('products_finished', 0) == 0
             expected_target = min(5 if startup else 50, catalog.stack_sizes.get('coal', 50))
             carried = snapshot.inventory.get('coal', 0)
