@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Callable
 
 import requests
 
@@ -110,7 +111,8 @@ class AgentLoop:
               f"(conf {record['confidence']:.2f})  {outcome}", flush=True)
         return record
 
-    def run(self, steps: int | None = 10, duration_seconds: float | None = None) -> None:
+    def run(self, steps: int | None = 10, duration_seconds: float | None = None,
+            *, after_step: Callable[[AgentLoop, int, dict], bool] | None = None) -> None:
         if steps is None and duration_seconds is None:
             raise ValueError("A step or duration limit is required")
         deadline = time.monotonic() + duration_seconds if duration_seconds is not None else None
@@ -122,9 +124,11 @@ class AgentLoop:
                 break
             from .planning.scheduling import poll_delay
             delay = self.tick_seconds
+            step_succeeded = False
             try:
-                self.step()
+                record = self.step()
                 completed += 1
+                step_succeeded = True
                 delay = poll_delay(self)
             except requests.RequestException as error:
                 status = error.response.status_code if error.response is not None else None
@@ -135,6 +139,11 @@ class AgentLoop:
                 print(f"Transient API failure ({status or type(error).__name__}); retrying.",
                       flush=True)
                 delay = max(30, delay)
+            if (step_succeeded and after_step is not None
+                    and (steps is None or completed < steps)
+                    and not getattr(self, "terminal", False)):
+                if after_step(self, completed, record) is not True:
+                    break
             if deadline is not None:
                 delay = min(delay, max(0, deadline - time.monotonic()))
             loop_sleep(self, delay, lambda: time.sleep(delay))
