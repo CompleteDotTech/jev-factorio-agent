@@ -1,8 +1,11 @@
 """Issue #93: fresh effective planner per decision, no cross-observation cache."""
 from copy import deepcopy
 
+import pytest
+
 from jev_factorio.planning.ready_work import ReadyWorkPlanner
 from jev_factorio.planning.input_routes import InputRoutePlanner
+from jev_factorio import input_routes
 from test_input_route_integration import controller, RouteLoop
 from test_maintenance_progress import progress_scenario
 
@@ -41,3 +44,43 @@ def test_changed_catalog_is_used_by_next_decision(tmp_path):
     later,_=loop._work_candidates(deepcopy(backend.state))
     assert not any(p.steps[0].action=='factory_craft'
                    and p.steps[0].parameters['recipe']=='logistic-science-pack' for p in later)
+
+
+def test_completed_research_changes_composed_frontier_after_checkpoint_reload(tmp_path):
+    backend, _ = progress_scenario(science=0)
+    loop = controller(backend, tmp_path, kind=RouteLoop)
+    before, _ = loop._work_candidates(backend.state)
+    assert before[0].steps[0].action == 'factory_craft'
+    loop.memory.save(tmp_path / 'state.json')
+
+    resumed = controller(backend, tmp_path, kind=RouteLoop, resume=True)
+    resumed.memory = resumed.memory_type.load(
+        tmp_path / 'state.json', backend.state.session_id, 'rocket_launch')
+    warm, _ = resumed._work_candidates(backend.state)
+    assert [p.to_dict() for p in warm] == [p.to_dict() for p in before]
+    backend.state.researched.append('study')
+    backend.state.factory['research'] = ''
+    backend.state.factory['research_progress'] = 0
+    after, _ = resumed._work_candidates(backend.state)
+    assert after[0].steps[0].action == 'factory_explore'
+    assert [p.to_dict() for p in after] != [p.to_dict() for p in before]
+
+
+@pytest.mark.parametrize('change', ['route_topology', 'paid_unit_identity'])
+def test_changed_route_evidence_invalidates_composed_craft(change, tmp_path):
+    backend, _ = progress_scenario(science=0)
+    loop = controller(backend, tmp_path, kind=RouteLoop)
+    before, _ = loop._work_candidates(backend.state)
+    assert before[0].steps[0].action == 'factory_craft'
+
+    changed = deepcopy(backend.state)
+    if change == 'route_topology':
+        route = changed.factory['input_routes']['sources']['recipe:iron-plate']
+        route['state'] = 'fault'
+        route['topology'] = False
+    else:
+        changed.factory['entities']['input:drill']['unit_number'] = 999
+    assert 'recipe:iron-plate' in input_routes.sources(changed)
+    after, blocker = loop._work_candidates(changed)
+    assert 'Inconsistent input-route' not in blocker
+    assert not any(p.steps[0].action == 'factory_craft' for p in after)

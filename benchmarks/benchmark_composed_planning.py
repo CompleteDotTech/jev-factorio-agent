@@ -1,4 +1,4 @@
-"""Offline paired-source planning benchmark. Run with PYTHONPATH=src:tests.
+"""Offline current-source planning fixture. Run with PYTHONPATH=src:tests.
 
 Compare the same fixtures/interpreter/host; these numbers are not native
 latency, whole-iteration timing, or campaign throughput measurements.
@@ -6,19 +6,71 @@ latency, whole-iteration timing, or campaign throughput measurements.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
+import platform
 import statistics
+import sys
 import tempfile
 import time
 from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
 
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE_FILES = (
+    'src/jev_factorio/controller.py',
+    'src/jev_factorio/buffer_controller.py',
+    'src/jev_factorio/input_controller.py',
+    'src/jev_factorio/capital_controller.py',
+    'src/jev_factorio/planning/ready_work.py',
+    'src/jev_factorio/planning/input_routes.py',
+    'src/jev_factorio/planning/factory.py',
+    'tests/test_input_route_integration.py',
+    'tests/test_maintenance_progress.py',
+    'benchmarks/benchmark_composed_planning.py',
+)
+
+
+def benchmark_input_tree_sha256():
+    """Fingerprint package and test Python, including transitive fixture imports."""
+    paths = [
+        *(ROOT / 'src/jev_factorio').rglob('*.py'),
+        *(ROOT / 'tests').rglob('*.py'),
+        ROOT / 'benchmarks/benchmark_composed_planning.py',
+        ROOT / 'pyproject.toml',
+    ]
+    digest = hashlib.sha256()
+    for path in sorted(paths):
+        payload = path.read_bytes()
+        relative = path.relative_to(ROOT).as_posix().encode()
+        digest.update(len(relative).to_bytes(4, 'big'))
+        digest.update(relative)
+        digest.update(len(payload).to_bytes(8, 'big'))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
+LOADED_SELECTED_SOURCE_SHA256 = {
+    path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+    for path in SOURCE_FILES
+}
+LOADED_INPUT_TREE_SHA256 = benchmark_input_tree_sha256()
+
+# Capture provenance before loading the measured planner and fixture modules.
 from jev_factorio.planning.ready_work import ReadyWorkPlanner
 from jev_factorio.planning.factory import FactoryPlanner
 from test_input_route_integration import RouteLoop, controller
 from test_maintenance_progress import progress_scenario
+
+
+def assert_inputs_unchanged():
+    if (LOADED_SELECTED_SOURCE_SHA256 != {
+        path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+        for path in SOURCE_FILES
+    } or LOADED_INPUT_TREE_SHA256 != benchmark_input_tree_sha256()):
+        raise RuntimeError('Benchmark inputs changed after provenance capture')
 
 
 def distribution(values):
@@ -30,6 +82,7 @@ def distribution(values):
 def benchmark(samples):
     if not 5 <= samples <= 10000:
         raise ValueError('Choose 5..10000 samples')
+    assert_inputs_unchanged()
     results={}
     for name,science in [('ready_science',20),('ready_science_craft',0)]:
         wall,cpu,builders,visits,signatures=[],[],[],[],set()
@@ -59,8 +112,16 @@ def benchmark(samples):
                        'planner_constructors':distribution(builders),'expansion_visits':distribution(visits),
                        'stable_frontier':len(signatures)==1,
                        'frontier':json.loads(next(iter(signatures))) if len(signatures)==1 else None}
+    assert_inputs_unchanged()
     return {'schema':1,'evidence':'deterministic_fixture','native_claim':False,
-            'samples':samples,'clock':'perf_counter_ns','cpu_clock':'process_time_ns','results':results}
+            'samples':samples,'clock':'perf_counter_ns','cpu_clock':'process_time_ns',
+            'environment':{'python':sys.version.split()[0],'platform':platform.platform()},
+            'selected_source_sha256':LOADED_SELECTED_SOURCE_SHA256,
+            'benchmark_input_tree_sha256':LOADED_INPUT_TREE_SHA256,
+            'measurement_limits':['Current-source scenarios, not paired pre/post source revisions.',
+                                  'Input tree hashes package/test Python, benchmark script and pyproject; external dependencies are not hashed.',
+                                  'No Factorio engine, provider, network or contention-controlled host.'],
+            'results':results}
 
 
 if __name__=='__main__':
