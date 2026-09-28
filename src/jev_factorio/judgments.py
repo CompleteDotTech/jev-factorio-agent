@@ -138,6 +138,13 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "instructions": (f"Choose the best supplied candidate plan for `{objective}` using "
                                  "`facts`, `candidate_evidence` when present, and `history`. "
                                  "Select observe only when evidence needed to start is missing. "
+                                 "For a gather candidate, `gather_start_evidence` when present "
+                                 "summarizes the current observed resource and fair target; an estimated "
+                                 "travel distance is not proof of arrival. Uncertain later "
+                                 "crafting, research, or travel outcome is checked after this "
+                                 "bounded step and does not by itself require another observation. "
+                                 "Report confidence in choosing the best next action from this "
+                                 "observed frontier, not confidence in completing the ultimate goal. "
                                  "Do not assume other questions' answers are available."),
                 "criteria": {**{p.id: p.description for p in selected},
                              "observe": "Gather another observation without mutating the factory"},
@@ -182,7 +189,10 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     f"Is a fact required to start the next step of {pointer} missing "
                     "from `facts`, given `execution_contract`? Consider only resource location, "
                     "carried materials, and the entities used by that step. Unknown later-game "
-                    "research or victory is not required for mining coal or fueling a drill. "
+                    "research or victory is not required for gathering an observed raw resource "
+                    "or fueling a drill. For a gather, use current `gather_start_evidence` "
+                    "when present; do not treat the unverified travel outcome as a missing "
+                    "start fact. "
                     "Future action outcomes will be verified after execution, not assumed now."
                 ),
             }

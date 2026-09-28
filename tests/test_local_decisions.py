@@ -102,6 +102,21 @@ def test_stone_gather_explains_current_lab_recipe_dependency_without_claiming_ou
         'basis': 'current_planner_dependency_and_native_catalog_recipe',
         'later_steps_require_fresh_native_preconditions': True,
     }
+    assert row['gather_start_evidence'] == {
+        'resource_in_current_observation': True,
+        'fair_target_identity_observed': True,
+        'resource_inventory_now': 0,
+        'target_inventory_after_this_step': 5,
+        'travel_is_lower_bound_not_arrival_proof': True,
+    }
+    context, questions, offered = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
+        [plan])
+    assert offered == [plan]
+    assert context['candidate_evidence'][plan.id]['gather_start_evidence'] == row['gather_start_evidence']
+    assert 'best next action' in questions['candidate']['instructions']
+    assert 'ultimate goal' in questions['candidate']['instructions']
+    assert 'observed raw resource' in questions[plan.id + '/needs_observation']['instructions']
     assert row['delivers_or_crafts'] == []
     assert row['processed_units_basis'] == 'handling_volume_not_useful_production'
     assert not row['requires_investment']
@@ -118,6 +133,10 @@ def test_stale_or_unrelated_raw_dependency_never_enters_candidate_evidence():
         **plan.materials['raw_prerequisite'], 'direct_product': 'lab'}})
     assert candidate_evidence(state, data, [stale])[stale.id]['raw_prerequisite'] is None
     assert candidate_evidence(state, data, [unrelated])[unrelated.id]['raw_prerequisite'] is None
+    state.factory['fair_resource_targets'].pop('stone')
+    missing_site = candidate_evidence(state, data, [plan])[plan.id]
+    assert missing_site['gather_start_evidence']['fair_target_identity_observed'] is False
+    assert 'travel:factory_gather' in missing_site['unknowns']
 
 
 def test_local_rubric_does_not_require_one_pickup_to_launch_a_rocket():
