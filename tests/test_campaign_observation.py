@@ -58,6 +58,44 @@ def test_profile_context_restores_transport_even_when_native_read_fails():
     assert backend.last_observation_profile['calls']['other']['count'] == 2
 
 
+def test_installed_fle_helper_manager_uses_the_profiled_shared_client():
+    # FLE 0.4.3 tools call connection.rcon_client, where connection is the
+    # LuaScriptManager captured when each tool is constructed.
+    client = NS(send_command=lambda command: 'native-result')
+    manager = NS(rcon_client=client)
+    tools = NS(get_entities=lambda: manager.rcon_client.send_command('get_entities'))
+    backend = NS(_instance=NS(rcon_client=client, lua_script_manager=manager),
+                 _observation_profile=None)
+    with pytest.raises(RuntimeError, match='native fault'):
+        with profile_backend(backend):
+            assert ProfiledTools(tools, backend._observation_profile).get_entities() == 'native-result'
+            assert manager.rcon_client is backend._instance.rcon_client
+            raise RuntimeError('native fault')
+    assert manager.rcon_client is client
+    assert backend._instance.rcon_client is client
+    profile = backend.last_observation_profile
+    assert profile['subcalls']['entities']['count'] == 1
+    assert profile['calls']['entities']['count'] == 1
+    assert profile['wall_partition_ns']['rpc'] <= profile['total_ns']
+    assert 'native fault' not in json.dumps(profile)
+
+
+def test_unshared_helper_manager_is_not_claimed_as_profiled_rpc():
+    instance_client = NS(send_command=lambda command: 'instance')
+    helper_client = NS(send_command=lambda command: 'helper')
+    manager = NS(rcon_client=helper_client)
+    tools = NS(get_entities=lambda: manager.rcon_client.send_command('get_entities'))
+    backend = NS(_instance=NS(rcon_client=instance_client, lua_script_manager=manager),
+                 _observation_profile=None)
+    with profile_backend(backend):
+        assert ProfiledTools(tools, backend._observation_profile).get_entities() == 'helper'
+        assert manager.rcon_client is helper_client
+    assert backend._instance.rcon_client is instance_client
+    assert backend.last_observation_profile['subcalls']['entities']['count'] == 1
+    assert backend.last_observation_profile['calls'] == {}
+    assert backend.last_observation_profile['helper_retry_attempts'] is None
+
+
 @pytest.mark.parametrize('amount,unit,nanos', [('2.5','ms',2500000), ('3','us',3000), ('1','s',1000000000)])
 def test_native_profiler_units_are_explicit(amount, unit, nanos):
     profile = ObservationProfile(Clock())
