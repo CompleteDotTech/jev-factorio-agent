@@ -10,7 +10,7 @@ from jev_factorio.jev_client import MockJevClient
 from jev_factorio.planning.decision_support import candidate_evidence, distinct_candidates, scheduling_context
 from jev_factorio.planning.factory import FactoryPlanner
 from jev_factorio.planning.ready_work import ReadyWorkPlanner
-from jev_factorio.skills import Plan, Step
+from jev_factorio.skills import Plan, Step, compile_plans
 from test_factory import FactorySimulation, catalog, machine, snapshot
 from test_causal_trace import Sink, events
 from test_deadline_scheduling import scenario
@@ -29,6 +29,46 @@ def transfers(state=None, data=None):
     worker = ReadyWorkPlanner(data, state, 'rocket_launch')
     return state, data, [worker._transfer(role, 'iron-plate', 10, extracting=True)
                          for role in ('far', 'near')]
+
+
+def test_observed_bootstrap_coal_is_a_local_objective_with_bounded_travel():
+    state, data = snapshot(), catalog()
+    state.inventory['coal'] = 0
+    state.nearby_resources['coal'] = 4
+    state.player_position = (0, 0)
+    state.factory['fair_resource_targets'] = {
+        'coal': {'position': {'x': 3, 'y': 4}}}
+    plans, blocker = compile_plans('stockpile_fuel', state)
+    assert not blocker and [p.id for p in plans] == [
+        'stockpile_fuel:coal:5', 'stockpile_fuel:coal:10']
+    support = scheduling_context(state, data, plans, 'stockpile_fuel')
+    assert support['local_objective']['kind'] == 'stockpile_fuel'
+    assert support['local_objective']['primary_target']['inventory_target'] == 5
+    assert support['candidate_evidence'][plans[0].id]['travel_tiles_lower_bound'] == 5
+    assert support['candidate_evidence'][plans[0].id]['processed_units'] == 5
+    assert support['candidate_evidence'][plans[1].id]['processed_units'] == 10
+    assert not support['candidate_evidence'][plans[0].id]['unknowns']
+    context, questions, offered = question_batch({'facts': state.for_jev(), **support}, plans)
+    assert offered == plans
+    assert context['local_objective']['primary_target']['item'] == 'coal'
+    assert 'five-coal construction buffer' in context['local_objective']['instruction']
+    assert 'local_objective' in questions[plans[0].id + '/benefit']['instructions']
+    decision = select_plan(MockJevClient(), {'facts': state.for_jev(),
+                                              'active_goal': 'stockpile_fuel', **support}, plans)
+    assert decision.plan_id == plans[0].id
+
+
+def test_missing_bootstrap_coal_geometry_stays_unknown_and_absent_coal_has_no_plan():
+    state, data = snapshot(), catalog()
+    state.inventory['coal'] = 0
+    state.nearby_resources['coal'] = 4
+    state.factory['fair_resource_targets'] = {}
+    plans, _ = compile_plans('stockpile_fuel', state)
+    evidence = candidate_evidence(state, data, plans)
+    assert evidence[plans[0].id]['travel_tiles_lower_bound'] is None
+    assert 'travel:walk_to_coal' in evidence[plans[0].id]['unknowns']
+    state.nearby_resources.pop('coal')
+    assert compile_plans('stockpile_fuel', state)[0] == []
 
 
 def test_focus_is_structured_without_mutating_material_bill():
