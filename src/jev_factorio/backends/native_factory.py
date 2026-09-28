@@ -19,9 +19,14 @@ class NativeFactory:
         self.backend = backend
         raw = self.command(files("jev_factorio").joinpath("lua/catalog.lua").read_text())
         self.catalog = Catalog.from_dict(decode_native(raw))
-        self.command(files("jev_factorio").joinpath("lua/factory.lua").read_text())
-        self.command("do\n" + files("jev_factorio").joinpath("lua/launch_readiness.lua").read_text() + "\nend")
-        self.command("storage.campaign.discover()")
+        if getattr(backend, '_native_attachment', None) is not None:
+            from .native_attachment import require_asset
+            require_asset(backend._native_attachment, 'factory')
+            require_asset(backend._native_attachment, 'launch_readiness')
+        else:
+            self.command(files("jev_factorio").joinpath("lua/factory.lua").read_text())
+            self.command("do\n" + files("jev_factorio").joinpath("lua/launch_readiness.lua").read_text() + "\nend")
+            self.command("storage.campaign.discover()")
 
     def command(self, script: str) -> str:
         command = "/sc " + script
