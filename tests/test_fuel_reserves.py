@@ -43,6 +43,9 @@ def test_existing_science_or_power_need_defers_optional_reserve(deadline):
         state.factory['entities']['utility:boiler'] = machine('boiler', unit_number=901, fuel={})
     plan = direct(state, data)
     assert plan.steps[0].parameters['quantity'] == 8
+    # Route burners retain existing grouped due-service semantics even when
+    # an active research job has no qualified deadline.
+    assert plan.materials['fuel_service']['consumer_count'] == 2
     assert plan.materials['fuel_service']['reserve'] == 0
     assert plan.materials['fuel_service']['reserve_basis'] == 'science_or_power_deadline_defers_optional_reserve'
 
