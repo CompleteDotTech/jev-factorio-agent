@@ -1,4 +1,4 @@
-"""Offline paired-source planning benchmark. Run with PYTHONPATH=src:tests.
+"""Offline current-source planning fixture. Run with PYTHONPATH=src:tests.
 
 Compare the same fixtures/interpreter/host; these numbers are not native
 latency, whole-iteration timing, or campaign throughput measurements.
@@ -75,8 +75,8 @@ def benchmark(samples):
     return {'schema':1,'evidence':'deterministic_fixture','native_claim':False,
             'samples':samples,'clock':'perf_counter_ns','cpu_clock':'process_time_ns',
             'environment':{'python':sys.version.split()[0],'platform':platform.platform()},
-            'source_sha256':{path:hashlib.sha256((ROOT/path).read_bytes()).hexdigest()
-                             for path in SOURCE_FILES},
+            'selected_source_sha256':{path:hashlib.sha256((ROOT/path).read_bytes()).hexdigest()
+                                      for path in SOURCE_FILES},
             'measurement_limits':['Current-source scenarios, not paired pre/post source revisions.',
                                   'No Factorio engine, provider, network or contention-controlled host.'],
             'results':results}
