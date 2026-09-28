@@ -69,6 +69,8 @@ def cli() -> None:
                    help="Opt-in paid mining outposts for existing manual cells; requires furnace input belts")
     p.add_argument("--background-work", action="store_true",
                    help="Opt-in receipt-tracked crafting and research prefetch; requires ready-work FLE")
+    p.add_argument("--production-treatment", type=Path,
+                   help="Immutable v1 solid/coal treatment JSON; opt-in ready-work FLE only")
     p.add_argument("--target", choices=("bootstrap_mining", "iron_smelting", "steam_power",
                                        "automation_science", "rocket_launch"), default="rocket_launch")
     p.add_argument("--policy", choices=("jev", "deterministic", "hybrid"), default="jev")
@@ -132,6 +134,41 @@ def cli() -> None:
         or args.backend != "fle" or args.target == "bootstrap_mining"
     ):
         p.error("--furnace-output-buffers requires hierarchical FLE ready-work and a native production target")
+    treatment = None
+    treatment_digest = None
+    if args.production_treatment:
+        if args.resume and not args.resume_controller:
+            p.error('--production-treatment cannot attach to an existing world without its controller checkpoint')
+        if (args.controller != 'hierarchical' or args.backend != 'fle'
+                or args.factory_scheduling != 'ready-work' or args.target == 'bootstrap_mining'):
+            p.error('--production-treatment requires hierarchical FLE ready-work production')
+        try:
+            from .treatment import load
+            treatment, treatment_digest = load(args.production_treatment)
+        except (OSError, ValueError, TypeError) as error:
+            p.error(f'Invalid production treatment: {error}')
+        if args.resume_controller:
+            try:
+                import json
+                saved = json.loads(Path(args.checkpoint).read_bytes())
+                if (saved.get('solid_intents') != treatment['solid_intents']
+                        or saved.get('solid_science_policy') is not treatment['solid_science_policy']
+                        or (treatment['coal_targets'] and (
+                            saved.get('coal_targets') != treatment['coal_targets']
+                            or saved.get('coal_kit_policy') is not treatment['coal_kit_policy']))
+                        or (not treatment['coal_targets'] and 'coal_targets' in saved)):
+                    raise ValueError('Treatment differs from checkpoint')
+            except (OSError, ValueError, TypeError, AttributeError) as error:
+                p.error(f'Production treatment checkpoint preflight failed: {error}')
+    elif args.resume_controller:
+        try:
+            import json
+            saved = json.loads(Path(args.checkpoint).read_bytes())
+            if isinstance(saved, dict) and ({'solid_intents', 'coal_targets'} & saved.keys()):
+                p.error('Existing solid/coal checkpoint requires its immutable production treatment')
+        except (OSError, ValueError, TypeError):
+            # Ordinary checkpoint validation owns malformed or missing legacy input.
+            pass
     options = dict(confidence_floor=args.confidence_floor,
                    tick_seconds=args.tick_seconds, log_file=args.log_file)
     if args.controller == "flat":
@@ -211,6 +248,11 @@ def cli() -> None:
             consolidated_observations=args.consolidated_observations,
             lead_time_supply=args.lead_time_supply,
             coverage_margin_lookahead=args.coverage_margin_lookahead,
+            solid_routes=treatment is not None,
+            solid_science_policy=treatment['solid_science_policy'] if treatment else False,
+            coal_supply=bool(treatment and treatment['coal_targets']),
+            coal_kit_policy=treatment['coal_kit_policy'] if treatment else False,
+            treatment_sha256=treatment_digest,
         )
     with ExitStack() as cleanup:
         research = None
@@ -251,6 +293,16 @@ def cli() -> None:
             if args.mining_outposts:
                 from .outpost_controller import outpost_loop_type
                 loop_type = outpost_loop_type(loop_type)
+            if treatment:
+                from .solid_controller import solid_loop_type
+                loop_type = solid_loop_type(loop_type)
+                options.update(solid_intents=treatment['solid_intents'],
+                               solid_science_policy=treatment['solid_science_policy'])
+                if treatment['coal_targets']:
+                    from .coal_controller import coal_loop_type
+                    loop_type = coal_loop_type(loop_type)
+                    options.update(coal_targets=treatment['coal_targets'],
+                                   coal_kit_policy=treatment['coal_kit_policy'])
             if args.campaign_diagnostics:
                 from .campaign_controller import campaign_loop_type
                 loop_type = campaign_loop_type(loop_type)
@@ -267,6 +319,22 @@ def cli() -> None:
                     output_roots.append(Path(args.dashboard_events).parent)
                 if not storage_ready(output_roots):
                     p.error("Storage reserve unavailable; live backend was not attached")
+            if treatment:
+                from .treatment import load
+                _, current_digest = load(args.production_treatment)
+                if current_digest != treatment_digest:
+                    p.error('Production treatment changed before backend attachment')
+                if args.resume_controller:
+                    try:
+                        import json
+                        path = Path(args.checkpoint)
+                        captured = path.read_bytes()
+                        identity = json.loads(captured)
+                        loop_type.memory_type.from_bytes(captured, identity['session_id'], args.target)
+                        if path.read_bytes() != captured:
+                            raise ValueError('Checkpoint changed during composed preflight')
+                    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+                        p.error(f'Composed treatment checkpoint preflight failed: {error}')
             backend = make_backend(args.backend, resume=args.resume, adopt_session=args.adopt_session)
             if args.backend == "fle" and args.profile_observations:
                 backend.profile_observations = True

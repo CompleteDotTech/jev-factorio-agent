@@ -1,0 +1,274 @@
+"""Private v2 capture for complete solid/coal integration trials.
+
+This preserves transport ownership and source evidence. It checks internal
+consistency only; native authenticity and rollout authority remain external.
+"""
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+from copy import deepcopy
+import gzip
+import io
+import os
+from pathlib import Path
+
+from .acceptance_capture import RECORD_FIELDS, STATE_FIELDS, FACTORY_FIELDS, DENIED
+from .acceptance_io import MAX_JSON, MAX_LOG, canonical, hash_file, load_json, records, sha256, stable_read, write_new
+from .integration_evidence import TRIAL_SCHEMA_V2, validate_trial
+from .research_log import Redactor
+from .dev_preflight import checkpoint_type
+from .state import GameSnapshot
+from . import coal_supply as coal
+
+SCHEMA = 'jev-factorio.complete-capture.v2'
+TOP_FIELDS = RECORD_FIELDS | {
+    'solid_routes', 'solid_route_evidence', 'solid_route_fault', 'solid_science_policy',
+    'solid_investment_evidence', 'coal_supply', 'coal_supply_evidence', 'coal_supply_fault',
+    'coal_kit_policy', 'coal_kit_evidence', 'previous_iteration_timing',
+}
+NATIVE_FIELDS = FACTORY_FIELDS | {'solid_routes', 'coal_supply'}
+CRITICAL = ('coal', 'solid', 'owner', 'receipt', 'funding', 'flow', 'commitment', 'pending')
+FILES = {'capture-manifest.json', 'trial.json', 'preflight.json', 'initial-checkpoint.json',
+         'final-checkpoint.json', 'gameplay.jsonl.gz'}
+
+
+def checked_checkpoint(raw: bytes) -> dict:
+    data = load_json(raw)
+    if not isinstance(data, dict) or not isinstance(data.get('session_id'), str) or not isinstance(data.get('target'), str):
+        raise ValueError('Invalid composed checkpoint identity')
+    checkpoint_type(data).from_bytes(raw, data['session_id'], data['target'])
+    return data
+
+
+def checked_coal_observation(state: dict, checkpoint: dict | None = None) -> None:
+    if not isinstance(state, dict) or not isinstance(state.get('factory'), dict):
+        raise ValueError('Missing native coal observation')
+    snapshot = GameSnapshot(tick=state.get('tick'), session_id=state.get('session_id'),
+                            factory=state['factory'])
+    rows = coal.sources(snapshot)
+    native = snapshot.factory['coal_supply']
+    if checkpoint is None:
+        return
+    if (snapshot.session_id != checkpoint['session_id']
+            or native['targets'] != checkpoint['coal_targets']
+            or any(native[key] != checkpoint['coal_epoch'][key]
+                   for key in ('actor_index', 'surface_index', 'force_index'))):
+        raise ValueError('Coal observation differs from checkpoint binding')
+    owned = checkpoint['coal_commitments']
+    if owned and (not native['committed'] or set(rows) != set(owned)):
+        raise ValueError('Coal checkpoint ownership disappeared')
+    if native['committed'] and not owned:
+        raise ValueError('Untracked native coal commitment')
+    for target, saved in owned.items():
+        if not coal.reconciles(saved, rows[target]):
+            raise ValueError('Coal receipt or component differs from checkpoint')
+
+
+def checked_checkpoint_progress(initial: dict, final: dict) -> None:
+    if final['last_tick'] < initial['last_tick']:
+        raise ValueError('Final checkpoint tick regressed')
+    for key, count in initial['failures'].items():
+        if final['failures'].get(key, 0) < count:
+            raise ValueError('Checkpoint failure history regressed')
+    for target, old in initial['coal_commitments'].items():
+        new = final['coal_commitments'].get(target)
+        if (not isinstance(new, dict) or new.get('layout') != old['layout']
+                or new.get('target') != old['target']
+                or any(new.get('parts', {}).get(part) != paid
+                       for part, paid in old['parts'].items())):
+            raise ValueError('Checkpoint paid coal ownership regressed')
+
+
+def project_record(row: dict, redactor: Redactor, omissions: Counter) -> dict:
+    if not isinstance(row, dict):
+        raise ValueError('Invalid gameplay record')
+    unknown = set(row) - TOP_FIELDS - {'state', 'after_state', 'decision'}
+    if any(any(word in key.lower() for word in CRITICAL) for key in unknown):
+        raise ValueError('Unknown treatment or ownership evidence field')
+    omissions.update('top:' + key for key in unknown)
+    result = {key: deepcopy(row[key]) for key in TOP_FIELDS if key in row}
+    for label in ('state', 'after_state'):
+        state = row.get(label)
+        if not isinstance(state, dict) or not isinstance(state.get('factory'), dict):
+            raise ValueError('Missing before/after native observation')
+        unknown_state = set(state) - STATE_FIELDS - {'factory'}
+        if any(any(word in key.lower() for word in CRITICAL) for key in unknown_state):
+            raise ValueError('Unknown state ownership evidence field')
+        omissions.update('state:' + key for key in unknown_state)
+        factory = state['factory']
+        if 'solid_routes' not in factory or 'coal_supply' not in factory:
+            raise ValueError('Complete transport observations are missing')
+        unknown = set(factory) - NATIVE_FIELDS
+        if any(any(word in key.lower() for word in CRITICAL) for key in unknown):
+            raise ValueError('Unknown native treatment evidence field')
+        omissions.update('factory:' + key for key in unknown)
+        result[label] = {key: deepcopy(state[key]) for key in STATE_FIELDS if key in state}
+        result[label]['factory'] = {key: deepcopy(factory[key]) for key in NATIVE_FIELDS if key in factory}
+    decision = row.get('decision')
+    if decision is not None and not isinstance(decision, dict):
+        raise ValueError('Invalid decision evidence')
+    if decision is not None:
+        unknown_decision = set(decision) - {'plan_id', 'source', 'model_called'}
+        if any(any(word in key.lower() for word in CRITICAL) for key in unknown_decision):
+            raise ValueError('Unknown decision ownership evidence field')
+        omissions.update('decision:' + key for key in unknown_decision)
+    result['decision'] = ({key: deepcopy(decision[key]) for key in
+                           ('plan_id', 'source', 'model_called') if key in decision}
+                          if decision is not None else None)
+    # Sensitive structured data must not be silently retained or stripped from
+    # an ownership chain. Stop capture and require a reviewed schema revision.
+    def check(node):
+        if isinstance(node, dict):
+            if any(key.lower().replace('-', '_') in DENIED for key in node):
+                raise ValueError('Sensitive key in selected evidence')
+            for item in node.values(): check(item)
+        elif isinstance(node, list):
+            for item in node: check(item)
+    check(result)
+    return redactor.clean(result)
+
+
+def capture(*, gameplay: Path, trial_path: Path, initial_checkpoint: Path,
+            final_checkpoint: Path, save: Path, preflight_path: Path, output: Path, environ=None) -> dict:
+    if output.exists() or output.is_symlink():
+        raise ValueError('Capture destination already exists')
+    trial_raw = stable_read(trial_path)
+    trial = load_json(trial_raw)
+    validate_trial(trial)
+    if trial['schema'] != TRIAL_SCHEMA_V2:
+        raise ValueError('Complete capture requires the v2 trial')
+    initial_raw = stable_read(initial_checkpoint)
+    final_raw = stable_read(final_checkpoint)
+    if sha256(initial_raw) != trial['initial_checkpoint_sha256']:
+        raise ValueError('Initial checkpoint differs from predeclared trial')
+    preflight_raw = stable_read(preflight_path)
+    preflight = load_json(preflight_raw)
+    if (preflight.get('schema') != 'jev-factorio.dev-preflight.v1'
+            or preflight.get('checkpoint_sha256') != trial['initial_checkpoint_sha256']
+            or preflight.get('vm_uuid') != trial['vm_uuid']
+            or preflight.get('production_vm_uuid') != trial['production_vm_uuid']
+            or preflight.get('ready_for_coordinated_validation') is not False
+            or not {'solid_preflight_not_supported', 'coal_preflight_not_supported'} <=
+                   set(preflight.get('issues', []))):
+        raise ValueError('Preflight differs from complete trial boundary')
+    initial, final = checked_checkpoint(initial_raw), checked_checkpoint(final_raw)
+    checked_checkpoint_progress(initial, final)
+    if (initial.get('session_id') != final.get('session_id')
+            or initial.get('solid_intents') != trial['solid_intents']
+            or final.get('solid_intents') != trial['solid_intents']
+            or initial.get('coal_targets') != trial['coal_targets']
+            or final.get('coal_targets') != trial['coal_targets']
+            or any(cp.get('solid_science_policy') is not trial['configuration']['solid_science_policy']
+                   or cp.get('coal_kit_policy') is not trial['configuration']['coal_kit_policy']
+                   for cp in (initial, final))):
+        raise ValueError('Capture checkpoint treatment mismatch')
+    saved = hash_file(save)
+    if saved['sha256'] != trial['initial_save_sha256']:
+        raise ValueError('Initial save differs from predeclared trial')
+    raw = stable_read(gameplay, MAX_LOG)
+    redactor = Redactor(dict(os.environ if environ is None else environ))
+    omissions = Counter()
+    projected = [project_record(row, redactor, omissions) for row in records(raw)]
+    for row in projected:
+        for label in ('state', 'after_state'):
+            checked_coal_observation(row[label])
+    checked_coal_observation(projected[0]['state'], initial)
+    checked_coal_observation(projected[-1]['after_state'], final)
+    payload = b''.join(canonical(row) for row in projected)
+    if len(payload) > MAX_LOG:
+        raise ValueError('Projected gameplay exceeds capture budget')
+    content = {'trial.json': canonical(redactor.clean(trial)),
+               'preflight.json': canonical(redactor.clean(preflight)),
+               'initial-checkpoint.json': canonical(redactor.clean(initial)),
+               'final-checkpoint.json': canonical(redactor.clean(final)),
+               'gameplay.jsonl.gz': gzip.compress(payload, mtime=0)}
+    manifest = {'schema': SCHEMA, 'records': len(projected),
+                'decompressed_bytes': len(payload), 'decompressed_sha256': sha256(payload),
+                'source_gameplay_sha256': sha256(raw),
+                'source_initial_checkpoint_sha256': sha256(initial_raw),
+                'source_final_checkpoint_sha256': sha256(final_raw),
+                'source_trial_sha256': sha256(trial_raw),
+                'source_preflight_sha256': sha256(preflight_raw), 'source_save': saved,
+                'projection_omissions': dict(omissions), 'capture_complete': True,
+                'native_acceptance': 'not_accepted', 'deployment_authorized': False}
+    content['capture-manifest.json'] = canonical(manifest)
+    output.mkdir(mode=0o700)
+    for name, value in content.items():
+        write_new(output / name, value)
+    sums = ''.join(sha256(content[name]) + '  ' + name + '\n' for name in sorted(content))
+    write_new(output / 'SHA256SUMS', sums.encode())
+    return manifest
+
+
+def verify(directory: Path) -> dict:
+    if directory.is_symlink() or {p.name for p in directory.iterdir()} != FILES | {'SHA256SUMS'}:
+        raise ValueError('Incomplete complete-capture directory')
+    sums = stable_read(directory / 'SHA256SUMS').decode().splitlines()
+    expected = {line[66:]: line[:64] for line in sums if len(line) >= 67 and line[64:66] == '  '}
+    if len(sums) != len(FILES) or set(expected) != FILES:
+        raise ValueError('Invalid checksum manifest')
+    content = {name: stable_read(directory / name, MAX_LOG if name.endswith('.gz') else MAX_JSON)
+               for name in FILES}
+    if any(sha256(content[name]) != expected[name] for name in FILES):
+        raise ValueError('Capture checksum mismatch')
+    manifest = load_json(content['capture-manifest.json'])
+    size = manifest.get('decompressed_bytes')
+    if manifest.get('schema') != SCHEMA or type(size) is not int or not 0 < size <= MAX_LOG:
+        raise ValueError('Invalid complete-capture schema or size')
+    with gzip.GzipFile(fileobj=io.BytesIO(content['gameplay.jsonl.gz'])) as stream:
+        raw = stream.read(size + 1)
+    if len(raw) != size or sha256(raw) != manifest.get('decompressed_sha256'):
+        raise ValueError('Projected gameplay mismatch')
+    trial = load_json(content['trial.json'])
+    validate_trial(trial)
+    projected = records(raw)
+    preflight = load_json(content['preflight.json'])
+    initial = checked_checkpoint(content['initial-checkpoint.json'])
+    final = checked_checkpoint(content['final-checkpoint.json'])
+    checked_checkpoint_progress(initial, final)
+    if (trial['schema'] != TRIAL_SCHEMA_V2 or len(projected) != manifest.get('records')
+            or manifest.get('capture_complete') is not True
+            or manifest.get('native_acceptance') != 'not_accepted'
+            or manifest.get('deployment_authorized') is not False
+            or manifest.get('source_initial_checkpoint_sha256') != trial['initial_checkpoint_sha256']
+            or manifest.get('source_save', {}).get('sha256') != trial['initial_save_sha256']
+            or preflight.get('schema') != 'jev-factorio.dev-preflight.v1'
+            or preflight.get('checkpoint_sha256') != trial['initial_checkpoint_sha256']
+            or preflight.get('vm_uuid') != trial['vm_uuid']
+            or preflight.get('production_vm_uuid') != trial['production_vm_uuid']
+            or preflight.get('ready_for_coordinated_validation') is not False
+            or not {'solid_preflight_not_supported', 'coal_preflight_not_supported'} <=
+                   set(preflight.get('issues', []))
+            or any(cp.get('solid_intents') != trial['solid_intents']
+                   or cp.get('coal_targets') != trial['coal_targets']
+                   or cp.get('solid_science_policy') is not trial['configuration']['solid_science_policy']
+                   or cp.get('coal_kit_policy') is not trial['configuration']['coal_kit_policy']
+                   for cp in (initial, final))
+            or any(row.get('acceptance_configuration') != trial['configuration']
+                   or any(not isinstance(row.get(label), dict)
+                          or not isinstance(row[label].get('factory'), dict)
+                          or not {'solid_routes', 'coal_supply'} <= row[label]['factory'].keys()
+                          for label in ('state', 'after_state'))
+                   for row in projected)):
+        raise ValueError('Complete trial or record count mismatch')
+    for row in projected:
+        for label in ('state', 'after_state'):
+            checked_coal_observation(row[label])
+    checked_coal_observation(projected[0]['state'], initial)
+    checked_coal_observation(projected[-1]['after_state'], final)
+    return {'manifest': manifest, 'trial': trial, 'rows': projected}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    for name in ('gameplay', 'trial', 'preflight', 'initial-checkpoint', 'final-checkpoint', 'save', 'output'):
+        parser.add_argument('--' + name, type=Path, required=True)
+    args = parser.parse_args(argv)
+    capture(gameplay=args.gameplay, trial_path=args.trial, preflight_path=args.preflight,
+            initial_checkpoint=args.initial_checkpoint,
+            final_checkpoint=args.final_checkpoint, save=args.save, output=args.output)
+
+
+if __name__ == '__main__':
+    main()

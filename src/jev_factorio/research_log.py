@@ -109,6 +109,7 @@ class RunConfiguration:
     solid_science_policy: bool = False
     coal_supply: bool = False
     coal_kit_policy: bool = False
+    treatment_sha256: str | None = None
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -287,7 +288,7 @@ def _optional_text(value: object) -> None:
 
 def _configuration(configuration: dict) -> None:
     expected = set(RunConfiguration.__dataclass_fields__)
-    if (type(configuration) is not dict or not expected - _TREATMENT_FIELDS <= set(configuration)
+    if (type(configuration) is not dict or not expected - _TREATMENT_FIELDS - {'treatment_sha256'} <= set(configuration)
             or not set(configuration) <= expected):
         raise ValueError("Unexpected evidence schema fields")
     if configuration.get("factory_scheduling", "serial") not in ("serial", "ready-work"):
@@ -301,6 +302,11 @@ def _configuration(configuration: dict) -> None:
         raise ResearchLogError("Coal supply requires its solid route treatment")
     if configuration.get("solid_science_policy", False) and not configuration.get("solid_routes", False):
         raise ValueError("Solid science policy requires solid routes")
+    treatment_hash = configuration.get('treatment_sha256')
+    if treatment_hash is not None and (not isinstance(treatment_hash, str)
+            or re.fullmatch(r'[0-9a-f]{64}', treatment_hash) is None
+            or not configuration.get('solid_routes', False)):
+        raise ValueError('Invalid immutable production treatment digest')
     for key in ("backend", "controller", "policy"):
         if type(configuration[key]) is not str or not configuration[key]:
             raise ValueError("Invalid run configuration label")

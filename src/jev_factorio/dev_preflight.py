@@ -22,6 +22,8 @@ def checkpoint_type(data):
     from .input_controller import input_loop_type
     from .outpost_controller import outpost_loop_type
     from .successor_controller import successor_loop_type
+    from .solid_controller import solid_loop_type
+    from .coal_controller import coal_loop_type
     base = BackgroundWorkLoop if 'background_schema' in data else HierarchicalLoop
     if 'input_routes_schema' in data:
         base = input_loop_type(buffered_loop_type(base))
@@ -29,6 +31,12 @@ def checkpoint_type(data):
         base = outpost_loop_type(base)
     if 'successor_schema' in data:
         base = successor_loop_type(base)
+    if 'coal_supply_schema' in data and 'solid_routes_schema' not in data:
+        raise ValueError('Coal checkpoint lacks its solid transport extension')
+    if 'solid_routes_schema' in data:
+        base = solid_loop_type(base)
+    if 'coal_supply_schema' in data:
+        base = coal_loop_type(base)
     return base.memory_type if base else CampaignMemory
 
 
@@ -93,6 +101,10 @@ def inspect_native(native: dict, checkpoint: dict, expected_session: str) -> lis
                     'layout': retained[label + '_layout'], 'parts': retained[label]}, family)
     # This first probe does not project outpost ownership. It must not pretend to.
     if checkpoint.get('outpost_commitments'): issues.append('outpost_preflight_not_supported')
+    # The fixed native query does not inspect these paid ownership families.
+    # Even an empty commitment set does not qualify the active treatment.
+    if 'solid_routes_schema' in checkpoint: issues.append('solid_preflight_not_supported')
+    if 'coal_supply_schema' in checkpoint: issues.append('coal_preflight_not_supported')
     return sorted(set(issues))
 
 
