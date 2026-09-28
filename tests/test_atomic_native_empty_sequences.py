@@ -1,11 +1,13 @@
 """Replay a privacy-scrubbed 2.0.77 envelope; transport remains offline."""
 import copy
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
 
 from test_atomic_observation import setup
+from jev_factorio.backends.atomic_observation import BOUNDS
 
 
 RAW = Path(__file__).parent / 'fixtures' / 'native_empty_bootstrap_2_0_77_sanitized.txt'
@@ -18,12 +20,26 @@ def test_native_empty_bootstrap_wire_preserves_atomic_inventory_and_identity(mon
     raw = RAW.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == RAW_SHA256
     backend, native, payload, calls = setup(monkeypatch, craft=True)
+    wire = raw.decode()
     def captured(command):
         calls.append(command)
-        return raw.decode()
+        return wire
     backend._instance.rcon_client.send_command = captured
+    # The historical e759 wire advertised the old 0.15-tile output search.
+    # The current observer requires 0.75. Keep the captured bytes and digest
+    # immutable, and prove strict rejection before adapting only this bound in
+    # a derived positive-test envelope.
+    with pytest.raises(ValueError, match='Invalid atomic query bounds'):
+        backend.observe()
+    assert len(calls) == 1
+    prefix, marker, encoded = wire.partition('JEV_SNAPSHOT|')
+    assert marker
+    current = json.loads(encoded)
+    assert current['bounds'] == {**BOUNDS, 'bootstrap_output_radius': .15}
+    current['bounds']['bootstrap_output_radius'] = BOUNDS['bootstrap_output_radius']
+    wire = prefix + marker + json.dumps(current, separators=(',', ':'))
     snapshot = backend.observe()
-    assert len(calls) == 1 and 'observation_snapshot_v2' in calls[0]
+    assert len(calls) == 2 and all('observation_snapshot_v2' in call for call in calls)
     assert snapshot.session_id == 'native-empty-bootstrap-fixture'
     assert snapshot.tick == 10000
     assert snapshot.placed_entities == []

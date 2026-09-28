@@ -13,11 +13,13 @@ def example():
     """Declared synthetic native facts, never a qualified real-engine witness."""
     source = {'target_role': 'furnace', 'target_unit': 21, 'layout': 'bundle:1',
         'remaining_ore': 5000, 'mining_speed_ppm': 500_000, 'ore_mining_ticks': 60,
-        'consumer_max_joules_per_tick': 1500, 'consumer_stored_fuel_joules': 0,
+        'consumer_max_joules_per_tick': 1500, 'consumer_stored_fuel_joules_lower': 0,
+        'consumer_stored_fuel_joules_upper': 0,
         'baseline_coal_demand_forecast': 30, 'demand_basis': 'current_required_recipe_forecast',
         'demand_evidence_sha256': 'd' * 64}
     boiler = {**source, 'target_role': 'utility:boiler', 'target_unit': 11,
-        'consumer_max_joules_per_tick': 30_000, 'consumer_stored_fuel_joules': 40_000_000,
+        'consumer_max_joules_per_tick': 30_000, 'consumer_stored_fuel_joules_lower': 40_000_000,
+        'consumer_stored_fuel_joules_upper': 40_000_000,
         'baseline_coal_demand_forecast': 10, 'demand_basis': 'observed_burn_projection'}
     return {'schema': INPUT_SCHEMA, 'policy': POLICY, 'base_version': '2.0.77',
         'mods': {'base': '2.0.77'},
@@ -73,6 +75,34 @@ def test_immutable_typed_roundtrip_and_independent_snapshot():
         typed.epoch.tick = 0
 
 
+def test_fractional_stock_uses_lower_for_bootstrap_and_upper_for_demand_ceiling():
+    raw = example()
+    bootstrap = evaluate(raw)['terms']['bootstrap_fuel_joules_required_forecast']
+    raw['power']['boiler_stored_fuel_joules'] = bootstrap - 1
+    raw['sources'][1]['consumer_stored_fuel_joules_lower'] = bootstrap - 1
+    raw['sources'][1]['consumer_stored_fuel_joules_upper'] = bootstrap
+    assert evaluate(raw)['reason'] == 'bootstrap_fuel_shortfall'
+
+    raw = example()
+    raw['sources'][0]['consumer_stored_fuel_joules_lower'] = 29_999_999
+    raw['sources'][0]['consumer_stored_fuel_joules_upper'] = 30_000_000
+    raw['sources'][0]['baseline_coal_demand_forecast'] = 31
+    result = evaluate(raw)
+    assert result['terms']['branches'][0]['additional_demand_coal_ceiling'] == 30
+    assert result['reason'] == 'demand_exceeds_native_burn_and_stock_bound'
+
+
+def test_stock_bounds_and_legacy_single_stock_are_not_interchangeable():
+    raw = example()
+    raw['sources'][0]['consumer_stored_fuel_joules_upper'] = 2
+    with pytest.raises(ValueError):
+        EconomicInput.parse(raw)
+    raw = example()
+    raw['sources'][0]['consumer_stored_fuel_joules'] = raw['sources'][0].pop('consumer_stored_fuel_joules_lower')
+    with pytest.raises(ValueError):
+        EconomicInput.parse(raw)
+
+
 @pytest.mark.parametrize('case,reason', [
     ('cheap_manual', 'actor_payback_margin_not_met'),
     ('horizon', 'construction_exceeds_horizon'),
@@ -90,13 +120,16 @@ def test_bounded_unprofitable_or_infeasible_inputs_defer(case, reason):
     if case == 'horizon': raw['horizon_ticks'] = 600
     if case == 'bootstrap':
         raw['power']['boiler_stored_fuel_joules'] = 0
-        raw['sources'][1]['consumer_stored_fuel_joules'] = 0
+        raw['sources'][1]['consumer_stored_fuel_joules_lower'] = 0
+        raw['sources'][1]['consumer_stored_fuel_joules_upper'] = 0
     if case == 'ore': raw['sources'][0]['remaining_ore'] = 5
     if case == 'mining_rate': raw['sources'][1]['mining_speed_ppm'] = 1
     if case == 'generation': raw['power']['generator_max_joules_per_tick'] = 1000
     if case == 'idle': raw['sources'][0]['baseline_coal_demand_forecast'] = 0
     if case == 'overspecified_demand': raw['sources'][0]['baseline_coal_demand_forecast'] = 1000
-    if case == 'stock_covers_demand': raw['sources'][0]['consumer_stored_fuel_joules'] = 400_000_000
+    if case == 'stock_covers_demand':
+        raw['sources'][0]['consumer_stored_fuel_joules_lower'] = 400_000_000
+        raw['sources'][0]['consumer_stored_fuel_joules_upper'] = 400_000_000
     result = evaluate(raw)
     assert result['eligible'] is False and result['reason'] == reason
 

@@ -44,6 +44,57 @@ def test_one_gather_then_two_distinct_sequential_refills_retain_remaining_coal()
     assert state.inventory['coal'] == 0
 
 
+def test_composed_controller_replans_two_burners_after_each_verified_action(tmp_path):
+    """One controller, one actor, and fresh route evidence for each service step."""
+    from test_input_route_integration import RouteBackend, RouteLoop, controller
+
+    class DemandPlanner(InputRoutePlanner):
+        def plan(self):
+            return self._need('iron-plate', 10)
+
+    class DemandLoop(RouteLoop):
+        planner_type = DemandPlanner
+
+    class FuelBackend(RouteBackend):
+        def execute(self, action, args):
+            self.calls.append((action, deepcopy(args)))
+            if action == 'factory_gather':
+                self.state.inventory['coal'] += args['quantity']
+            elif action == 'factory_insert' and args['item'] == 'coal':
+                self.state.inventory['coal'] -= args['quantity']
+                entity = self.state.factory['entities'][args['role']]
+                entity['fuel']['coal'] += args['quantity']
+                self.state.factory['receipts'][args['receipt']] = {
+                    'role': args['role'], 'unit_number': entity['unit_number'],
+                    'item': 'coal', 'quantity': args['quantity'], 'extracting': False}
+            else:
+                raise AssertionError('Unrelated action reached grouped-service fixture')
+            self.state.tick += 1
+            for key in ('input_routes', 'output_buffers'):
+                self.state.factory[key]['tick'] = self.state.tick
+            return 'Synthetic action returned; verify fresh state'
+
+    state, data = due_scenario()
+    backend = FuelBackend()
+    backend.state = state
+    backend.enable_factory = lambda: data
+    loop = controller(backend, tmp_path, kind=DemandLoop)
+    for _ in range(8):
+        record = loop.step()
+        if len(backend.calls) == 3 and loop.memory.pending is None:
+            break
+    else:
+        pytest.fail('Grouped service did not settle within eight controller decisions')
+    assert record['verified'] is True
+    assert loop.memory.pending is None and loop.memory.attempt is None
+    assert [action for action, _ in backend.calls] == [
+        'factory_gather', 'factory_insert', 'factory_insert']
+    assert backend.calls[0][1]['quantity'] == 8
+    assert {args['role'] for action, args in backend.calls[1:]} == {
+        'input:inserter', 'input:drill'}
+    assert state.inventory['coal'] == 0
+
+
 def test_held_coal_is_not_spent_or_counted_twice():
     state, data = due_scenario(10)
     planner = InputRoutePlanner(data, state, 'rocket_launch')
