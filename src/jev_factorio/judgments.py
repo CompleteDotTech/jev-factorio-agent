@@ -148,6 +148,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                                  "and no start fact is missing, repeating the same observation alone "
                                  "does not establish a future travel or crafting outcome. Keep observe "
                                  "available for a genuinely missing or disputed start fact. "
+                                 "For a handcraft, `craft_start_evidence` describes current inputs "
+                                 "and actor readiness; expected output still needs native verification. "
                                  "Report confidence in choosing the best next action from this "
                                  "observed frontier, not confidence in completing the ultimate goal. "
                                  "Do not assume other questions' answers are available."),
