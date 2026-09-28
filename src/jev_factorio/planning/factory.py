@@ -104,7 +104,7 @@ class FactoryPlanner:
         identity = json.dumps(site, sort_keys=True, separators=(",", ":"), allow_nan=False)
         return f"{item}:target:{target}:site:{identity}"
 
-    def _output_pickup(self, item, missing, path=()):
+    def _output_pickup(self, item, missing):
         from ..coal_supply import private_source_roles
         network_sources = private_source_roles(self.snapshot)
         candidates = []
@@ -143,23 +143,8 @@ class FactoryPlanner:
                     return ticks / useful, -useful, distance, role
 
                 candidates = [min(zip(candidates, locations), key=rank)[0]]
-        role, machine, quantity = candidates[0]
-        plan = self._transfer(role, item, quantity, extracting=True)
-        item_path = [entry.removeprefix('item:') for entry in path
-                     if entry.startswith('item:')]
-        if (role.startswith('recipe:') and item_path[-1:] == [item]
-                and type(machine.get('unit_number')) is int
-                and machine['unit_number'] > 0):
-            plan = replace(plan, materials={**(plan.materials or {}),
-                'output_pickup': {
-                    'observed_tick': self.snapshot.tick,
-                    'planner_item_path': item_path,
-                    'source_role': role,
-                    'source_unit': machine['unit_number'],
-                    'item': item,
-                    'observed_output': machine.get('output', {}).get(item),
-                }})
-        return plan
+        role, _, quantity = candidates[0]
+        return self._transfer(role, item, quantity, extracting=True)
 
     def _need(self, item, amount, path=()):
         have = self.snapshot.inventory.get(item, 0)
@@ -167,8 +152,29 @@ class FactoryPlanner:
             return None
         path = self._visit("item:" + item, path)
         missing = math.ceil(amount - have)
-        pickup = self._output_pickup(item, missing, path)
+        pickup = self._output_pickup(item, missing)
         if pickup:
+            # Preserve the established two-argument pickup override contract.
+            # Provenance belongs to this recursive path, after selection.
+            step = pickup.steps[0]
+            role = (step.parameters or {}).get('role')
+            machine = self.entities.get(role, {})
+            item_path = [entry.removeprefix('item:') for entry in path
+                         if entry.startswith('item:')]
+            if (step.action == 'factory_extract' and isinstance(role, str)
+                    and role.startswith('recipe:')
+                    and item_path[-1:] == [item]
+                    and type(machine.get('unit_number')) is int
+                    and machine['unit_number'] > 0):
+                pickup = replace(pickup, materials={**(pickup.materials or {}),
+                    'output_pickup': {
+                        'observed_tick': self.snapshot.tick,
+                        'planner_item_path': item_path,
+                        'source_role': role,
+                        'source_unit': machine['unit_number'],
+                        'item': item,
+                        'observed_output': machine.get('output', {}).get(item),
+                    }})
             return pickup
         if item in RAW_ITEMS:
             if item not in self.snapshot.nearby_resources:
