@@ -57,6 +57,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
     for index, plan in enumerate(plans):
         origin = _position(snapshot.player_position)
         travel, actor, unknown, reasons = 0.0, 0.0, [], []
+        harvest_thresholds = {}
         urgency, outputs, quantities, costs = 0, set(), 0.0, {}
         for step in plan.steps:
             parameters = step.parameters or {}
@@ -71,6 +72,10 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             target = None
             if step.action == 'factory_gather':
                 evidence = snapshot.factory.get('fair_resource_targets', {}).get(item, {})
+                target = _position(evidence.get('position'))
+            elif step.action in {'walk_to_coal', 'mine_coal', 'walk_to_iron', 'mine_iron'}:
+                resource = 'coal' if step.action.endswith('coal') else 'iron-ore'
+                evidence = snapshot.factory.get('fair_resource_targets', {}).get(resource, {})
                 target = _position(evidence.get('position'))
             elif role:
                 target = _position(entity.get('position'))
@@ -91,6 +96,15 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             if step.action == 'factory_gather':
                 actor += amount * RAW_TICKS_PER_ITEM
                 quantities += amount
+            elif step.action in {'mine_coal', 'mine_iron'}:
+                # Legacy harvest steps verify an inventory threshold, not an
+                # additional amount. Count only the unmet observed threshold.
+                prior = max(snapshot.inventory.get(step.item, 0),
+                            harvest_thresholds.get(step.item, 0))
+                remaining = max(0, step.threshold - prior)
+                harvest_thresholds[step.item] = max(prior, step.threshold)
+                quantities += remaining
+                outputs.add(step.item)
             elif step.action == 'factory_craft':
                 recipe = catalog.recipes.get(parameters.get('recipe', ''), {})
                 energy, batches = recipe.get('energy'), parameters.get('batches')
@@ -164,6 +178,51 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
         scope = (intent.get('scope') if isinstance(intent, dict)
                  and intent.get('observed_tick') == snapshot.tick else None)
         scope = scope if scope in {'immediate', 'lookahead'} else 'unclassified'
+        prerequisite = (plan.materials or {}).get('raw_prerequisite')
+        prerequisite_evidence = None
+        gather_start = None
+        if (isinstance(prerequisite, dict) and prerequisite.get('observed_tick') == snapshot.tick
+                and len(plan.steps) == 1 and plan.steps[0].action == 'factory_gather'):
+            step = plan.steps[0]
+            ingredient = (step.parameters or {}).get('resource')
+            parent = prerequisite.get('direct_product')
+            recipe_name = prerequisite.get('recipe')
+            path = prerequisite.get('planner_item_path')
+            recipe = catalog.recipes.get(recipe_name, {})
+            if (ingredient == prerequisite.get('ingredient')
+                    and isinstance(parent, str) and parent
+                    and isinstance(path, list) and 2 <= len(path) <= 32
+                    and path[-2:] == [parent, ingredient]
+                    and any(product.get('type') == 'item' and product.get('name') == parent
+                            and product.get('amount', 0) > 0 for product in recipe.get('products', []))
+                    and any(entry.get('type') == 'item' and entry.get('name') == ingredient
+                            and entry.get('amount', 0) > 0 for entry in recipe.get('ingredients', []))):
+                prerequisite_evidence = {
+                    'observed_tick': snapshot.tick,
+                    'direct_recipe': recipe_name,
+                    'direct_product': parent,
+                    'planner_item_path': list(path),
+                    'basis': 'current_planner_dependency_and_native_catalog_recipe',
+                    'later_steps_require_fresh_native_preconditions': True,
+                }
+                site = snapshot.factory.get('fair_resource_targets', {}).get(ingredient, {})
+                gather_start = {
+                    'resource_in_current_observation': ingredient in snapshot.nearby_resources,
+                    'fair_target_identity_observed': (
+                        isinstance(site, dict) and isinstance(site.get('name'), str)
+                        and bool(site['name'].strip())
+                        and (ingredient == 'wood' or site['name'] == ingredient)
+                        and type(site.get('surface_index')) is int and site['surface_index'] > 0
+                        and _position(site.get('position')) is not None),
+                    'resource_inventory_now': snapshot.inventory.get(ingredient, 0),
+                    'target_inventory_after_this_step': step.threshold,
+                    'travel_is_lower_bound_not_arrival_proof': True,
+                }
+        if plan.goal == 'stockpile_fuel' and all(
+                step.action in {'walk_to_coal', 'mine_coal'} for step in plan.steps):
+            highest = max((step.threshold for step in plan.steps
+                           if step.action == 'mine_coal'), default=0)
+            scope = 'immediate' if highest <= 5 else 'lookahead'
         passive = all(s.action in {'factory_wait', 'idle'} for s in plan.steps)
         result[plan.id] = {
             'work_scope': scope,
@@ -174,12 +233,17 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'actor_ticks_estimate': None if unknown else math.ceil(actor),
             'processed_units': quantities, 'material_costs': costs,
             'delivers_or_crafts': sorted(outputs), 'unknowns': sorted(set(unknown)),
+            'raw_prerequisite': prerequisite_evidence,
+            'gather_start_evidence': gather_start,
             'research_deadline_tick': min((row['deadline_tick'] for row in schedules
                 if row['item'] in outputs and row['deadline_tick'] is not None), default=None),
             'requires_investment': any(s.action in {'factory_place', 'factory_connect',
                                       'factory_buffer_build', 'factory_input_build', 'factory_solid_build'} for s in plan.steps),
             'estimate_basis': 'native_observation_and_catalog_with_declared_policy_heuristics',
         }
+        if scope == 'lookahead' and plan.goal == 'stockpile_fuel':
+            result[plan.id]['current_prerequisite_units'] = max(
+                0, min(quantities, 5 - snapshot.inventory.get('coal', 0)))
     # A nearer bulk pickup of the same currently needed material is not
     # discretionary stockpiling. Compare its cost using only the current need,
     # not all extra handled units. This is evidence/ranking, never permission.
@@ -223,15 +287,21 @@ def ranking_key(row: dict) -> tuple:
 def scheduling_context(snapshot, catalog, plans, goal: str) -> dict:
     evidence = candidate_evidence(snapshot, catalog, plans)
     primary = (plans[0].materials or {}).get('local_objective') if plans else None
+    if primary is None and goal == 'stockpile_fuel':
+        primary = {'item': 'coal', 'inventory_target': 5, 'ultimate_goal': goal}
+    instruction = ('Gather the observed five-coal construction buffer; a bounded '
+                   'coal harvest advances this prerequisite.' if goal == 'stockpile_fuel' else
+                   'Prevent observed starvation, remove the next production blocker, '
+                   'or do useful independent work while production runs. '
+                   'A single useful action need not complete the ultimate goal. '
+                   'Immediate prerequisites precede discretionary lookahead at equal urgency; '
+                   'moving more items is not evidence of more useful production.')
     return {
         'local_objective': {
-            'kind': 'ready_production', 'ultimate_goal': goal,
+            'kind': 'stockpile_fuel' if goal == 'stockpile_fuel' else 'ready_production',
+            'ultimate_goal': goal,
             'primary_target': deepcopy(primary),
-            'instruction': 'Prevent observed starvation, remove the next production blocker, '
-                           'or do useful independent work while production runs. '
-                           'A single useful action need not complete the ultimate goal. '
-                           'Immediate prerequisites precede discretionary lookahead at equal urgency; '
-                           'moving more items is not evidence of more useful production.',
+            'instruction': instruction,
             'success_authority': 'unchanged native step and goal predicates, never model scores',
         },
         'candidate_evidence': evidence,
