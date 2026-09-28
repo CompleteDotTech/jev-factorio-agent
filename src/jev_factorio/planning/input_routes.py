@@ -22,10 +22,22 @@ class InputRoutePlanner(OutputBufferPlanner):
                 prerequisite = self._need(name, 1, path)
                 if prerequisite:
                     return prerequisite
-                return self._plan("factory_place", "machine",
+                plan = self._plan("factory_place", "machine",
                     parameters={"role": role, "name": name, "anchor": row["anchor"]},
                     costs={name: 1}, identity="joint:" + row["anchor"],
                     description=f"Place paid {name} at joint ore/route/output site for {role}")
+                item_path = [entry.removeprefix('item:') for entry in path
+                             if entry.startswith('item:')]
+                if item_path[-1:] == [role.removeprefix('recipe:')]:
+                    plan = replace(plan, materials={**(plan.materials or {}),
+                        'placement_dependency': {
+                            'observed_tick': self.snapshot.tick,
+                            'planner_item_path': item_path,
+                            'machine': name,
+                            'source_role': role,
+                            'site_anchor': row['anchor'],
+                        }})
+                return plan
         return super()._machine(role, name, path, anchor)
 
     def candidates(self):

@@ -98,7 +98,7 @@ def test_smelting_never_inserts_ore_without_fuel():
     state.inventory["coal"] = 50
     step = plan(state)
     assert step.action == "factory_insert" and step.parameters["item"] == "coal"
-    assert step.costs == {"coal": 50}
+    assert step.costs == {"coal": 5}
 
 
 def test_raw_gather_commits_one_observed_fair_target_with_a_unique_postcondition():

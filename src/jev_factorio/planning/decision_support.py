@@ -11,6 +11,7 @@ from copy import deepcopy
 
 from .scheduling import (RAW_TICKS_PER_ITEM, SAFETY_TICKS, SERVICE_TICKS,
                          TRAVEL_TICKS_PER_TILE, research_schedule)
+from ..production_sites import sources as production_site_sources
 
 
 def _finite(value):
@@ -41,6 +42,166 @@ def distinct_candidates(plans):
     return result
 
 
+def _craft_start_evidence(snapshot, catalog, step):
+    """Describe a planned handcraft start; never certify future output."""
+    parameters = step.parameters or {}
+    recipe_name, batches = parameters.get('recipe'), parameters.get('batches')
+    recipe = catalog.recipes.get(recipe_name, {})
+    if type(batches) is not int or batches < 1 or not recipe:
+        return None
+    ingredients, products = recipe.get('ingredients', []), recipe.get('products', [])
+    if (not ingredients or not products
+            or any(entry.get('type') != 'item' or not _finite(entry.get('amount'))
+                   or entry['amount'] <= 0 for entry in ingredients + products)
+            or any(product.get('probability', 1) != 1 for product in products)):
+        return None
+    inputs = {}
+    for entry in ingredients:
+        inputs[entry['name']] = inputs.get(entry['name'], 0) + entry['amount'] * batches
+    expected = {}
+    for product in products:
+        expected[product['name']] = expected.get(product['name'], 0) + product['amount'] * batches
+    if inputs != (step.costs or {}) or step.item not in expected:
+        return None
+    factory = snapshot.factory
+    return {
+        'observed_tick': snapshot.tick,
+        'native_recipe': recipe_name,
+        'input_costs_match_native_recipe': True,
+        'inputs_in_inventory_now': all(snapshot.inventory.get(item, 0) >= count
+                                       for item, count in inputs.items()),
+        'recipe_unlocked_and_handcraftable': (
+            bool(catalog.hand_categories.get(recipe.get('category')))
+            and catalog.enabled(recipe, snapshot.researched or [])),
+        'player_connected_and_bound': (factory.get('player_connected') is True
+                                       and factory.get('player_bound') is True),
+        'crafting_queue_empty': factory.get('crafting_queue') == 0,
+        'craft_job_protocol_ready': (type(factory.get('craft_jobs_protocol')) is int
+                                     and factory['craft_jobs_protocol'] == 1
+                                     if step.action == 'factory_craft_job' else None),
+        'expected_products_after_native_verification': expected,
+        'native_receipt_required_for_completion': step.action == 'factory_craft_job',
+    }
+
+
+def _placement_start_evidence(snapshot, plan):
+    if len(plan.steps) != 1 or plan.steps[0].action != 'factory_place':
+        return None
+    step = plan.steps[0]
+    parameters = step.parameters or {}
+    if not str(parameters.get('anchor', '')).startswith('cell-site:'):
+        return None
+    try:
+        site = production_site_sources(snapshot).get(parameters.get('role'), {})
+    except (ValueError, KeyError, TypeError):
+        return None
+    if (site.get('state') != 'proposed' or site.get('reason') != 'joint_layout_available'
+            or site.get('anchor') != parameters.get('anchor')
+            or parameters.get('name') != 'stone-furnace'
+            or step.costs != {'stone-furnace': 1}
+            or _position(site.get('position')) is None):
+        return None
+    return {
+        'observed_tick': snapshot.tick,
+        'source_role': parameters['role'],
+        'site_anchor': parameters['anchor'],
+        'site_position': deepcopy(site['position']),
+        'site_state': 'proposed',
+        'native_offer_checked_current_site_clearance': True,
+        'paid_furnace_in_inventory_now': snapshot.inventory.get('stone-furnace', 0) >= 1,
+        'no_source_owned_at_role_now': parameters['role'] not in snapshot.factory.get('entities', {}),
+        'player_connected_and_bound_now': (
+            snapshot.factory.get('player_connected') is True
+            and snapshot.factory.get('player_bound') is True),
+        'crafting_queue_empty_now': snapshot.factory.get('crafting_queue') == 0,
+        'travel_is_lower_bound_not_arrival_proof': True,
+        'native_preflight_rechecks_offer_and_actor': True,
+        'later_transport_and_output_require_native_verification': True,
+    }
+
+
+def _recipe_input_transfer_start_evidence(snapshot, catalog, plan):
+    """Bind a paid recipe input transfer to current native facts, not future output."""
+    if len(plan.steps) != 1:
+        return None
+    step = plan.steps[0]
+    provenance = (plan.materials or {}).get('recipe_input_transfer')
+    local = (plan.materials or {}).get('local_objective')
+    parameters = step.parameters or {}
+    if (step.action != 'factory_insert' or step.effect != 'transfer'
+            or not isinstance(provenance, dict) or not isinstance(local, dict)):
+        return None
+    role, item, recipe_name = (provenance.get('source_role'),
+                               provenance.get('ingredient'), provenance.get('recipe'))
+    if (not isinstance(role, str) or not role.startswith('recipe:')
+            or not isinstance(item, str) or not item
+            or not isinstance(recipe_name, str) or role != 'recipe:' + recipe_name):
+        return None
+    factory = snapshot.factory
+    machine = factory.get('entities', {}).get(role, {})
+    source = (factory.get('production_sites', {}).get('sources', {}).get(role, {}))
+    recipe = catalog.recipes.get(recipe_name, {})
+    prototype = catalog.machines.get(machine.get('name'), {})
+    ingredients = recipe.get('ingredients', [])
+    matches = [row for row in ingredients if row.get('type') == 'item'
+               and row.get('name') == item] if isinstance(ingredients, list) else []
+    path = provenance.get('planner_item_path')
+    batches = provenance.get('planned_batches')
+    input_bag = machine.get('input')
+    buffered = input_bag.get(item, 0) if isinstance(input_bag, dict) else None
+    crafting = machine.get('crafting')
+    fuel_bag = machine.get('fuel')
+    burner_fuel = fuel_bag.get('coal', 0) if isinstance(fuel_bag, dict) else None
+    carried = snapshot.inventory.get(item)
+    if (len(matches) != 1 or type(batches) is not int or batches < 1
+            or not _finite(matches[0].get('amount')) or matches[0]['amount'] <= 0
+            or type(buffered) is not int or buffered < 0 or type(crafting) is not bool):
+        return None
+    required = max(0, math.ceil(matches[0]['amount'] * batches - buffered
+                                 - (matches[0]['amount'] if crafting else 0)))
+    if (provenance.get('observed_tick') != snapshot.tick
+            or type(machine.get('unit_number')) is not int or machine['unit_number'] <= 0
+            or provenance.get('source_unit') != machine['unit_number']
+            or source.get('state') != 'owned'
+            or source.get('source_unit') != machine['unit_number']
+            or recipe.get('name') != recipe_name or recipe.get('hidden')
+            or not catalog.enabled(recipe, snapshot.researched or [])
+            or not bool(prototype.get('categories', {}).get(recipe.get('category')))
+            or (prototype.get('burner') is True
+                and (not _finite(burner_fuel) or burner_fuel <= 0))
+            or (prototype.get('burner') is not True
+                and machine.get('recipe') != recipe_name)
+            or provenance.get('observed_input') != buffered
+            or provenance.get('observed_crafting') is not crafting
+            or not isinstance(path, list) or not 2 <= len(path) <= 32
+            or any(not isinstance(part, str) or not part for part in path)
+            or path[0] != local.get('item') or path[-2:] != [recipe_name, item]
+            or type(required) is not int or required < 1
+            or parameters.get('role') != role or parameters.get('item') != item
+            or parameters.get('quantity') != required
+            or parameters.get('receipt') != f'{snapshot.tick}:factory_insert:{role}:{item}'
+            or step.costs != {item: required}
+            or type(carried) is not int or carried < required
+            or factory.get('player_connected') is not True
+            or factory.get('player_bound') is not True):
+        return None
+    return {
+        'observed_tick': snapshot.tick,
+        'planner_item_path': list(path),
+        'direct_native_recipe': recipe_name,
+        'owned_source_role': role,
+        'owned_source_unit': machine['unit_number'],
+        'ingredient': item,
+        'ingredient_in_machine_now': buffered,
+        'ingredient_in_inventory_now': carried,
+        'burner_fuel_coal_now': burner_fuel if prototype.get('burner') is True else None,
+        'paid_quantity_to_transfer': required,
+        'planned_native_receipt_id': parameters['receipt'],
+        'basis': 'current_planner_recipe_input_and_owned_native_machine',
+        'native_transfer_and_later_output_require_verification': True,
+    }
+
+
 def candidate_evidence(snapshot, catalog, plans) -> dict:
     """Describe the admitted frontier without inventing downstream output."""
     entities = snapshot.factory.get('entities', {})
@@ -55,6 +216,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
     has_solid_offer = any(solid_marker(plan, snapshot) for plan in plans)
     has_coal_offer = any(coal_marker(plan, snapshot) for plan in plans)
     for index, plan in enumerate(plans):
+        placement_start = _placement_start_evidence(snapshot, plan)
+        recipe_input_transfer_start = _recipe_input_transfer_start_evidence(snapshot, catalog, plan)
         origin = _position(snapshot.player_position)
         travel, actor, unknown, reasons = 0.0, 0.0, [], []
         harvest_thresholds = {}
@@ -73,13 +236,16 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             if step.action == 'factory_gather':
                 evidence = snapshot.factory.get('fair_resource_targets', {}).get(item, {})
                 target = _position(evidence.get('position'))
+            elif step.action == 'factory_place' and placement_start is not None:
+                target = _position(placement_start['site_position'])
             elif step.action in {'walk_to_coal', 'mine_coal', 'walk_to_iron', 'mine_iron'}:
                 resource = 'coal' if step.action.endswith('coal') else 'iron-ore'
                 evidence = snapshot.factory.get('fair_resource_targets', {}).get(resource, {})
                 target = _position(evidence.get('position'))
             elif role:
                 target = _position(entity.get('position'))
-            if passive or step.action in {'factory_craft', 'factory_research', 'factory_bind'}:
+            if passive or step.action in {'factory_craft', 'factory_craft_job',
+                                          'factory_research', 'factory_bind'}:
                 distance = 0.0
             elif origin is not None and target is not None:
                 distance = math.dist(origin, target)
@@ -105,12 +271,15 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                 harvest_thresholds[step.item] = max(prior, step.threshold)
                 quantities += remaining
                 outputs.add(step.item)
-            elif step.action == 'factory_craft':
+            elif step.action in {'factory_craft', 'factory_craft_job'}:
                 recipe = catalog.recipes.get(parameters.get('recipe', ''), {})
                 energy, batches = recipe.get('energy'), parameters.get('batches')
                 if _finite(energy) and energy > 0 and type(batches) is int and batches > 0:
-                    actor += energy * batches * 60
-                    outputs.update(p['name'] for p in recipe.get('products', []) if p.get('type') == 'item')
+                    if step.action == 'factory_craft':
+                        actor += energy * batches * 60
+                    if step.action == 'factory_craft':
+                        outputs.update(p['name'] for p in recipe.get('products', [])
+                                       if p.get('type') == 'item')
                 else:
                     unknown.append('craft_duration')
             elif step.action in {'factory_insert', 'factory_extract'}:
@@ -181,6 +350,89 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
         prerequisite = (plan.materials or {}).get('raw_prerequisite')
         prerequisite_evidence = None
         gather_start = None
+        if len(plan.steps) == 1 and plan.steps[0].action == 'factory_gather':
+            step = plan.steps[0]
+            resource = (step.parameters or {}).get('resource')
+            site = snapshot.factory.get('fair_resource_targets', {}).get(resource, {})
+            gather_start = {
+                'resource_in_current_observation': resource in snapshot.nearby_resources,
+                'fair_target_identity_observed': (
+                    isinstance(site, dict) and isinstance(site.get('name'), str)
+                    and bool(site['name'].strip())
+                    and (resource == 'wood' or site['name'] == resource)
+                    and type(site.get('surface_index')) is int and site['surface_index'] > 0
+                    and _position(site.get('position')) is not None),
+                'resource_inventory_now': snapshot.inventory.get(resource, 0),
+                'target_inventory_after_this_step': step.threshold,
+                'travel_is_lower_bound_not_arrival_proof': True,
+            }
+        intent = (plan.materials or {}).get('work_intent')
+        craft_start = (_craft_start_evidence(snapshot, catalog, plan.steps[0])
+                       if len(plan.steps) == 1 and plan.steps[0].action in {
+                           'factory_craft', 'factory_craft_job'}
+                       and (intent is None or (isinstance(intent, dict)
+                            and intent.get('observed_tick') == snapshot.tick))
+                       else None)
+        craft_dependency = None
+        provenance = (plan.materials or {}).get('craft_dependency')
+        if (craft_start is not None
+                and craft_start['recipe_unlocked_and_handcraftable'] is True
+                and isinstance(provenance, dict)):
+            path = provenance.get('planner_item_path')
+            local = (plan.materials or {}).get('local_objective')
+            target = local.get('item') if isinstance(local, dict) else None
+            step = plan.steps[0]
+            if (provenance.get('observed_tick') == snapshot.tick
+                    and provenance.get('recipe') == craft_start['native_recipe']
+                    and provenance.get('product') == step.item
+                    and isinstance(path, list) and 1 <= len(path) <= 32
+                    and all(isinstance(item, str) and item for item in path)
+                    and path[-1] == step.item
+                    and isinstance(target, str) and bool(target)
+                    and path[0] == target):
+                craft_dependency = {
+                    'observed_tick': snapshot.tick,
+                    'planner_item_path': list(path),
+                    'current_craft_product': step.item,
+                    'basis': 'current_recursive_planner_provenance_and_native_recipe',
+                    'later_steps_require_fresh_native_preconditions': True,
+                }
+        placement_dependency = None
+        provenance = (plan.materials or {}).get('placement_dependency')
+        local = (plan.materials or {}).get('local_objective')
+        target_item = local.get('item') if isinstance(local, dict) else None
+        if (placement_start is not None
+                and placement_start['paid_furnace_in_inventory_now'] is True
+                and placement_start['no_source_owned_at_role_now'] is True
+                and placement_start['player_connected_and_bound_now'] is True
+                and placement_start['crafting_queue_empty_now'] is True
+                and isinstance(provenance, dict)):
+            path = provenance.get('planner_item_path')
+            role = placement_start['source_role']
+            product = role.removeprefix('recipe:')
+            recipe = catalog.recipes.get(product, {})
+            furnace = catalog.machines.get('stone-furnace', {})
+            if (provenance.get('observed_tick') == snapshot.tick
+                    and provenance.get('machine') == 'stone-furnace'
+                    and provenance.get('source_role') == role
+                    and provenance.get('site_anchor') == placement_start['site_anchor']
+                    and isinstance(target_item, str) and bool(target_item)
+                    and isinstance(path, list) and 1 <= len(path) <= 32
+                    and all(isinstance(item, str) and item for item in path)
+                    and path[0] == target_item and path[-1] == product
+                    and recipe.get('name') == product and not recipe.get('hidden')
+                    and catalog.enabled(recipe, snapshot.researched or [])
+                    and bool(furnace.get('categories', {}).get(recipe.get('category')))
+                    and any(row.get('type') == 'item' and row.get('name') == product
+                            and row.get('amount', 0) > 0
+                            for row in recipe.get('products', []))):
+                placement_dependency = {
+                    'observed_tick': snapshot.tick,
+                    'planner_item_path': list(path),
+                    'machine_for_recipe': role,
+                    'basis': 'current_recursive_planner_and_validated_native_site',
+                    'later_flow_and_output_require_fresh_native_preconditions': True,
+                }
         if (isinstance(prerequisite, dict) and prerequisite.get('observed_tick') == snapshot.tick
                 and len(plan.steps) == 1 and plan.steps[0].action == 'factory_gather'):
             step = plan.steps[0]
@@ -205,18 +457,112 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                     'basis': 'current_planner_dependency_and_native_catalog_recipe',
                     'later_steps_require_fresh_native_preconditions': True,
                 }
-                site = snapshot.factory.get('fair_resource_targets', {}).get(ingredient, {})
-                gather_start = {
-                    'resource_in_current_observation': ingredient in snapshot.nearby_resources,
-                    'fair_target_identity_observed': (
-                        isinstance(site, dict) and isinstance(site.get('name'), str)
-                        and bool(site['name'].strip())
-                        and (ingredient == 'wood' or site['name'] == ingredient)
-                        and type(site.get('surface_index')) is int and site['surface_index'] > 0
-                        and _position(site.get('position')) is not None),
-                    'resource_inventory_now': snapshot.inventory.get(ingredient, 0),
-                    'target_inventory_after_this_step': step.threshold,
-                    'travel_is_lower_bound_not_arrival_proof': True,
+        fuel_prerequisite = None
+        fuel_transfer_start = None
+        fuel = (plan.materials or {}).get('fuel_prerequisite')
+        local = (plan.materials or {}).get('local_objective')
+        local_item = local.get('item') if isinstance(local, dict) else None
+        if isinstance(fuel, dict) and len(plan.steps) == 1:
+            step = plan.steps[0]
+            parameters = step.parameters or {}
+            role = fuel.get('source_role')
+            machine = entities.get(role, {}) if isinstance(role, str) else {}
+            fuel_bag = machine.get('fuel')
+            current = fuel_bag.get('coal', 0) if isinstance(fuel_bag, dict) else None
+            recipe_name = role.removeprefix('recipe:') if isinstance(role, str) else ''
+            recipe = catalog.recipes.get(recipe_name, {})
+            prototype = catalog.machines.get(machine.get('name'), {})
+            path = fuel.get('planner_item_path')
+            carried = snapshot.inventory.get('coal')
+            startup = current == 0 and machine.get('products_finished', 0) == 0
+            expected_target = min(5 if startup else 50, catalog.stack_sizes.get('coal', 50))
+            required = expected_target - current if _finite(current) else None
+            if (step.action == 'factory_insert' and step.effect == 'transfer'
+                    and parameters.get('item') == 'coal' and parameters.get('role') == role
+                    and type(required) is int and required > 0
+                    and parameters.get('quantity') == required
+                    and parameters.get('receipt') == f'{snapshot.tick}:factory_insert:{role}:coal'
+                    and step.costs == {'coal': required}
+                    and type(carried) is int and carried >= required
+                    and fuel.get('observed_tick') == snapshot.tick
+                    and isinstance(role, str) and role.startswith('recipe:')
+                    and type(machine.get('unit_number')) is int
+                    and machine['unit_number'] == fuel.get('source_unit')
+                    and current == fuel.get('observed_fuel')
+                    and fuel.get('target_fuel') == expected_target
+                    and fuel.get('startup') is startup
+                    and isinstance(fuel_bag, dict)
+                    and prototype.get('burner') is True
+                    and recipe.get('name') == recipe_name and not recipe.get('hidden')
+                    and catalog.enabled(recipe, snapshot.researched or [])
+                    and bool(prototype.get('categories', {}).get(recipe.get('category')))
+                    and isinstance(local_item, str) and bool(local_item)
+                    and isinstance(path, list) and 1 <= len(path) <= 32
+                    and all(isinstance(item, str) and item for item in path)
+                    and path[0] == local_item and path[-1] == recipe_name
+                    and snapshot.factory.get('player_connected') is True
+                    and snapshot.factory.get('player_bound') is True):
+                fuel_transfer_start = {
+                    'observed_tick': snapshot.tick,
+                    'planner_item_path': list(path),
+                    'burner_role': role,
+                    'burner_unit': machine['unit_number'],
+                    'fuel_now': current,
+                    'coal_in_inventory_now': carried,
+                    'coal_to_transfer': required,
+                    'native_receipt': parameters['receipt'],
+                    'basis': 'current_planner_need_owned_burner_and_paid_inventory',
+                    'native_transfer_and_later_output_require_verification': True,
+                }
+        if (isinstance(fuel, dict) and len(plan.steps) == 1
+                and plan.steps[0].action == 'factory_gather'
+                and (plan.steps[0].parameters or {}).get('resource') == 'coal'
+                and gather_start is not None
+                and gather_start['resource_in_current_observation'] is True
+                and gather_start['fair_target_identity_observed'] is True):
+            role = fuel.get('source_role')
+            machine = entities.get(role, {})
+            recipe_name = role.removeprefix('recipe:') if isinstance(role, str) else ''
+            recipe = catalog.recipes.get(recipe_name, {})
+            prototype = catalog.machines.get(machine.get('name'), {})
+            path = fuel.get('planner_item_path')
+            fuel_bag = machine.get('fuel')
+            current = fuel_bag.get('coal', 0) if isinstance(fuel_bag, dict) else None
+            startup = current == 0 and machine.get('products_finished', 0) == 0
+            expected_target = min(5 if startup else 50, catalog.stack_sizes.get('coal', 50))
+            carried = snapshot.inventory.get('coal', 0)
+            gather_quantity = (min(50, max(0, math.ceil(expected_target - current - carried)))
+                               if _finite(current) and type(carried) is int else 0)
+            if (fuel.get('observed_tick') == snapshot.tick
+                    and isinstance(role, str) and role.startswith('recipe:')
+                    and type(machine.get('unit_number')) is int
+                    and machine['unit_number'] == fuel.get('source_unit')
+                    and _finite(current) and current == fuel.get('observed_fuel')
+                    and type(expected_target) is int and expected_target >= 1
+                    and fuel.get('target_fuel') == expected_target
+                    and fuel.get('startup') is startup
+                    and current < min(5, expected_target)
+                    and type(carried) is int and carried >= 0 and gather_quantity > 0
+                    and (plan.steps[0].parameters or {}).get('quantity') == gather_quantity
+                    and plan.steps[0].threshold == carried + gather_quantity
+                    and prototype.get('burner') is True
+                    and recipe.get('name') == recipe_name and not recipe.get('hidden')
+                    and catalog.enabled(recipe, snapshot.researched or [])
+                    and bool(prototype.get('categories', {}).get(recipe.get('category')))
+                    and isinstance(local_item, str) and bool(local_item)
+                    and isinstance(path, list) and 1 <= len(path) <= 32
+                    and all(isinstance(item, str) and item for item in path)
+                    and path[0] == local_item and path[-1] == recipe_name):
+                fuel_prerequisite = {
+                    'observed_tick': snapshot.tick,
+                    'planner_item_path': list(path),
+                    'burner_role': role,
+                    'burner_unit': machine['unit_number'],
+                    'fuel_now': current,
+                    'startup_target': expected_target if startup else None,
+                    'current_required_units': min(5, expected_target) - current,
+                    'basis': 'current_planner_fuel_need_and_owned_native_burner',
+                    'later_fuel_transfer_and_output_require_fresh_native_preconditions': True,
                 }
         if plan.goal == 'stockpile_fuel' and all(
                 step.action in {'walk_to_coal', 'mine_coal'} for step in plan.steps):
@@ -235,6 +581,13 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'delivers_or_crafts': sorted(outputs), 'unknowns': sorted(set(unknown)),
             'raw_prerequisite': prerequisite_evidence,
             'gather_start_evidence': gather_start,
+            'fuel_prerequisite': fuel_prerequisite,
+            'fuel_transfer_start_evidence': fuel_transfer_start,
+            'craft_start_evidence': craft_start,
+            'craft_dependency': craft_dependency,
+            'placement_start_evidence': placement_start,
+            'placement_dependency': placement_dependency,
+            'recipe_input_transfer_start_evidence': recipe_input_transfer_start,
             'research_deadline_tick': min((row['deadline_tick'] for row in schedules
                 if row['item'] in outputs and row['deadline_tick'] is not None), default=None),
             'requires_investment': any(s.action in {'factory_place', 'factory_connect',

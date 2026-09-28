@@ -22,6 +22,7 @@ class CampaignMemory:
     reservations: dict[str, dict[str, float]] = field(default_factory=dict)
     failures: dict[str, int] = field(default_factory=dict)
     connection_failure_attribution: dict = field(default_factory=dict)
+    connector_ownership: dict | None = None
     history: list[dict] = field(default_factory=list)
     last_tick: int = -1
     status: str = "running"
@@ -96,6 +97,9 @@ class CampaignMemory:
             from .planning.goals import goal_order
             from .planning.connection_identity import validate_attribution
             validate_attribution(memory.connection_failure_attribution, memory.failures)
+            if memory.connector_ownership is not None:
+                from .connector_checkpoint import validate_binding
+                validate_binding(memory.connector_ownership, session_id)
             order = goal_order(target)
             if (memory.last_tick < -1 or memory.active_goal not in [None, *order]
                     or not set(memory.completed_goals).issubset(order)
