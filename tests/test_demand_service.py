@@ -204,6 +204,10 @@ def test_service_partial_plan_resume_does_not_repeat_lost_acknowledgment(tmp_pat
         if not resume:
             loop.memory = loop.memory_type(state.session_id, 'rocket_launch', active_goal='rocket_launch',
                 completed_goals={g: 1 for g in loop.order[:-1]}, last_tick=state.tick)
+            # The visit fixture begins with a paid, ready output buffer.
+            loop.memory.output_commitments = {row['source']: {
+                'source_unit': row['source_unit'], 'layout': row['layout'],
+                'parts': deepcopy(row['parts'])}}
         loop._compile_candidates = lambda current: ([visit], '')
         return loop
     loop = make(False)

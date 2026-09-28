@@ -63,7 +63,7 @@ def test_native_negative_results_and_failed_mutation_epoch_not_cached():
 
 def test_bootstrap_native_binding_and_chest_read():
     lua = runtime()
-    lua.execute('''add_drill(60,0,0);selected=add_drill(51,10,0);add_chest(52,12,0)
+    lua.execute('''add_drill(60,0,0);selected=add_drill(51,10,0);add_chest(52,12,-.203125)
         storage.campaign.observation_snapshot_v2(0)
         assert(captured.bootstrap.drill.unit_number==51 and captured.bootstrap.drill.fuel.coal==3)
         assert(captured.bootstrap.iron_ore_collected==7 and captured.bootstrap.output_connected)

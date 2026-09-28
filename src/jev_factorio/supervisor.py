@@ -779,12 +779,14 @@ Only report repaired when every acceptance requirement is verified.
             if current.get('connection_failure_attribution', {}) != previous.get('connection_failure_attribution', {}):
                 return False
             extension_keys = ("background_schema", "background_job", "background_attempt",
+                              "output_buffers_schema", "output_commitments",
                               "input_routes_schema", "input_commitments", "outposts_schema", "outpost_commitments",
                               "successor_schema", "successor_projects", "successor_receipts")
             if any(key in previous and current.get(key) != previous[key]
                    for key in extension_keys):
                 return False
-            if (previous.get("background_job") or previous.get("input_commitments") or previous.get("outpost_commitments")
+            if (previous.get("background_job") or previous.get("output_commitments")
+                    or previous.get("input_commitments") or previous.get("outpost_commitments")
                     or previous.get("successor_projects")):
                 if any(current.get(key) != previous.get(key)
                        for key in ("active_plan", "step_index", "reservations")):

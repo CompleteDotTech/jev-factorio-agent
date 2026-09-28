@@ -45,6 +45,13 @@ def native_case(kind, path, sink=None):
         backend.state.session_id, target, active_goal=target,
         completed_goals={goal: 0 for goal in loop.order[:-1]},
         last_tick=backend.state.tick)
+    if kind in {"route", "combined"}:
+        # This fixture starts with a fully paid output buffer. Its durable
+        # owner must predate the route action under test.
+        source, row = next(iter(backend.state.factory['output_buffers']['sources'].items()))
+        loop.memory.output_commitments = {source: {
+            'source_unit': row['source_unit'], 'layout': row['layout'],
+            'parts': deepcopy(row['parts'])}}
     if kind == "buffer":
         loop._compile_candidates = lambda state: ([need(state, backend.catalog)], "")
     elif kind == "combined":
