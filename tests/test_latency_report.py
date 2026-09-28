@@ -40,6 +40,44 @@ def test_sanitized_report_reconciles_and_preserves_legacy_unknown(tmp_path):
     assert report['source_commit']=='a'*40
 
 
+def test_native_profiler_stages_are_nested_and_missing_is_not_zero(tmp_path):
+    first=record()
+    first['observation_profiles'][0]['native_ns']={
+        'campaign_snapshot':2_000_000, 'discovery':0}
+    first['observation_profiles'][0]['native_timing_available']=True
+    second=deepcopy(first)
+    second['observation_profiles'][0]['native_ns']={}
+    second['observation_profiles'][0]['native_timing_available']=False
+    third=deepcopy(first)
+    third['observation_profiles'][0].pop('native_ns')
+    third['observation_profiles'][0].pop('native_timing_available')
+    for row in (first,second,third):
+        row['phases']=[]
+    result=analyze(write(tmp_path/'log',[first,second,third]))
+    assert result['profiles_with_native_profiler_stages']==1
+    assert result['profiles_without_native_profiler_stages']==2
+    assert result['distributions']['observation_native_stage:campaign_snapshot:nested']=={
+        'count':1,'median_ns':2_000_000,'p95_ns':2_000_000,'total_ns':2_000_000}
+    assert result['distributions']['observation_native_stage:discovery:nested']['median_ns']==0
+    assert 'observation_native_stage:serialize:nested' not in result['distributions']
+    assert result['counts']['observation_native_stage:discovery:unavailable']==2
+    assert result['counts']['observation_native_stage:serialize:unavailable']==3
+    assert 'not_additive' in result['scopes']['observation_native_stage']
+
+
+@pytest.mark.parametrize('native,available', [
+    ({'private-lua':1},True), ({'discovery':-1},True),
+    ({'discovery':True},True), ({'discovery':10**15+1},True),
+    ({'discovery':1},False), ([],False),
+])
+def test_native_profiler_malformed_or_disputed_evidence_fails_closed(tmp_path,native,available):
+    row=record()
+    row['observation_profiles'][0]['native_ns']=native
+    row['observation_profiles'][0]['native_timing_available']=available
+    with pytest.raises(ValueError,match='Invalid latency record'):
+        analyze(write(tmp_path/'log',[row]))
+
+
 def test_gap_is_record_to_next_observation_not_watchdog_delay(tmp_path):
     first=record();second=deepcopy(first)
     second['recorded_at_utc']='2026-09-26T00:00:05+00:00'
