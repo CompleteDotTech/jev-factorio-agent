@@ -48,6 +48,9 @@ def test_observed_bootstrap_coal_is_a_local_objective_with_bounded_travel():
     assert support['candidate_evidence'][plans[0].id]['processed_units'] == 5
     assert support['candidate_evidence'][plans[1].id]['processed_units'] == 10
     assert not support['candidate_evidence'][plans[0].id]['unknowns']
+    assert support['candidate_evidence'][plans[0].id]['work_scope'] == 'immediate'
+    assert support['candidate_evidence'][plans[1].id]['work_scope'] == 'lookahead'
+    assert support['deterministic_ranking'][0] == plans[0].id
     context, questions, offered = question_batch({'facts': state.for_jev(), **support}, plans)
     assert offered == plans
     assert context['local_objective']['primary_target']['item'] == 'coal'

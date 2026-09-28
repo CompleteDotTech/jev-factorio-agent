@@ -178,6 +178,11 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
         scope = (intent.get('scope') if isinstance(intent, dict)
                  and intent.get('observed_tick') == snapshot.tick else None)
         scope = scope if scope in {'immediate', 'lookahead'} else 'unclassified'
+        if plan.goal == 'stockpile_fuel' and all(
+                step.action in {'walk_to_coal', 'mine_coal'} for step in plan.steps):
+            highest = max((step.threshold for step in plan.steps
+                           if step.action == 'mine_coal'), default=0)
+            scope = 'immediate' if highest <= 5 else 'lookahead'
         passive = all(s.action in {'factory_wait', 'idle'} for s in plan.steps)
         result[plan.id] = {
             'work_scope': scope,
@@ -194,6 +199,9 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                                       'factory_buffer_build', 'factory_input_build', 'factory_solid_build'} for s in plan.steps),
             'estimate_basis': 'native_observation_and_catalog_with_declared_policy_heuristics',
         }
+        if scope == 'lookahead' and plan.goal == 'stockpile_fuel':
+            result[plan.id]['current_prerequisite_units'] = max(
+                0, min(quantities, 5 - snapshot.inventory.get('coal', 0)))
     # A nearer bulk pickup of the same currently needed material is not
     # discretionary stockpiling. Compare its cost using only the current need,
     # not all extra handled units. This is evidence/ranking, never permission.
