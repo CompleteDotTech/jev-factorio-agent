@@ -203,7 +203,9 @@ def test_furnace_craft_keeps_current_lab_planner_provenance_without_claiming_lab
     state, data = snapshot(inventory={'stone': 5}), catalog()
     data.recipes['lab'] = recipe('lab', {'iron-plate': 1})
     state.factory['craft_jobs_protocol'] = 1
-    plan = ReadyWorkPlanner(data, state, 'rocket_launch')._need('lab', 1)
+    planner = ReadyWorkPlanner(data, state, 'rocket_launch')
+    planner._set_focus('lab', 1)
+    plan = planner._need('lab', 1)
     assert plan.steps[0].action == 'factory_craft'
     assert plan.materials['local_objective']['item'] == 'lab'
     assert plan.materials['craft_dependency'] == {
