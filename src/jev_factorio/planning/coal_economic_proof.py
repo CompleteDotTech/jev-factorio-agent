@@ -10,8 +10,8 @@ from dataclasses import asdict, dataclass
 import hashlib
 import json
 
-INPUT_SCHEMA = 'jev.coal-economic-input.v1'
-PROOF_SCHEMA = 'jev.coal-economic-proof.v1'
+INPUT_SCHEMA = 'jev.coal-economic-input.v2'
+PROOF_SCHEMA = 'jev.coal-economic-proof.v2'
 POLICY = 'owned-steam-coal-v1'
 MAX_TICKS = 216_000
 MAX_INTEGER = 2**53 - 1
@@ -157,7 +157,8 @@ class Source:
     mining_speed_ppm: int
     ore_mining_ticks: int
     consumer_max_joules_per_tick: int
-    consumer_stored_fuel_joules: int
+    consumer_stored_fuel_joules_lower: int
+    consumer_stored_fuel_joules_upper: int
     baseline_coal_demand_forecast: int
     demand_basis: str
     demand_evidence_sha256: str
@@ -165,17 +166,22 @@ class Source:
     @classmethod
     def parse(cls, value):
         _fields(value, 'target_role target_unit layout remaining_ore mining_speed_ppm '
-                'ore_mining_ticks consumer_max_joules_per_tick consumer_stored_fuel_joules '
+                'ore_mining_ticks consumer_max_joules_per_tick consumer_stored_fuel_joules_lower '
+                'consumer_stored_fuel_joules_upper '
                 'baseline_coal_demand_forecast demand_basis demand_evidence_sha256')
         if (not isinstance(value['demand_basis'], str) or value['demand_basis'] not in
                 {'current_required_recipe_forecast', 'observed_burn_projection'}):
             raise ValueError('Unsupported coal demand basis')
+        lower = _integer(value['consumer_stored_fuel_joules_lower'], 0, 10**12)
+        upper = _integer(value['consumer_stored_fuel_joules_upper'], lower, 10**12)
+        if upper - lower > 1:
+            raise ValueError('Burner stock rounding interval is unsupported')
         return cls(_text(value['target_role']), _integer(value['target_unit'], 1),
             _text(value['layout']), _integer(value['remaining_ore'], 0, 10**9),
             _integer(value['mining_speed_ppm'], 1, 10 * MILLION),
             _integer(value['ore_mining_ticks'], 1, 3600),
             _integer(value['consumer_max_joules_per_tick'], 1, 10**9),
-            _integer(value['consumer_stored_fuel_joules'], 0, 10**12),
+            lower, upper,
             _integer(value['baseline_coal_demand_forecast'], 0, 10_000),
             value['demand_basis'], _hash(value['demand_evidence_sha256']))
 
@@ -262,7 +268,7 @@ class EconomicInput:
         boiler = [row for row in sources if row.target_role == power.boiler_role]
         if len(boiler) != 1 or boiler[0].target_unit != power.boiler_unit:
             raise ValueError('Power fuel must have exactly one internal owned target')
-        if (boiler[0].consumer_stored_fuel_joules != power.boiler_stored_fuel_joules
+        if (boiler[0].consumer_stored_fuel_joules_lower != power.boiler_stored_fuel_joules
                 or boiler[0].consumer_max_joules_per_tick != power.boiler_max_joules_per_tick):
             raise ValueError('Boiler source and power facts disagree')
         electric_units = set(power.generator_units) | {unit for row in power.existing_loads for unit in row.units}
