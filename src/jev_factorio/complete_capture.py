@@ -25,7 +25,8 @@ SCHEMA = 'jev-factorio.complete-capture.v2'
 TOP_FIELDS = RECORD_FIELDS | {
     'solid_routes', 'solid_route_evidence', 'solid_route_fault', 'solid_science_policy',
     'solid_investment_evidence', 'coal_supply', 'coal_supply_evidence', 'coal_supply_fault',
-    'coal_kit_policy', 'coal_kit_evidence', 'previous_iteration_timing',
+    'coal_kit_policy', 'coal_kit_evidence', 'coal_economic_admission',
+    'coal_admission_evidence', 'previous_iteration_timing',
 }
 NATIVE_FIELDS = FACTORY_FIELDS | {'solid_routes', 'coal_supply'}
 CRITICAL = ('coal', 'solid', 'owner', 'receipt', 'funding', 'flow', 'commitment', 'pending')
@@ -78,6 +79,23 @@ def checked_checkpoint_progress(initial: dict, final: dict) -> None:
                 or any(new.get('parts', {}).get(part) != paid
                        for part, paid in old['parts'].items())):
             raise ValueError('Checkpoint paid coal ownership regressed')
+
+
+def checked_economic_binding(trial: dict, initial: dict, final: dict, rows: list[dict]) -> None:
+    enabled = trial['configuration'].get('coal_economic_admission', False)
+    for checkpoint in (initial, final):
+        if (checkpoint.get('coal_economic_admission', False) is not enabled
+                or checkpoint.get('coal_supply_schema') != (2 if enabled else 1)):
+            raise ValueError('Coal economic treatment differs from checkpoint')
+    for row in rows:
+        if row.get('acceptance_configuration') != trial['configuration']:
+            raise ValueError('Coal economic treatment differs from gameplay configuration')
+        if enabled:
+            if row.get('coal_economic_admission') is not True or not isinstance(row.get('coal_admission_evidence'), dict):
+                raise ValueError('Coal economic admission evidence missing')
+            for label in ('state', 'after_state'):
+                if row[label]['factory']['coal_supply'].get('protocol') != 2:
+                    raise ValueError('Coal economic admission requires native protocol 2')
 
 
 def project_record(row: dict, redactor: Redactor, omissions: Counter) -> dict:
@@ -170,6 +188,7 @@ def capture(*, gameplay: Path, trial_path: Path, initial_checkpoint: Path,
     redactor = Redactor(dict(os.environ if environ is None else environ))
     omissions = Counter()
     projected = [project_record(row, redactor, omissions) for row in records(raw)]
+    checked_economic_binding(trial, initial, final, projected)
     for row in projected:
         for label in ('state', 'after_state'):
             checked_coal_observation(row[label])
@@ -227,6 +246,7 @@ def verify(directory: Path) -> dict:
     initial = checked_checkpoint(content['initial-checkpoint.json'])
     final = checked_checkpoint(content['final-checkpoint.json'])
     checked_checkpoint_progress(initial, final)
+    checked_economic_binding(trial, initial, final, projected)
     if (trial['schema'] != TRIAL_SCHEMA_V2 or len(projected) != manifest.get('records')
             or manifest.get('capture_complete') is not True
             or manifest.get('native_acceptance') != 'not_accepted'

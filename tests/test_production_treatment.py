@@ -5,7 +5,7 @@ import sys
 import pytest
 
 from jev_factorio.coal_supply import intents
-from jev_factorio.treatment import SCHEMA, load
+from jev_factorio.treatment import SCHEMA, SCHEMA_V2, load
 from jev_factorio import main
 
 
@@ -13,6 +13,23 @@ def treatment():
     return {'schema': SCHEMA, 'solid_intents': intents(['burner-a', 'burner-b']),
             'coal_targets': ['burner-a', 'burner-b'],
             'solid_science_policy': False, 'coal_kit_policy': True}
+
+
+def test_v2_economic_admission_is_immutable_and_requires_a_coal_kit(tmp_path):
+    path = tmp_path / 'treatment.json'
+    baseline = treatment()
+    path.write_text(json.dumps(baseline))
+    legacy_digest = load(path)[1]
+    economic = {**baseline, 'schema': SCHEMA_V2, 'coal_economic_admission': True}
+    path.write_text(json.dumps(economic))
+    assert load(path)[0] == economic
+    assert load(path)[1] != legacy_digest
+    for invalid in ({**economic, 'coal_economic_admission': False},
+                    {**economic, 'coal_kit_policy': False},
+                    {**economic, 'coal_economic_admission': 1}):
+        path.write_text(json.dumps(invalid))
+        with pytest.raises(ValueError):
+            load(path)
 
 
 def test_canonical_treatment_digest_and_exact_coal_binding(tmp_path):

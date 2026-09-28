@@ -1,6 +1,8 @@
 # Coal economic admission evidence, protocol 2
 
-`coal_economic_admission` is an explicit constructor opt-in. The default
+`coal_economic_admission` is an explicit immutable production-treatment v2
+opt-in, carried through the CLI, research manifest, gameplay record and
+version-2 coal checkpoint. The default
 protocol-1 coal snapshot and explicit paid-kit behavior remain unchanged.
 Opt-in asks the native coal adapter to emit protocol 2 with one `admission`
 object. The decoder requires exact fields and the same session ID, tick,
@@ -26,6 +28,8 @@ positive protocol must bind observed generator efficiency/fuel provenance,
 attributed competing loads, and complete paid acquisition, travel, and build
 costs before enabling admission.
 
-Production enablement also requires the treatment flag in the run manifest,
-CLI, and checkpoint schema; this isolated source change does not alter those
-shared carriers. Resuming with the opt-in currently fails closed.
+The v2 treatment requires `coal_kit_policy=true` and exact checkpoint and
+manifest identity. Resume across v1/v2 treatments fails closed. This source
+carrier permits qualification attempts; the native object still reports
+unqualified economics, so new speculative kits remain deferred. Existing
+paid funding cannot be upgraded in place to the v2 treatment.

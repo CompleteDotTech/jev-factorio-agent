@@ -130,12 +130,14 @@ def validate_trial(trial: dict) -> None:
     if not _digest(trial['expected_commit'], 40):
         raise ValueError('Invalid source revision')
     configuration = trial['configuration']
-    flags = FLAGS | (COAL_FLAGS if complete else set())
+    economic = complete and isinstance(configuration, dict) and 'coal_economic_admission' in configuration
+    flags = FLAGS | (COAL_FLAGS if complete else set()) | ({'coal_economic_admission'} if economic else set())
     if (not isinstance(configuration, dict) or set(configuration) != flags | {'factory_scheduling'}
             or configuration['factory_scheduling'] != 'ready-work'
             or any(type(configuration[k]) is not bool for k in flags)
             or configuration['solid_routes'] is not True
             or complete and configuration['coal_supply'] is not True
+            or economic and configuration['coal_economic_admission'] and not configuration['coal_kit_policy']
             or configuration['furnace_input_belts'] and not configuration['furnace_output_buffers']
             or configuration['ore_side_successors'] and (
                 not configuration['background_work'] or not configuration['furnace_input_belts']
@@ -162,10 +164,13 @@ def validate_trial(trial: dict) -> None:
             raise ValueError('Invalid predeclared VM identity')
         coal_supply.validate_transport_intents(coal_supply.validate_targets(trial['coal_targets']),
                                                trial['solid_intents'])
-        binding = {'schema': treatment.SCHEMA, 'solid_intents': trial['solid_intents'],
+        binding = {'schema': treatment.SCHEMA_V2 if economic else treatment.SCHEMA,
+                   'solid_intents': trial['solid_intents'],
                    'coal_targets': trial['coal_targets'],
                    'solid_science_policy': configuration['solid_science_policy'],
                    'coal_kit_policy': configuration['coal_kit_policy']}
+        if economic:
+            binding['coal_economic_admission'] = configuration['coal_economic_admission']
         if trial['treatment_sha256'] != treatment.digest(binding):
             raise ValueError('Integration trial treatment digest mismatch')
     for key in ('declared_at_utc', 'original_cutoff_utc', 'runtime_cutoff_utc'):
@@ -263,7 +268,8 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
         if trial['schema'] == TRIAL_SCHEMA_V2:
             reject(cp.get('coal_targets') != trial['coal_targets']
                    or cp.get('coal_kit_policy') is not trial['configuration']['coal_kit_policy']
-                   or cp.get('coal_supply_schema') != 1
+                   or cp.get('coal_supply_schema') != (2 if trial['configuration'].get('coal_economic_admission', False) else 1)
+                   or cp.get('coal_economic_admission', False) is not trial['configuration'].get('coal_economic_admission', False)
                    or not isinstance(cp.get('coal_commitments'), dict)
                    or not isinstance(cp.get('coal_epoch'), dict) or not cp['coal_epoch']
                    or cp.get('coal_epoch') != cp.get('solid_epoch'),
@@ -339,6 +345,20 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                or ('dirty' in revision and revision['dirty'] is not False), 'source_readback_mismatch')
         reject(record.get('acceptance_configuration') != trial['configuration']
                or record.get('campaign_treatment') != trial['campaign_treatment'], 'configuration_mismatch')
+        if trial['configuration'].get('coal_economic_admission', False):
+            reject(record.get('coal_economic_admission') is not True
+                   or not isinstance(record.get('coal_admission_evidence'), dict),
+                   'coal_economic_evidence_mismatch')
+            for label in ('state', 'after_state'):
+                state = record.get(label)
+                try:
+                    if (not isinstance(state, dict)
+                            or state['factory']['coal_supply']['protocol'] != 2):
+                        raise ValueError('Missing coal economic protocol')
+                    coal_supply.sources(SimpleNamespace(tick=state['tick'],
+                        session_id=state['session_id'], factory=state['factory']))
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    issues.add('coal_economic_native_evidence_invalid')
         reject(record.get('requested_model') != trial['requested_model'], 'requested_model_mismatch')
         reject(type(record.get('model_call')) is not bool, 'invalid_model_call_flag')
         decision = record.get('decision')

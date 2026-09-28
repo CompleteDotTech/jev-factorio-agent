@@ -155,7 +155,9 @@ def cli() -> None:
                         or saved.get('solid_science_policy') is not treatment['solid_science_policy']
                         or (treatment['coal_targets'] and (
                             saved.get('coal_targets') != treatment['coal_targets']
-                            or saved.get('coal_kit_policy') is not treatment['coal_kit_policy']))
+                            or saved.get('coal_kit_policy') is not treatment['coal_kit_policy']
+                            or saved.get('coal_economic_admission', False) is not treatment.get('coal_economic_admission', False)
+                            or treatment.get('coal_economic_admission', False) and saved.get('coal_supply_schema') != 2))
                         or (not treatment['coal_targets'] and 'coal_targets' in saved)):
                     raise ValueError('Treatment differs from checkpoint')
             except (OSError, ValueError, TypeError, AttributeError) as error:
@@ -252,6 +254,7 @@ def cli() -> None:
             solid_science_policy=treatment['solid_science_policy'] if treatment else False,
             coal_supply=bool(treatment and treatment['coal_targets']),
             coal_kit_policy=treatment['coal_kit_policy'] if treatment else False,
+            coal_economic_admission=treatment.get('coal_economic_admission', False) if treatment else False,
             treatment_sha256=treatment_digest,
         )
     with ExitStack() as cleanup:
@@ -302,7 +305,8 @@ def cli() -> None:
                     from .coal_controller import coal_loop_type
                     loop_type = coal_loop_type(loop_type)
                     options.update(coal_targets=treatment['coal_targets'],
-                                   coal_kit_policy=treatment['coal_kit_policy'])
+                                   coal_kit_policy=treatment['coal_kit_policy'],
+                                   coal_economic_admission=treatment.get('coal_economic_admission', False))
             if args.campaign_diagnostics:
                 from .campaign_controller import campaign_loop_type
                 loop_type = campaign_loop_type(loop_type)
