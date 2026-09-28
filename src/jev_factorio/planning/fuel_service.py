@@ -185,10 +185,12 @@ def service_plan(planner, primary: str, source: str | None, path, acquire):
     from .scheduling import research_schedule
     scheduled = [row for row in research_schedule(snapshot, planner.catalog)
                  if row.get('amount', 0)]
-    if scheduled and len(consumers) > 1:
+    # An active research job with no schedule is an unknown deadline, not
+    # permission to add optional service to the required furnace visit.
+    if (scheduled or snapshot.factory.get('research')) and len(consumers) > 1:
         deadlines = [row['deadline_tick'] - snapshot.tick for row in scheduled
                      if row.get('deadline_tick') is not None]
-        earliest = min(deadlines) if len(deadlines) == len(scheduled) else None
+        earliest = min(deadlines) if deadlines and len(deadlines) == len(scheduled) else None
         coal_point = position(snapshot.factory.get('fair_resource_targets', {})
                               .get('coal', {}).get('position'))
 

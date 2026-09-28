@@ -137,6 +137,20 @@ def test_unknown_science_deadline_does_not_admit_optional_burner(monkeypatch):
     assert plan.materials['fuel_service']['deferred']['science_deadline_or_unknown_lead'] == 1
 
 
+def test_active_research_without_qualified_schedule_defers_optional_burner():
+    state, data = owned_furnace(fuel=0)
+    state.factory['research'] = 'unknown-current-technology'
+    state.factory['entities']['output:inserter'] = machine(
+        'burner-inserter', unit_number=2550, fuel={'coal': 1})
+    state.factory['output_buffers'] = {'sources': {'recipe:iron-plate': {
+        'item': 'iron-plate', 'chest_role': 'output:chest',
+        'state': 'ready', 'topology': True,
+        'parts': {'inserter': {'role': 'output:inserter'}}}}}
+    _, plan = next_iron_step(state, data)
+    assert plan.materials['fuel_service']['consumer_count'] == 1
+    assert plan.materials['fuel_service']['deferred']['science_deadline_or_unknown_lead'] == 1
+
+
 def test_reserved_carried_coal_is_not_spent_and_site_failure_history_survives():
     state, data = owned_furnace(fuel=0, carried=2)
     planner = ReadyWorkPlanner(data, state, 'rocket_launch')
