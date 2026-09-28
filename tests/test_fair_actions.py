@@ -389,6 +389,24 @@ def test_build_site_search_checks_direction_without_moving_or_granting_items(fai
     """)
 
 
+def test_water_origin_anchor_preserves_legacy_offshore_pump_site(fair_runtime):
+    fair_runtime.execute("""
+        site_filter = function(parameters)
+            return parameters.name == "offshore-pump"
+                and parameters.direction == defines.direction.north
+                and ((parameters.position.x == 24.5 and parameters.position.y == 42.5)
+                    or (parameters.position.x == 26 and parameters.position.y == 43.5))
+        end
+        local legacy = storage.fair.find_build_site("offshore-pump", {x=25,y=43}, 8)
+        local v3 = storage.fair.find_build_site("offshore-pump", {x=25.5,y=43.5}, 8)
+        local v4 = storage.fair.find_build_site("offshore-pump", {x=25,y=43}, 8)
+        assert(legacy.position.x == 24.5 and legacy.position.y == 42.5)
+        assert(v3.position.x == 26 and v3.position.y == 43.5)
+        assert(v4.position.x == legacy.position.x and v4.position.y == legacy.position.y)
+        assert(v4.direction == legacy.direction)
+    """)
+
+
 def test_place_entity_uses_selected_direction_and_preserves_exact_direction(monkeypatch):
     import sys
     import types

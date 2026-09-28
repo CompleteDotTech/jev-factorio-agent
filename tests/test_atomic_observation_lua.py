@@ -8,6 +8,7 @@ from test_atomic_observation import setup
 
 CODE = files('jev_factorio').joinpath('lua/observation_v2.lua').read_text()
 EXPANDED_CODE = files('jev_factorio').joinpath('lua/observation_v2_anchor_v3.lua').read_text()
+WATER_ORIGIN_CODE = files('jev_factorio').joinpath('lua/observation_v2_water_origin_v4.lua').read_text()
 
 
 def converted(value):
@@ -182,6 +183,19 @@ def test_expanded_water_anchor_is_bounded_tile_center_under_saturation():
             and captured.anchors.water.position.y==44.5)
         assert(captured.bounds.water_radius==256)
         assert(queries[#queries].radius==256 and queries[#queries].limit==129)
+    ''')
+
+
+def test_water_origin_observer_uses_fle_tile_distance_and_exact_origin():
+    lua = runtime(WATER_ORIGIN_CODE)
+    lua.execute('''tiles[1]={name="water",position={x=0,y=0},surface=surface,valid=true}
+        tiles[2]={name="water",position={x=1,y=0},surface=surface,valid=true}
+        player.position={x=.8,y=.1}
+        storage.campaign.observation_snapshot_v2(0)
+        assert(captured.anchors.water.position.x==1
+            and captured.anchors.water.position.y==0)
+        assert(captured.anchor_diagnostics.water.radius==256)
+        assert(queries[#queries].limit==129)
     ''')
 
 
