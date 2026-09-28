@@ -41,6 +41,48 @@ def distinct_candidates(plans):
     return result
 
 
+def _craft_start_evidence(snapshot, catalog, step):
+    """Describe a planned handcraft start; never certify future output."""
+    parameters = step.parameters or {}
+    recipe_name, batches = parameters.get('recipe'), parameters.get('batches')
+    recipe = catalog.recipes.get(recipe_name, {})
+    if type(batches) is not int or batches < 1 or not recipe:
+        return None
+    ingredients, products = recipe.get('ingredients', []), recipe.get('products', [])
+    if (not ingredients or not products
+            or any(entry.get('type') != 'item' or not _finite(entry.get('amount'))
+                   or entry['amount'] <= 0 for entry in ingredients + products)
+            or any(product.get('probability', 1) != 1 for product in products)):
+        return None
+    inputs = {}
+    for entry in ingredients:
+        inputs[entry['name']] = inputs.get(entry['name'], 0) + entry['amount'] * batches
+    expected = {}
+    for product in products:
+        expected[product['name']] = expected.get(product['name'], 0) + product['amount'] * batches
+    if inputs != (step.costs or {}) or step.item not in expected:
+        return None
+    factory = snapshot.factory
+    return {
+        'observed_tick': snapshot.tick,
+        'native_recipe': recipe_name,
+        'input_costs_match_native_recipe': True,
+        'inputs_in_inventory_now': all(snapshot.inventory.get(item, 0) >= count
+                                       for item, count in inputs.items()),
+        'recipe_unlocked_and_handcraftable': (
+            bool(catalog.hand_categories.get(recipe.get('category')))
+            and catalog.enabled(recipe, snapshot.researched or [])),
+        'player_connected_and_bound': (factory.get('player_connected') is True
+                                       and factory.get('player_bound') is True),
+        'crafting_queue_empty': factory.get('crafting_queue') == 0,
+        'craft_job_protocol_ready': (type(factory.get('craft_jobs_protocol')) is int
+                                     and factory['craft_jobs_protocol'] == 1
+                                     if step.action == 'factory_craft_job' else None),
+        'expected_products_after_native_verification': expected,
+        'native_receipt_required_for_completion': step.action == 'factory_craft_job',
+    }
+
+
 def candidate_evidence(snapshot, catalog, plans) -> dict:
     """Describe the admitted frontier without inventing downstream output."""
     entities = snapshot.factory.get('entities', {})
@@ -74,7 +116,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                 target = _position(evidence.get('position'))
             elif role:
                 target = _position(entity.get('position'))
-            if passive or step.action in {'factory_craft', 'factory_research', 'factory_bind'}:
+            if passive or step.action in {'factory_craft', 'factory_craft_job',
+                                          'factory_research', 'factory_bind'}:
                 distance = 0.0
             elif origin is not None and target is not None:
                 distance = math.dist(origin, target)
@@ -91,12 +134,15 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             if step.action == 'factory_gather':
                 actor += amount * RAW_TICKS_PER_ITEM
                 quantities += amount
-            elif step.action == 'factory_craft':
+            elif step.action in {'factory_craft', 'factory_craft_job'}:
                 recipe = catalog.recipes.get(parameters.get('recipe', ''), {})
                 energy, batches = recipe.get('energy'), parameters.get('batches')
                 if _finite(energy) and energy > 0 and type(batches) is int and batches > 0:
-                    actor += energy * batches * 60
-                    outputs.update(p['name'] for p in recipe.get('products', []) if p.get('type') == 'item')
+                    if step.action == 'factory_craft':
+                        actor += energy * batches * 60
+                    if step.action == 'factory_craft':
+                        outputs.update(p['name'] for p in recipe.get('products', [])
+                                       if p.get('type') == 'item')
                 else:
                     unknown.append('craft_duration')
             elif step.action in {'factory_insert', 'factory_extract'}:
@@ -167,6 +213,13 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
         prerequisite = (plan.materials or {}).get('raw_prerequisite')
         prerequisite_evidence = None
         gather_start = None
+        intent = (plan.materials or {}).get('work_intent')
+        craft_start = (_craft_start_evidence(snapshot, catalog, plan.steps[0])
+                       if len(plan.steps) == 1 and plan.steps[0].action in {
+                           'factory_craft', 'factory_craft_job'}
+                       and (intent is None or (isinstance(intent, dict)
+                            and intent.get('observed_tick') == snapshot.tick))
+                       else None)
         if (isinstance(prerequisite, dict) and prerequisite.get('observed_tick') == snapshot.tick
                 and len(plan.steps) == 1 and plan.steps[0].action == 'factory_gather'):
             step = plan.steps[0]
@@ -216,6 +269,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'delivers_or_crafts': sorted(outputs), 'unknowns': sorted(set(unknown)),
             'raw_prerequisite': prerequisite_evidence,
             'gather_start_evidence': gather_start,
+            'craft_start_evidence': craft_start,
             'research_deadline_tick': min((row['deadline_tick'] for row in schedules
                 if row['item'] in outputs and row['deadline_tick'] is not None), default=None),
             'requires_investment': any(s.action in {'factory_place', 'factory_connect',
