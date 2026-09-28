@@ -60,6 +60,12 @@ class SuccessorMixin:
 
     def _observe(self, stage='observe'):
         snapshot = super()._observe(stage)
+        if getattr(self, '_buffer_fault', False):
+            # The inner owner rejected these paid identities. Preserve the
+            # successor receipt prefix instead of adopting the rejected row.
+            self._successor_evidence = deepcopy(snapshot.factory.get('successors', {}))
+            self._save()
+            return snapshot
         try:
             rows = contract.sources(snapshot)
             step = _pending_step(self)

@@ -15,7 +15,7 @@ from ..state import GameSnapshot
 RAW_ITEMS = frozenset({'wood', 'coal', 'iron-ore', 'copper-ore', 'stone'})
 BOUNDS = {'anchor_radius': 256, 'anchor_limit': 129,
           'bootstrap_radius': 1000, 'bootstrap_limit': 129,
-          'bootstrap_output_radius': .15, 'bootstrap_output_limit': 2}
+          'bootstrap_output_radius': .75, 'bootstrap_output_limit': 2}
 
 
 def _map(value: Any, label: str, limit: int = 4096) -> dict:
@@ -142,6 +142,10 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
         if isinstance(entity, dict) and 'fuel_insertable' in entity:
             entity['fuel_insertable'] = _capacity(entity['fuel_insertable'])
     researched = factory.get('researched')
+    # Factorio 2.0.77 encodes an empty Lua sequence as {}. Normalize only
+    # this known list boundary; populated objects remain invalid evidence.
+    if type(researched) is dict and not researched:
+        researched = []
     if (not isinstance(researched, list) or len(researched) > 4096
             or any(not isinstance(v, str) or not v or len(v) > 128 for v in researched)):
         raise ValueError('Invalid atomic research state')
@@ -159,6 +163,8 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
             or type(bootstrap.get('output_connected')) is not bool):
         raise ValueError('Invalid atomic bootstrap')
     placed = bootstrap.get('placed_entities')
+    if type(placed) is dict and not placed:
+        placed = []
     if (not isinstance(placed, list) or len(placed) > 128
             or any(name not in {'burner-mining-drill', 'wooden-chest'} for name in placed)):
         raise ValueError('Invalid atomic bootstrap entities')
@@ -230,7 +236,8 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
             if (isinstance(entity, dict) and entity.get('name') == 'wooden-chest'
                     and isinstance(entity.get('position'), dict)):
                 point = _position(entity['position'])
-                if math.hypot(point[0] - drill.drop_position.x, point[1] - drill.drop_position.y) <= .1:
+                if (abs(point[0] - drill.drop_position.x) < .5
+                        and abs(point[1] - drill.drop_position.y) < .5):
                     factory['drill_output_role'] = role
                     break
     snapshot.tick, snapshot.session_id, snapshot.world_kind = tick, session, 'fle'
