@@ -296,7 +296,7 @@ def test_fle_output_telemetry_counts_only_connected_chest(monkeypatch):
     position = lambda x, y: types.SimpleNamespace(x=x, y=y)
     drill = types.SimpleNamespace(name="burner-mining-drill", status=types.SimpleNamespace(value="working"),
                                   fuel={"coal": 4}, drop_position=position(5, 5))
-    connected = types.SimpleNamespace(name="wooden-chest", position=position(5, 5), ore=7)
+    connected = types.SimpleNamespace(name="wooden-chest", position=position(5, 5.203125), ore=7)
     unrelated = types.SimpleNamespace(name="wooden-chest", position=position(50, 50), ore=99)
     entities = [drill, connected, unrelated]
     fake_env = types.ModuleType("fle.env")
