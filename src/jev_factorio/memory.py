@@ -179,6 +179,11 @@ def load_checkpoint(path: Path, session_id: str, target: str) -> CampaignMemory:
             raise ValueError("Incomplete background checkpoint extension")
         from .background import BackgroundWorkLoop
         loop_type = BackgroundWorkLoop
+    if {"output_buffers_schema", "output_commitments"} & data.keys():
+        if not {"output_buffers_schema", "output_commitments"} <= data.keys():
+            raise ValueError("Incomplete output-buffer checkpoint extension")
+        from .buffer_controller import buffered_loop_type
+        loop_type = buffered_loop_type(loop_type)
     if {"input_routes_schema", "input_commitments"} & data.keys():
         if not {"input_routes_schema", "input_commitments"} <= data.keys():
             raise ValueError("Incomplete input-route checkpoint extension")
