@@ -303,12 +303,59 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 if qualified_placement
                 else ""
             )
+            fuel = row.get('fuel_prerequisite')
+            fuel_step = plan.steps[0] if len(plan.steps) == 1 else None
+            fuel_path = fuel.get('planner_item_path') if isinstance(fuel, dict) else None
+            gather_start = row.get('gather_start_evidence') or {}
+            qualified_established_fuel = (
+                isinstance(fuel, dict) and fuel_step is not None
+                and fuel_step.action == 'factory_gather'
+                and isinstance(fuel_step.parameters, dict)
+                and fuel_step.parameters.get('resource') == 'coal'
+                and row.get('work_scope') == 'immediate' and row.get('unknowns') == []
+                and type(tick) is int and fuel.get('observed_tick') == tick
+                and fuel.get('basis') == 'current_planner_fuel_need_and_owned_native_burner'
+                and gather_start.get('resource_in_current_observation') is True
+                and gather_start.get('fair_target_identity_observed') is True
+                and isinstance(target, str) and bool(target)
+                and isinstance(fuel_path, list) and len(fuel_path) >= 2
+                and fuel_path[0] == target
+                and fuel.get('burner_role') == 'recipe:' + fuel_path[-1]
+                and type(fuel.get('burner_unit')) is int and fuel['burner_unit'] > 0
+                and type(fuel.get('fuel_now')) is int and 0 <= fuel['fuel_now'] < 5
+                and type(fuel.get('coal_in_inventory_now')) is int
+                and fuel['coal_in_inventory_now'] >= 0
+                and type(fuel.get('current_required_units')) is int
+                and fuel['current_required_units'] == 5 - fuel['fuel_now']
+                and type(fuel.get('current_unfunded_units')) is int
+                and fuel['current_unfunded_units'] == max(
+                    0, fuel['current_required_units'] - fuel['coal_in_inventory_now'])
+                and fuel['current_unfunded_units'] > 0
+                and type(fuel.get('planned_gather_units')) is int
+                and fuel['planned_gather_units'] == fuel_step.parameters.get('quantity')
+                and type(fuel.get('gather_units_beyond_current_need')) is int
+                and fuel['gather_units_beyond_current_need'] == (
+                    fuel['planned_gather_units'] - fuel['current_unfunded_units'])
+                and type(fuel.get('established_service_target')) is int
+                and fuel['established_service_target'] == (
+                    fuel['fuel_now'] + fuel['coal_in_inventory_now']
+                    + fuel['planned_gather_units'])
+                and fuel['established_service_target'] > 5
+                and fuel.get('startup_target') is None)
             fuel_hint = (
                 " `fuel_prerequisite` ties this bounded coal pickup to the current "
                 "owned burner's startup need; later transfer and production remain unverified."
-                if ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('fuel_prerequisite')
-                else ""
-            )
+                if isinstance(fuel, dict) and fuel.get('startup_target') is not None
+                else (" `fuel_prerequisite` identifies an owned established burner with "
+                      f"{fuel['current_unfunded_units']} coal still needed for its current "
+                      f"five-coal operating threshold. Of the planned {fuel['planned_gather_units']} "
+                      f"coal, the other {fuel['gather_units_beyond_current_need']} support "
+                      "the established producer's bulk refill, not an urgent blocker. "
+                      "Score the evidenced bounded current need at level 1 without "
+                      "treating the whole trip as urgent or claiming later output. "
+                      "Another current contrary fact can lower the score. Native "
+                      "transfer and production still require fresh verification."
+                      if qualified_established_fuel else ""))
             transfer_start = ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get(
                 'fuel_transfer_start_evidence')
             transfer_hint = (

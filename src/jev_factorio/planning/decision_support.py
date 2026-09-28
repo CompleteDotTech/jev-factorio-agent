@@ -601,6 +601,9 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             fuel_bag = machine.get('fuel')
             current = fuel_bag.get('coal', 0) if isinstance(fuel_bag, dict) else None
             startup = current == 0 and machine.get('products_finished', 0) == 0
+            sites = snapshot.factory.get('production_sites')
+            sources = sites.get('sources') if isinstance(sites, dict) else None
+            owned = sources.get(role) if isinstance(sources, dict) else None
             expected_target = min(5 if startup else 50, catalog.stack_sizes.get('coal', 50))
             carried = snapshot.inventory.get('coal', 0)
             gather_quantity = (min(50, max(0, math.ceil(expected_target - current - carried)))
@@ -618,6 +621,9 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                     and (plan.steps[0].parameters or {}).get('quantity') == gather_quantity
                     and plan.steps[0].threshold == carried + gather_quantity
                     and prototype.get('burner') is True
+                    and (startup or (isinstance(owned, dict)
+                         and owned.get('state') == 'owned'
+                         and owned.get('source_unit') == machine['unit_number']))
                     and recipe.get('name') == recipe_name and not recipe.get('hidden')
                     and catalog.enabled(recipe, snapshot.researched or [])
                     and bool(prototype.get('categories', {}).get(recipe.get('category')))
@@ -631,8 +637,14 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                     'burner_role': role,
                     'burner_unit': machine['unit_number'],
                     'fuel_now': current,
+                    'coal_in_inventory_now': carried,
+                    'planned_gather_units': gather_quantity,
+                    'established_service_target': expected_target if not startup else None,
                     'startup_target': expected_target if startup else None,
                     'current_required_units': min(5, expected_target) - current,
+                    'current_unfunded_units': max(0, min(5, expected_target) - current - carried),
+                    'gather_units_beyond_current_need': max(
+                        0, gather_quantity - max(0, min(5, expected_target) - current - carried)),
                     'basis': 'current_planner_fuel_need_and_owned_native_burner',
                     'later_fuel_transfer_and_output_require_fresh_native_preconditions': True,
                 }
