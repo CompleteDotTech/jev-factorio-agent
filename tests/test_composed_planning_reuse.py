@@ -5,6 +5,7 @@ import pytest
 
 from jev_factorio.planning.ready_work import ReadyWorkPlanner
 from jev_factorio.planning.input_routes import InputRoutePlanner
+from jev_factorio import input_routes
 from test_input_route_integration import controller, RouteLoop
 from test_maintenance_progress import progress_scenario
 
@@ -52,10 +53,12 @@ def test_completed_research_changes_composed_frontier_after_checkpoint_reload(tm
     assert before[0].steps[0].action == 'factory_craft'
     loop.memory.save(tmp_path / 'state.json')
 
-    backend.state.researched.append('study')
     resumed = controller(backend, tmp_path, kind=RouteLoop, resume=True)
     resumed.memory = resumed.memory_type.load(
         tmp_path / 'state.json', backend.state.session_id, 'rocket_launch')
+    warm, _ = resumed._work_candidates(backend.state)
+    assert [p.to_dict() for p in warm] == [p.to_dict() for p in before]
+    backend.state.researched.append('study')
     after, _ = resumed._work_candidates(backend.state)
     assert after[0].steps[0].action == 'factory_explore'
     assert [p.to_dict() for p in after] != [p.to_dict() for p in before]
@@ -70,8 +73,12 @@ def test_changed_route_evidence_invalidates_composed_craft(change, tmp_path):
 
     changed = deepcopy(backend.state)
     if change == 'route_topology':
-        changed.factory['input_routes']['sources']['recipe:iron-plate']['topology'] = False
+        route = changed.factory['input_routes']['sources']['recipe:iron-plate']
+        route['state'] = 'fault'
+        route['topology'] = False
     else:
         changed.factory['entities']['input:drill']['unit_number'] = 999
-    after, _ = loop._work_candidates(changed)
+    assert 'recipe:iron-plate' in input_routes.sources(changed)
+    after, blocker = loop._work_candidates(changed)
+    assert 'Inconsistent input-route' not in blocker
     assert not any(p.steps[0].action == 'factory_craft' for p in after)

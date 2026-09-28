@@ -30,8 +30,30 @@ SOURCE_FILES = (
     'src/jev_factorio/input_controller.py',
     'src/jev_factorio/capital_controller.py',
     'src/jev_factorio/planning/ready_work.py',
+    'src/jev_factorio/planning/input_routes.py',
+    'src/jev_factorio/planning/factory.py',
+    'tests/test_input_route_integration.py',
+    'tests/test_maintenance_progress.py',
     'benchmarks/benchmark_composed_planning.py',
 )
+
+
+def benchmark_input_tree_sha256():
+    """Fingerprint all package Python plus the two imported fixture builders."""
+    paths = sorted((ROOT / 'src/jev_factorio').rglob('*.py')) + [
+        ROOT / 'tests/test_input_route_integration.py',
+        ROOT / 'tests/test_maintenance_progress.py',
+        ROOT / 'benchmarks/benchmark_composed_planning.py',
+    ]
+    digest = hashlib.sha256()
+    for path in sorted(paths):
+        payload = path.read_bytes()
+        relative = path.relative_to(ROOT).as_posix().encode()
+        digest.update(len(relative).to_bytes(4, 'big'))
+        digest.update(relative)
+        digest.update(len(payload).to_bytes(8, 'big'))
+        digest.update(payload)
+    return digest.hexdigest()
 
 
 def distribution(values):
@@ -77,7 +99,9 @@ def benchmark(samples):
             'environment':{'python':sys.version.split()[0],'platform':platform.platform()},
             'selected_source_sha256':{path:hashlib.sha256((ROOT/path).read_bytes()).hexdigest()
                                       for path in SOURCE_FILES},
+            'benchmark_input_tree_sha256':benchmark_input_tree_sha256(),
             'measurement_limits':['Current-source scenarios, not paired pre/post source revisions.',
+                                  'Input tree hashes package Python, imported fixture builders and benchmark script; external dependencies are versioned separately.',
                                   'No Factorio engine, provider, network or contention-controlled host.'],
             'results':results}
 
