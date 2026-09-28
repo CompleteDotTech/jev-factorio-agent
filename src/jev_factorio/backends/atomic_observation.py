@@ -236,7 +236,8 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
             if (isinstance(entity, dict) and entity.get('name') == 'wooden-chest'
                     and isinstance(entity.get('position'), dict)):
                 point = _position(entity['position'])
-                if math.hypot(point[0] - drill.drop_position.x, point[1] - drill.drop_position.y) <= .1:
+                if (abs(point[0] - drill.drop_position.x) < .5
+                        and abs(point[1] - drill.drop_position.y) < .5):
                     factory['drill_output_role'] = role
                     break
     snapshot.tick, snapshot.session_id, snapshot.world_kind = tick, session, 'fle'
