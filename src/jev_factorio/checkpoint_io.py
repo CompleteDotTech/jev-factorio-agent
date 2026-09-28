@@ -200,6 +200,10 @@ def save_checkpoint(memory, path: Path | None) -> None:
     replace the primary exception. One operational owner remains required.
     """
     metrics = {'status': 'disabled', 'bytes': 0, 'serialize_ns': 0,
+               # serialize_ns retains its historical inclusive capture+JSON scope.
+               # These two exclusive phases sit within that scope; the residual
+               # includes setup and normalization between them.
+               'capture_ns': 0, 'json_encode_ns': 0,
                'file_sync_ns': 0, 'directory_sync_ns': 0, 'total_ns': 0,
                'compare_ns': 0, 'capture_calls': 0, 'serialization_calls': 0,
                'file_sync_calls': 0, 'directory_sync_calls': 0, 'parent_directory_sync_calls': 0,
@@ -228,13 +232,29 @@ def save_checkpoint(memory, path: Path | None) -> None:
                 return
         began = time.perf_counter_ns()
         metrics['capture_calls'] = 1
-        with span("checkpoint_capture"):
-            data = asdict(memory)
+        phase_began = time.perf_counter_ns()
+        phase_failed = False
+        try:
+            with span("checkpoint_capture"):
+                data = asdict(memory)
+        except BaseException:
+            phase_failed = True
+            raise
+        finally:
+            _elapsed(metrics, 'capture_ns', phase_began, failed=phase_failed)
         if data.get('capital_investment') is None:
             data.pop('capital_investment', None)
         metrics['serialization_calls'] = 1
-        with span("checkpoint_serialize"):
-            payload = json.dumps(data, sort_keys=True, allow_nan=False).encode('utf-8')
+        phase_began = time.perf_counter_ns()
+        phase_failed = False
+        try:
+            with span("checkpoint_serialize"):
+                payload = json.dumps(data, sort_keys=True, allow_nan=False).encode('utf-8')
+        except BaseException:
+            phase_failed = True
+            raise
+        finally:
+            _elapsed(metrics, 'json_encode_ns', phase_began, failed=phase_failed)
         metrics.update(bytes=len(payload), serialize_ns=time.perf_counter_ns() - began)
         cache = getattr(memory, '_checkpoint_cache', None)
         if (cache is not None and cache[0] == path and cache[1] == payload
