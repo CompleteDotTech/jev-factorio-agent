@@ -140,7 +140,7 @@ def loop_for(backend, tmp_path):
     kind = buffered_loop_type(HierarchicalLoop)
     loop = kind(backend, policy="deterministic", factory_scheduling="ready-work",
                 target="rocket_launch", checkpoint=str(tmp_path / "state.json"), tick_seconds=0)
-    loop.memory = CampaignMemory(backend.state.session_id, "rocket_launch", active_goal="rocket_launch",
+    loop.memory = loop.memory_type(backend.state.session_id, "rocket_launch", active_goal="rocket_launch",
                                 completed_goals={"stockpile_fuel": 1, "bootstrap_mining": 2}, last_tick=200)
     # Isolate buffer dispatch from the unrelated rocket-sized research tree.
     loop._compile_candidates = lambda s: ([need(s, backend.catalog)], "")
@@ -153,7 +153,7 @@ def test_real_dispatcher_requires_observed_paid_component(tmp_path):
     result = loop.step()
     assert result["verified"] and loop.memory.pending is None
     assert len(backend.calls) == 1 and backend.state.inventory["wooden-chest"] == 0
-    saved = CampaignMemory.load(tmp_path / "state.json", backend.state.session_id, "rocket_launch")
+    saved = loop.memory_type.load(tmp_path / "state.json", backend.state.session_id, "rocket_launch")
     assert saved.pending is None
 
 

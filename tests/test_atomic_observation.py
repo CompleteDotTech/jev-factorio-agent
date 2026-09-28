@@ -30,7 +30,7 @@ def envelope():
         'targets': [], 'anchors': [], 'cache': {'hits': 0, 'misses': 5},
         'bounds': {'anchor_radius': 256, 'anchor_limit': 129,
                    'bootstrap_radius': 1000, 'bootstrap_limit': 129,
-                   'bootstrap_output_radius': .15, 'bootstrap_output_limit': 2},
+                   'bootstrap_output_radius': .75, 'bootstrap_output_limit': 2},
     }
 
 
@@ -127,12 +127,16 @@ def test_bootstrap_without_fle_entity_conversion(monkeypatch):
     payload['bootstrap'] = {
         'query_limit': 129, 'placed_entities': ['burner-mining-drill', 'wooden-chest'],
         'drill': {'name':'burner-mining-drill', 'unit_number':51,
-            'position':{'x':0,'y':0}, 'drop_position':{'x':2,'y':0},
+            'position':{'x':0,'y':0}, 'drop_position':{'x':2,'y':-.296875},
             'status':'working', 'fuel':{'coal':3}},
         'output_connected':True, 'iron_ore_collected':7}
+    payload['factory']['entities'] = {
+        'bootstrap:output': {'name': 'wooden-chest',
+                             'position': {'x': 2, 'y': -.5}}}
     result = backend.observe()
     assert result.drill_fuel == 3 and result.drill_status == 'working'
     assert result.iron_ore_collected == 7 and result.drill_output_connected
+    assert result.factory['drill_output_role'] == 'bootstrap:output'
     assert backend._drill.unit_number == 51
     payload['bootstrap']['drill']['unit_number'] = 52
     with pytest.raises(ValueError, match='bootstrap'): backend.observe()
