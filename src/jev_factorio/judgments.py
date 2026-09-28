@@ -182,6 +182,15 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "and later production still require native verification."
                 if transfer_start else ""
             )
+            recipe_input_start = ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get(
+                'recipe_input_transfer_start_evidence')
+            input_hint = (
+                " `recipe_input_transfer_start_evidence` ties this paid ingredient transfer "
+                "to the current planner path, native recipe, owned machine, carried input, "
+                "and planned receipt ID. It does not prove transfer or output; native "
+                "verification remains required."
+                if recipe_input_start else ""
+            )
             questions[plan.id + "/benefit"] = {
                 "type": "score",
                 "instructions": (
@@ -190,7 +199,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "from one bounded local production action. A current "
                     "`raw_prerequisite` is evidence that gathering supplies an input to "
                     "the named native recipe, not that the later craft already happened."
-                    + craft_hint + place_hint + fuel_hint + transfer_hint
+                    + craft_hint + place_hint + fuel_hint + transfer_hint + input_hint
                 ),
                 "criteria": ([
                     "No demonstrated contribution to the bounded production objective",
@@ -230,6 +239,12 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                        "start facts from those values; the future transfer outcome is "
                        "verified by the native receipt."
                        if transfer_start else "")
+                    + (" For a paid recipe-input transfer, "
+                       "`recipe_input_transfer_start_evidence` describes current "
+                       "carried input, owned machine, recipe, and planned receipt ID. "
+                       "Judge only missing start facts; the transfer and output "
+                       "still need native verification."
+                       if recipe_input_start else "")
                     + (" For a placement, `placement_start_evidence` combines a current "
                        "surveyed site offer with observed actor/queue facts. Judge missing "
                        "start facts from those "

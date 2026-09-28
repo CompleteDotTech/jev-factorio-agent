@@ -120,6 +120,88 @@ def _placement_start_evidence(snapshot, plan):
     }
 
 
+def _recipe_input_transfer_start_evidence(snapshot, catalog, plan):
+    """Bind a paid recipe input transfer to current native facts, not future output."""
+    if len(plan.steps) != 1:
+        return None
+    step = plan.steps[0]
+    provenance = (plan.materials or {}).get('recipe_input_transfer')
+    local = (plan.materials or {}).get('local_objective')
+    parameters = step.parameters or {}
+    if (step.action != 'factory_insert' or step.effect != 'transfer'
+            or not isinstance(provenance, dict) or not isinstance(local, dict)):
+        return None
+    role, item, recipe_name = (provenance.get('source_role'),
+                               provenance.get('ingredient'), provenance.get('recipe'))
+    if (not isinstance(role, str) or not role.startswith('recipe:')
+            or not isinstance(item, str) or not item
+            or not isinstance(recipe_name, str) or role != 'recipe:' + recipe_name):
+        return None
+    factory = snapshot.factory
+    machine = factory.get('entities', {}).get(role, {})
+    source = (factory.get('production_sites', {}).get('sources', {}).get(role, {}))
+    recipe = catalog.recipes.get(recipe_name, {})
+    prototype = catalog.machines.get(machine.get('name'), {})
+    ingredients = recipe.get('ingredients', [])
+    matches = [row for row in ingredients if row.get('type') == 'item'
+               and row.get('name') == item] if isinstance(ingredients, list) else []
+    path = provenance.get('planner_item_path')
+    batches = provenance.get('planned_batches')
+    input_bag = machine.get('input')
+    buffered = input_bag.get(item, 0) if isinstance(input_bag, dict) else None
+    crafting = machine.get('crafting')
+    fuel_bag = machine.get('fuel')
+    burner_fuel = fuel_bag.get('coal', 0) if isinstance(fuel_bag, dict) else None
+    carried = snapshot.inventory.get(item)
+    if (len(matches) != 1 or type(batches) is not int or batches < 1
+            or not _finite(matches[0].get('amount')) or matches[0]['amount'] <= 0
+            or type(buffered) is not int or buffered < 0 or type(crafting) is not bool):
+        return None
+    required = max(0, math.ceil(matches[0]['amount'] * batches - buffered
+                                 - (matches[0]['amount'] if crafting else 0)))
+    if (provenance.get('observed_tick') != snapshot.tick
+            or type(machine.get('unit_number')) is not int or machine['unit_number'] <= 0
+            or provenance.get('source_unit') != machine['unit_number']
+            or source.get('state') != 'owned'
+            or source.get('source_unit') != machine['unit_number']
+            or recipe.get('name') != recipe_name or recipe.get('hidden')
+            or not catalog.enabled(recipe, snapshot.researched or [])
+            or not bool(prototype.get('categories', {}).get(recipe.get('category')))
+            or (prototype.get('burner') is True
+                and (not _finite(burner_fuel) or burner_fuel <= 0))
+            or (prototype.get('burner') is not True
+                and machine.get('recipe') != recipe_name)
+            or provenance.get('observed_input') != buffered
+            or provenance.get('observed_crafting') is not crafting
+            or not isinstance(path, list) or not 2 <= len(path) <= 32
+            or any(not isinstance(part, str) or not part for part in path)
+            or path[0] != local.get('item') or path[-2:] != [recipe_name, item]
+            or type(required) is not int or required < 1
+            or parameters.get('role') != role or parameters.get('item') != item
+            or parameters.get('quantity') != required
+            or parameters.get('receipt') != f'{snapshot.tick}:factory_insert:{role}:{item}'
+            or step.costs != {item: required}
+            or type(carried) is not int or carried < required
+            or factory.get('player_connected') is not True
+            or factory.get('player_bound') is not True):
+        return None
+    return {
+        'observed_tick': snapshot.tick,
+        'planner_item_path': list(path),
+        'direct_native_recipe': recipe_name,
+        'owned_source_role': role,
+        'owned_source_unit': machine['unit_number'],
+        'ingredient': item,
+        'ingredient_in_machine_now': buffered,
+        'ingredient_in_inventory_now': carried,
+        'burner_fuel_coal_now': burner_fuel if prototype.get('burner') is True else None,
+        'paid_quantity_to_transfer': required,
+        'planned_native_receipt_id': parameters['receipt'],
+        'basis': 'current_planner_recipe_input_and_owned_native_machine',
+        'native_transfer_and_later_output_require_verification': True,
+    }
+
+
 def candidate_evidence(snapshot, catalog, plans) -> dict:
     """Describe the admitted frontier without inventing downstream output."""
     entities = snapshot.factory.get('entities', {})
@@ -135,6 +217,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
     has_coal_offer = any(coal_marker(plan, snapshot) for plan in plans)
     for index, plan in enumerate(plans):
         placement_start = _placement_start_evidence(snapshot, plan)
+        recipe_input_transfer_start = _recipe_input_transfer_start_evidence(snapshot, catalog, plan)
         origin = _position(snapshot.player_position)
         travel, actor, unknown, reasons = 0.0, 0.0, [], []
         urgency, outputs, quantities, costs = 0, set(), 0.0, {}
@@ -485,6 +568,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'craft_dependency': craft_dependency,
             'placement_start_evidence': placement_start,
             'placement_dependency': placement_dependency,
+            'recipe_input_transfer_start_evidence': recipe_input_transfer_start,
             'research_deadline_tick': min((row['deadline_tick'] for row in schedules
                 if row['item'] in outputs and row['deadline_tick'] is not None), default=None),
             'requires_investment': any(s.action in {'factory_place', 'factory_connect',
