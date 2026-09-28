@@ -39,11 +39,12 @@ SOURCE_FILES = (
 
 
 def benchmark_input_tree_sha256():
-    """Fingerprint all package Python plus the two imported fixture builders."""
-    paths = sorted((ROOT / 'src/jev_factorio').rglob('*.py')) + [
-        ROOT / 'tests/test_input_route_integration.py',
-        ROOT / 'tests/test_maintenance_progress.py',
+    """Fingerprint package and test Python, including transitive fixture imports."""
+    paths = [
+        *(ROOT / 'src/jev_factorio').rglob('*.py'),
+        *(ROOT / 'tests').rglob('*.py'),
         ROOT / 'benchmarks/benchmark_composed_planning.py',
+        ROOT / 'pyproject.toml',
     ]
     digest = hashlib.sha256()
     for path in sorted(paths):
@@ -101,7 +102,7 @@ def benchmark(samples):
                                       for path in SOURCE_FILES},
             'benchmark_input_tree_sha256':benchmark_input_tree_sha256(),
             'measurement_limits':['Current-source scenarios, not paired pre/post source revisions.',
-                                  'Input tree hashes package Python, imported fixture builders and benchmark script; external dependencies are versioned separately.',
+                                  'Input tree hashes package/test Python, benchmark script and pyproject; external dependencies are not hashed.',
                                   'No Factorio engine, provider, network or contention-controlled host.'],
             'results':results}
 
