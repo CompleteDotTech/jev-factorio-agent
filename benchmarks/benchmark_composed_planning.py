@@ -6,9 +6,12 @@ latency, whole-iteration timing, or campaign throughput measurements.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
+import platform
 import statistics
+import sys
 import tempfile
 import time
 from collections import Counter
@@ -19,6 +22,16 @@ from jev_factorio.planning.ready_work import ReadyWorkPlanner
 from jev_factorio.planning.factory import FactoryPlanner
 from test_input_route_integration import RouteLoop, controller
 from test_maintenance_progress import progress_scenario
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE_FILES = (
+    'src/jev_factorio/controller.py',
+    'src/jev_factorio/buffer_controller.py',
+    'src/jev_factorio/input_controller.py',
+    'src/jev_factorio/capital_controller.py',
+    'src/jev_factorio/planning/ready_work.py',
+    'benchmarks/benchmark_composed_planning.py',
+)
 
 
 def distribution(values):
@@ -60,7 +73,13 @@ def benchmark(samples):
                        'stable_frontier':len(signatures)==1,
                        'frontier':json.loads(next(iter(signatures))) if len(signatures)==1 else None}
     return {'schema':1,'evidence':'deterministic_fixture','native_claim':False,
-            'samples':samples,'clock':'perf_counter_ns','cpu_clock':'process_time_ns','results':results}
+            'samples':samples,'clock':'perf_counter_ns','cpu_clock':'process_time_ns',
+            'environment':{'python':sys.version.split()[0],'platform':platform.platform()},
+            'source_sha256':{path:hashlib.sha256((ROOT/path).read_bytes()).hexdigest()
+                             for path in SOURCE_FILES},
+            'measurement_limits':['Current-source scenarios, not paired pre/post source revisions.',
+                                  'No Factorio engine, provider, network or contention-controlled host.'],
+            'results':results}
 
 
 if __name__=='__main__':
