@@ -67,9 +67,9 @@ class NativeFactory:
             drop = self.backend._drill.drop_position
             for role, entity in factory["entities"].items():
                 position = entity["position"]
-                if entity["name"] == "wooden-chest" and math.hypot(
-                    position["x"] - drop.x, position["y"] - drop.y
-                ) <= 0.1:
+                if (entity["name"] == "wooden-chest"
+                        and abs(position["x"] - drop.x) < 0.5
+                        and abs(position["y"] - drop.y) < 0.5):
                     factory["drill_output_role"] = role
                     break
         snapshot.factory = factory
