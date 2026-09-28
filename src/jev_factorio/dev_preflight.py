@@ -25,8 +25,12 @@ def checkpoint_type(data):
     from .solid_controller import solid_loop_type
     from .coal_controller import coal_loop_type
     base = BackgroundWorkLoop if 'background_schema' in data else HierarchicalLoop
+    if {'output_buffers_schema', 'output_commitments'} & data.keys():
+        if not {'output_buffers_schema', 'output_commitments'} <= data.keys():
+            raise ValueError('Incomplete output-buffer checkpoint extension')
+        base = buffered_loop_type(base)
     if 'input_routes_schema' in data:
-        base = input_loop_type(buffered_loop_type(base))
+        base = input_loop_type(base)
     if 'outposts_schema' in data:
         base = outpost_loop_type(base)
     if 'successor_schema' in data:

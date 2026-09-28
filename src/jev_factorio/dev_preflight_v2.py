@@ -220,7 +220,7 @@ def inspect_native(native, checkpoint, expected_session):
         require(same(table(outposts['receipts'], 4), expected_receipts), 'outpost_receipt_mismatch')
 
         expected_input = dict(checkpoint.get('input_commitments', {}))
-        expected_output = {}
+        expected_output = dict(checkpoint.get('output_commitments', {}))
         for source, project in checkpoint.get('successor_projects', {}).items():
             require(entities.get('recipe:' + source[7:], {}).get('unit_number') == project['predecessor_unit']
                     and entities.get(source, {}).get('unit_number') == project['source_unit'], 'successor_unit_mismatch')
