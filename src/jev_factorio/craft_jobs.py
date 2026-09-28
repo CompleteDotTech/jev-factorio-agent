@@ -206,9 +206,15 @@ class CraftJob:
 
     def permits(self, step) -> bool:
         """No second craft, construction, or consumption of any locked output."""
-        if self.failed or step.action not in {"factory_gather", "factory_insert", "factory_extract", "factory_wait"}:
-            return False
-        parameters = step.parameters or {}
-        touched = set(step.costs or {})
-        touched.update(value for value in (parameters.get("item"), parameters.get("resource")) if value)
-        return not (touched & self.outputs.keys())
+        return not self.failed and permits_locked_outputs(step, set(self.outputs))
+
+
+def permits_locked_outputs(step, outputs: set[str]) -> bool:
+    """Apply the background output lock before or after a paid job is admitted."""
+    if (not outputs or step.action not in {"factory_gather", "factory_insert",
+                                        "factory_extract", "factory_wait"}):
+        return False
+    parameters = step.parameters or {}
+    touched = set(step.costs or {})
+    touched.update(value for value in (parameters.get("item"), parameters.get("resource")) if value)
+    return not (touched & outputs)

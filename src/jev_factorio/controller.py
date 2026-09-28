@@ -976,6 +976,7 @@ class HierarchicalLoop(AgentLoop):
                 "eligible_plan_ids": [p.id for p in plans],
                 "failure_budget_rejections": rejected,
                 "duplicate_plan_ids": [], "ranked_plan_ids": [],
+                "deferred_plan_ids": [], "defer_reason": None,
             }
             if self._trace.enabled:
                 self._trace.emit("candidate_set_filtered", {
@@ -992,6 +993,23 @@ class HierarchicalLoop(AgentLoop):
                 plans = retained
                 self._selection_support = scheduling_context(
                     snapshot, self.catalog, plans, self.memory.active_goal)
+                provider_ready = (not isinstance(self.jev, ProviderCircuit)
+                                  or self.jev.state["phase"] == "healthy")
+                if self.policy == 'jev' and provider_ready:
+                    from .planning.decision_support import defer_gather_until_bill_craft
+                    deferred, reason = defer_gather_until_bill_craft(
+                        plans, self._selection_support, snapshot, self.memory)
+                    if reason is not None:
+                        self._planning_diagnostics['deferred_plan_ids'] = [
+                            p.id for p in plans if p not in deferred]
+                        self._planning_diagnostics['defer_reason'] = reason
+                        plans = deferred
+                        self._selection_support = scheduling_context(
+                            snapshot, self.catalog, plans, self.memory.active_goal)
+                        if self._trace.enabled:
+                            self._trace.emit('candidate_set_filtered', {
+                                **deepcopy(self._planning_diagnostics),
+                                'filter': 'bill_craft_before_independent_raw_gather'})
                 by_id = {plan.id: plan for plan in plans}
                 plans = [by_id[key] for key in self._selection_support["deterministic_ranking"]]
                 self._planning_diagnostics["ranked_plan_ids"] = [p.id for p in plans]
