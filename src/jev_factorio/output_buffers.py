@@ -6,11 +6,66 @@ separate bounded, sampled conservation evidence, not an anti-tamper guarantee.
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 
 COMMAND = "factory_buffer_build"
 FIELDS = {"source", "layout", "part", "receipt"}
 PARTS = {"chest": "wooden-chest", "inserter": "burner-inserter"}
 EFFECTS = {"buffer_component", "buffer_flow"}
+SOURCES = {"recipe:iron-plate", "recipe:copper-plate", "recipe:steel-plate"}
+SUCCESSOR_SOURCES = {"growth:iron-plate", "growth:copper-plate"}
+
+
+def validate_commitments(owned: dict, *, successors: bool = False) -> None:
+    """Validate retained paid owners independently of live topology or flow."""
+    roles = SOURCES | (SUCCESSOR_SOURCES if successors else set())
+    if not isinstance(owned, dict) or not set(owned) <= roles:
+        raise ValueError("Invalid output-buffer ownership map")
+    units, paid_roles, receipts = set(), set(), set()
+    for entry in owned.values():
+        if (not isinstance(entry, dict) or set(entry) != {"source_unit", "layout", "parts"}
+                or type(entry["source_unit"]) is not int or not 0 < entry["source_unit"] <= 2**53 - 1
+                or entry["source_unit"] in units
+                or not isinstance(entry["layout"], str) or not 0 < len(entry["layout"]) <= 128
+                or not isinstance(entry["parts"], dict) or not set(entry["parts"]) <= PARTS.keys()
+                or "inserter" in entry["parts"] and "chest" not in entry["parts"]):
+            raise ValueError("Invalid output-buffer commitment")
+        units.add(entry["source_unit"])
+        for paid in entry["parts"].values():
+            if (not isinstance(paid, dict) or set(paid) != {"role", "unit_number", "receipt", "paid"}
+                    or type(paid["paid"]) is not int or paid["paid"] != 1
+                    or type(paid["unit_number"]) is not int or not 0 < paid["unit_number"] <= 2**53 - 1
+                    or paid["unit_number"] in units
+                    or any(not isinstance(paid[k], str) or not 0 < len(paid[k]) <= 128
+                           for k in ("role", "receipt"))
+                    or paid["role"] in paid_roles or paid["role"] in roles
+                    or paid["receipt"] in receipts):
+                raise ValueError("Invalid or aliased output-buffer paid identity")
+            units.add(paid["unit_number"]); paid_roles.add(paid["role"]); receipts.add(paid["receipt"])
+
+
+def expected_commitments(memory) -> dict:
+    """Combine disjoint durable ordinary and successor output owners."""
+    owned = deepcopy(memory.output_commitments)
+    successors = hasattr(memory, 'successor_schema')
+    validate_commitments(owned)
+    if successors:
+        if not isinstance(memory.successor_projects, dict) or not isinstance(memory.successor_receipts, dict):
+            raise ValueError('Invalid successor ownership maps')
+        for source, project in memory.successor_projects.items():
+            retained = memory.successor_receipts.get(source, {})
+            if not isinstance(project, dict) or not isinstance(retained, dict):
+                raise ValueError('Invalid retained successor owner')
+            if retained.get('output'):
+                known = {'source_unit': project.get('source_unit'), 'layout': retained.get('output_layout'),
+                         'parts': deepcopy(retained['output'])}
+                validate_commitments({source: known}, successors=True)
+                if source not in SUCCESSOR_SOURCES or any(
+                        p['unit_number'] == project.get('predecessor_unit') for p in known['parts'].values()):
+                    raise ValueError('Invalid or aliased successor output ownership')
+                owned[source] = known
+    validate_commitments(owned, successors=successors)
+    return owned
 
 
 def validate(parameters: dict) -> None:

@@ -51,6 +51,7 @@ class FleBackend:
         self.consolidated_observations = False
         self.last_observation_profile = None
         self._observation_profile = None
+        self._native_attachment = None
 
     def enable_factory(self) -> Catalog:
         from .native_factory import NativeFactory
@@ -183,6 +184,15 @@ class FleBackend:
             peaceful=True,
             reset_speed=1,
         )
+        if resume:
+            existing_campaign = self._instance.rcon_client.send_command(
+                "/sc rcon.print(jev_fle_runtime ~= nil and jev_fle_runtime.campaign ~= nil)"
+            )
+            if (existing_campaign or "").strip() == "true":
+                from .native_attachment import readback
+                self._native_attachment = readback(self._instance.rcon_client)
+            elif (existing_campaign or "").strip() != "false":
+                raise RuntimeError("Cannot determine whether the native campaign is installed")
         from .fair_actions import FairActions
 
         self._fair = FairActions(self)
@@ -265,8 +275,11 @@ class FleBackend:
         output_chests = [
             entity for entity in entities
             if self._drill is not None and entity.name == "wooden-chest"
-            and math.hypot(entity.position.x - self._drill.drop_position.x,
-                           entity.position.y - self._drill.drop_position.y) <= 0.1
+            # Factorio places the chest at its tile center, while the drill's
+            # output position can be offset within that tile (0.203125 in the
+            # native iron-drill case). Compare the occupied tile, not centers.
+            and abs(entity.position.x - self._drill.drop_position.x) < 0.5
+            and abs(entity.position.y - self._drill.drop_position.y) < 0.5
         ]
         collected = sum(tools.inspect_inventory(entity).get("iron-ore", 0)
                         for entity in output_chests)

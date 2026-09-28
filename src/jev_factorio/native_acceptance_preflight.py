@@ -28,8 +28,36 @@ def digest(value, length=64):
     return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{%d}' % length, value) is not None
 
 
+def window_remaining(manifest: dict, now: datetime, required: int, blockers: list) -> float | None:
+    """Validate the declared authority scope without creating or extending it."""
+    if manifest['schema'] == 2:
+        policy = manifest.get('window_policy')
+        if (not isinstance(policy, dict)
+                or set(policy) != {'mode', 'scope', 'authorization_sha256'}
+                or policy['mode'] != 'until_complete'
+                or policy['scope'] != 'isolated'
+                or not digest(policy['authorization_sha256'])):
+            raise ValueError('Explicit isolated until-complete authority evidence required')
+        # Both fields must be present and null. A timed campaign must not acquire
+        # an extension by being relabelled as an isolated, unbounded manifest.
+        if (manifest['original_cutoff_utc'] is not None
+                or manifest['runtime_cutoff_utc'] is not None):
+            raise ValueError('Until-complete scope cannot replace an existing cutoff')
+        return None
+    if 'window_policy' in manifest:
+        raise ValueError('Window policy requires the explicit v2 manifest')
+    original_cutoff = utc(manifest['original_cutoff_utc'])
+    proposed_cutoff = utc(manifest['runtime_cutoff_utc'])
+    if proposed_cutoff != original_cutoff:
+        blockers.append('original_cutoff_changed')
+    remaining = (original_cutoff - now).total_seconds()
+    if remaining < required:
+        blockers.append('authorized_window_insufficient')
+    return remaining
+
+
 def assess(manifest: dict, *, now: datetime) -> dict:
-    if not isinstance(manifest, dict) or type(manifest.get('schema')) is not int or manifest['schema'] != 1:
+    if not isinstance(manifest, dict) or type(manifest.get('schema')) is not int or manifest['schema'] not in (1, 2):
         raise ValueError('Unsupported preflight manifest')
     if now.utcoffset() != timezone.utc.utcoffset(now):
         raise ValueError('UTC clock required')
@@ -40,13 +68,7 @@ def assess(manifest: dict, *, now: datetime) -> dict:
     margin = manifest.get('rollout_margin_seconds')
     if type(margin) is not int or not 0 <= margin <= 86400:
         raise ValueError('Explicit bounded rollout margin required')
-    original_cutoff = utc(manifest['original_cutoff_utc'])
-    proposed_cutoff = utc(manifest['runtime_cutoff_utc'])
-    if proposed_cutoff != original_cutoff:
-        blockers.append('original_cutoff_changed')
-    remaining = (original_cutoff - now).total_seconds()
-    if remaining < window + margin:
-        blockers.append('authorized_window_insufficient')
+    remaining = window_remaining(manifest, now, window + margin, blockers)
     if not digest(manifest.get('predeclared_experiment_sha256')):
         blockers.append('predeclared_experiment_not_bound')
     mode = manifest.get('comparison_kind')
@@ -88,7 +110,7 @@ def assess(manifest: dict, *, now: datetime) -> dict:
         blockers.append('immutable_treatment_unverified')
     if manifest.get('established_operational_handoff_verified') is not True:
         blockers.append('operational_handoff_unverified')
-    return {'schema': 1, 'ready_for_operator_review': not blockers,
+    result = {'schema': manifest['schema'], 'ready_for_operator_review': not blockers,
             'evidence_trust': 'operator_supplied_manifest_not_remote_attestation',
             'implementation': status, 'blockers': blockers,
             'remaining_original_window_seconds': remaining,
@@ -101,6 +123,10 @@ def assess(manifest: dict, *, now: datetime) -> dict:
                 'paid_downstream_ingredient_flow', 'sustained_science_consumption_and_research_milestone',
                 'full_timing_and_resource_counters', 'isolated_native_crash_and_route_reconciliation',
                 'independent_integrated_review']}
+    if manifest['schema'] == 2:
+        result['window_policy'] = {'mode': 'until_complete', 'scope': 'isolated',
+                                   'authority_verified': False}
+    return result
 
 
 def main(argv=None):
