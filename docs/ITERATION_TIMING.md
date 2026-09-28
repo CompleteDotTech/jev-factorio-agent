@@ -97,7 +97,17 @@ distributions. Phase distributions are **per-iteration aggregate** inclusive or
 exclusive values, not per-call latency percentiles. The `iteration_and_following_gap`
 series combines disjoint intervals only. Legacy UTC observation/record intervals
 are kept separately, with their overlap and incomplete emission boundary intact.
-Checkpoint written-byte/write totals retain the original performance scope;
+Checkpoint written-byte/write totals retain the original performance scope.
+The report also preserves file/directory/parent sync calls, installed-file
+verification reads/bytes, and the producer's I/O and capture/encoding coverage
+counts. Each present checkpoint timing has a per-record median and p95; these
+are inclusive aggregate costs, not individual-write percentiles or additive
+phases. In particular, legacy `serialize_ns` includes capture and JSON encoding,
+so do not add it to `capture_ns` or `json_encode_ns`. Missing legacy fields remain
+absent, never zero-valued samples; each distribution's count and the coverage
+counters identify how much evidence was actually present. Failed checkpoint
+attempts retain their reported operation costs without inventing successful
+written bytes. All checkpoint measurements end before record construction;
 research/sidecar phase call counts distinguish attempts and failures, but do not
 claim precise bytes written during a partial write.
 
