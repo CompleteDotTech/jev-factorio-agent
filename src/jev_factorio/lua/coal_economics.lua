@@ -1,9 +1,11 @@
 -- Fixed read-only native economics projection, never admission or actuation.
 -- No runtime callbacks, storage writes, handlers, grants or connector creation.
-local out={schema="jev.coal-native-economics.v1",base_version=script.active_mods.base,
+local out={schema="jev.coal-native-economics.v2",base_version=script.active_mods.base,
     mods=script.active_mods,query_status="unsupported",reason="unqualified",
     epoch={},registry={},connector_routes={},prototypes={},buffer_witnesses={},poles={},supply_surveys={},electric_members={},
-    fluid_members={},fuel_targets={},sources={}}
+    fluid_members={},fuel_targets={},sources={},
+    research_work={status="unavailable",reason="no_current_research",technology="",
+        progress=0,lab={},targets={}}}
 local function need(ok,code) if not ok then error(code,0) end end
 local function finite(x,lo,hi)
     return type(x)=="number" and x==x and x>=lo and x<=hi
@@ -257,6 +259,56 @@ local ok,reason=pcall(function()
         sorted(source.neighbor_drills,"unit");out.sources[#out.sources+1]=source
     end
     need(boiler_selected,"owned_boiler_not_target")
+    -- Current demand facts are projected in the SAME RPC as the owned graph.
+    -- This only observes activity; it does not infer a future coal lower bound.
+    local tech=actor.force.current_research
+    if tech then
+        local lab=c.entities["utility:lab"]
+        local progress=actor.force.research_progress
+        need(text(tech.name) and finite(progress,0,1),"research_identity")
+        if not lab or not lab.valid or lab.name~="lab"
+            or owned[lab.unit_number]~="utility:lab" then
+            out.research_work={status="unavailable",reason="research_lab_unowned",
+                technology=tech.name,progress=progress,lab={},targets={}}
+        else
+        local function item_rows(inv)
+            need(inv and inv.valid,"research_inventory_unavailable")
+            local values={}
+            for _,stack in pairs(inv.get_contents()) do
+                need(text(stack.name) and integer(stack.count,1,200000)
+                    and (not stack.quality or stack.quality=="normal"
+                        or stack.quality.name=="normal"),"research_inventory_unsupported")
+                values[#values+1]={name=stack.name,count=stack.count}
+                need(#values<=128,"research_inventory_bound")
+            end
+            sorted(values,"name")
+            for i=2,#values do need(values[i-1].name~=values[i].name,"research_inventory_alias") end
+            return values
+        end
+        local targets={}
+        for target in pairs(q.rows) do
+            local e=c.entities[target]
+            if e and e.name=="stone-furnace" then
+                need(owned[e.unit_number]==target and e.burner,"research_furnace_unowned")
+                local recipe=e.get_recipe()
+                local burning=e.burner.currently_burning
+                local burning_name=burning and (type(burning.name)=="string" and burning.name
+                    or burning.name.name) or ""
+                need(burning_name=="" or burning_name=="coal","research_fuel_unsupported")
+                targets[#targets+1]={role=target,unit=e.unit_number,
+                    recipe=recipe and recipe.name or "",crafting=e.is_crafting(),
+                    crafting_progress=e.crafting_progress or 0,burning=burning_name,
+                    input=item_rows(e.get_inventory(defines.inventory.furnace_source))}
+                need(#targets<=3,"research_target_bound")
+            end
+        end
+        sorted(targets,"role")
+        out.research_work={status="observed",reason="current_research_activity",
+            technology=tech.name,progress=progress,
+            lab={role="utility:lab",unit=lab.unit_number,
+                input=item_rows(lab.get_inventory(defines.inventory.lab_input))},targets=targets}
+        end
+    end
     local cursor=1;local edge_count=0;local electric={}
     while cursor<=#queue do
         local p=queue[cursor];cursor=cursor+1;local unit=p.unit_number

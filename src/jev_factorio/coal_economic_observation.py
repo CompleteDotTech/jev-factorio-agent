@@ -12,7 +12,7 @@ import math
 
 from .planning.coal_economic_proof import Epoch, Power, digest
 
-SCHEMA = 'jev.coal-native-economics.v1'
+SCHEMA = 'jev.coal-native-economics.v2'
 QUERY = 'lua/coal_economics.lua'
 MAX_SAFE = 2**53 - 1
 # This is a content-qualified conversion record, not an arbitrary caller hash.
@@ -46,7 +46,7 @@ POLE_RADII = {'small-electric-pole': 2.5, 'medium-electric-pole': 3.5,
               'big-electric-pole': 2, 'substation': 9}
 ROOT_KEYS = set(('schema base_version mods query_status reason epoch registry connector_routes prototypes poles '
     'supply_surveys electric_members fluid_members fuel_targets sources coal_fuel_joules '
-    'fluid_prototypes pole_prototypes buffer_witnesses').split())
+    'fluid_prototypes pole_prototypes buffer_witnesses research_work').split())
 
 
 class NativeEconomicsUnavailable(ValueError):
@@ -164,6 +164,26 @@ class SourceFacts:
 
 
 @dataclass(frozen=True)
+class ResearchTargetFacts:
+    role: str
+    unit: int
+    recipe: str
+    crafting: bool
+    crafting_progress: float
+    burning: str
+    input: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True)
+class ResearchWorkFacts:
+    technology: str
+    progress: float
+    lab_unit: int
+    lab_input: tuple[tuple[str, int], ...]
+    targets: tuple[ResearchTargetFacts, ...]
+
+
+@dataclass(frozen=True)
 class NativeEconomics:
     epoch: Epoch
     actor_unit: int
@@ -173,6 +193,7 @@ class NativeEconomics:
     sources: tuple[SourceFacts, ...]
     mutation_authorized: bool = False
     native_payback_proven: bool = False
+    research_work: ResearchWorkFacts | None = None
 
 
 def query_sha256():
@@ -506,4 +527,70 @@ def _decode(raw, expected_epoch, expected_bundle, unit_qualification, expected_c
         'drill_drain_joules_per_tick': math.ceil(prototypes['electric-mining-drill']['drain']),
         'inserter_max_joules_per_tick': math.ceil(prototypes['inserter']['max_usage']),
         'inserter_drain_joules_per_tick': math.ceil(prototypes['inserter']['drain'])})
-    return NativeEconomics(epoch, actor_unit, digest(expected_bundle), digest(raw), power, tuple(facts))
+    work = raw['research_work']
+    fields(work, 'status reason technology progress lab targets')
+    research_work = None
+    if work['status'] == 'unavailable':
+        require(work['lab'] == {} and work['targets'] in ([], {}),
+                'invalid_research_absence')
+        if work['reason'] == 'no_current_research':
+            require(work['technology'] == '' and work['progress'] == 0,
+                    'invalid_research_absence')
+        else:
+            require(work['reason'] == 'research_lab_unowned', 'invalid_research_absence')
+            identity(work['technology']); number(work['progress'], 0, 1)
+            require('utility:lab' not in registry
+                    or registry['utility:lab']['name'] != 'lab',
+                    'research_lab_identity_mismatch')
+    else:
+        require(work['status'] == 'observed' and work['reason'] == 'current_research_activity',
+                'invalid_research_status')
+        technology = identity(work['technology'])
+        progress = number(work['progress'], 0, 1)
+        fields(work['lab'], 'role unit input')
+        lab = work['lab']
+        lab_unit = integer(lab['unit'], 1)
+        lab_members = {unit for load in power.existing_loads if load.name == 'lab'
+                       for unit in load.units}
+        require(lab['role'] == 'utility:lab' and 'utility:lab' in registry
+                and registry['utility:lab']['unit'] == lab_unit
+                and lab_unit in lab_members, 'research_lab_identity_mismatch')
+        def inventory(value):
+            items = rows(value, 0, 128)
+            names = []
+            result = []
+            for item in items:
+                fields(item, 'name count')
+                names.append(identity(item['name']))
+                result.append((item['name'], integer(item['count'], 1, 200_000)))
+            require(names == sorted(set(names)), 'research_inventory_alias')
+            return tuple(result)
+        lab_input = inventory(lab['input'])
+        target_rows = rows(work['targets'], 0, 3)
+        roles = []
+        parsed = []
+        expected_furnaces = {role for role, row in fuel.items() if row['name'] == 'stone-furnace'}
+        for row in target_rows:
+            fields(row, 'role unit recipe crafting crafting_progress burning input')
+            role = identity(row['role'])
+            roles.append(role)
+            unit = integer(row['unit'], 1)
+            require(role in expected_furnaces and unit == registry[role]['unit']
+                    and unit == fuel[role]['unit'], 'research_target_identity_mismatch')
+            require(type(row['crafting']) is bool, 'invalid_research_crafting_state')
+            crafting_progress = number(row['crafting_progress'], 0, 1)
+            require(row['recipe'] == '' or isinstance(row['recipe'], str)
+                    and len(row['recipe']) <= 128 and all(32 <= ord(c) <= 126 for c in row['recipe']),
+                    'invalid_research_recipe')
+            require(row['burning'] == fuel[role]['burning'] and row['burning'] in ('', 'coal'),
+                    'research_burner_mismatch')
+            if row['crafting']:
+                # A started craft may be stalled; the API explicitly does not
+                # attest that progress is advancing at this instant.
+                require(row['recipe'] != '', 'research_activity_without_recipe')
+            parsed.append(ResearchTargetFacts(role, unit, row['recipe'], row['crafting'],
+                                               crafting_progress, row['burning'], inventory(row['input'])))
+        require(roles == sorted(expected_furnaces), 'research_target_set_mismatch')
+        research_work = ResearchWorkFacts(technology, progress, lab_unit, lab_input, tuple(parsed))
+    return NativeEconomics(epoch, actor_unit, digest(expected_bundle), digest(raw), power,
+                           tuple(facts), research_work=research_work)

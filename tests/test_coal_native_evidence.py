@@ -26,6 +26,8 @@ def example():
                   'actor_index': 1, 'actor_unit': 999999, 'surface_index': 1, 'force_index': 1},
         'registry': [], 'connector_routes': [], 'prototypes': [], 'buffer_witnesses': [], 'poles': [], 'supply_surveys': [],
         'electric_members': [], 'fluid_members': [], 'fuel_targets': [], 'sources': [],
+        'research_work': {'status': 'unavailable', 'reason': 'no_current_research',
+                          'technology': '', 'progress': 0, 'lab': {}, 'targets': []},
         'coal_fuel_joules': 4_000_000,
         'fluid_prototypes': [{'name': 'steam', 'heat_capacity': 200, 'default_temperature': 15, 'max_temperature': 5000},
                              {'name': 'water', 'heat_capacity': 2000, 'default_temperature': 15, 'max_temperature': 100}],
@@ -372,6 +374,112 @@ def test_full_raw_query_derives_supported_facts_without_callbacks_or_state_write
     assert lua.eval('storage.unchanged and next(storage)=="unchanged"')
     assert lua.eval('#q.targets') == 2
     assert lua.eval('game.tick') == raw['epoch']['tick']
+
+
+def test_fixed_query_projects_current_research_and_active_furnace_in_same_rpc():
+    raw, bundle = example()
+    next(row for row in raw['fuel_targets'] if row['role'] == 'furnace').update(
+        burning='coal', remaining_burning_fuel=100)
+    lua = lua_runtime(raw, bundle)
+    lua.execute('''
+        defines.inventory={furnace_source=1,lab_input=2}
+        force.current_research={name='current-study'}
+        force.research_progress=.25
+        local function inventory(rows)
+            return {valid=true,get_contents=function() return rows end}
+        end
+        local lab=campaign.entities['utility:lab']
+        lab.get_inventory=function(kind)
+            assert(kind==2); return inventory({{name='automation-science-pack',count=2}})
+        end
+        local furnace=campaign.entities['furnace']
+        furnace.get_inventory=function(kind)
+            assert(kind==1); return inventory({{name='iron-ore',count=30}})
+        end
+        furnace.get_recipe=function() return {name='iron-plate'} end
+        furnace.is_crafting=function() return true end
+        furnace.crafting_progress=.5
+    ''')
+    lua.execute(files('jev_factorio').joinpath('lua/coal_economics.lua').read_text())
+    projected = plain(lua.globals().projected)
+    assert projected['query_status'] == 'observed', projected['reason']
+    facts = checked(projected, bundle)
+    work = facts.research_work
+    assert work.technology == 'current-study' and work.progress == .25
+    assert work.lab_input == (('automation-science-pack', 2),)
+    assert work.targets[0].role == 'furnace' and work.targets[0].recipe == 'iron-plate'
+    assert work.targets[0].crafting and work.targets[0].burning == 'coal'
+    assert work.targets[0].input == (('iron-ore', 30),)
+    assert facts.mutation_authorized is False and facts.native_payback_proven is False
+    projected['research_work']['targets'][0]['unit'] = 999
+    with pytest.raises(NativeEconomicsUnavailable, match='research_target_identity_mismatch'):
+        checked(projected, bundle)
+
+
+def test_selected_research_without_owned_lab_preserves_graph_projection():
+    raw, bundle = example()
+    raw['registry'] = [row for row in raw['registry'] if row['role'] != 'utility:lab']
+    raw['electric_members'] = [row for row in raw['electric_members'] if row['unit'] != 1002]
+    raw['supply_surveys'] = [row for row in raw['supply_surveys']
+                             if not (row['kind'] == 'coverage' and row['key'] == 'unit:1002')]
+    for row in raw['supply_surveys']:
+        if row['kind'] == 'supply':
+            row['members'] = [unit for unit in row['members'] if unit != 1002]
+    lua = lua_runtime(raw, bundle)
+    lua.execute('''
+        force.current_research={name='current-study'}
+        force.research_progress=.1
+    ''')
+    lua.execute(files('jev_factorio').joinpath('lua/coal_economics.lua').read_text())
+    projected = plain(lua.globals().projected)
+    assert projected['query_status'] == 'observed', projected['reason']
+    assert projected['research_work'] == {'status': 'unavailable',
+        'reason': 'research_lab_unowned', 'technology': 'current-study',
+        'progress': .1, 'lab': {}, 'targets': {}}
+    # This minimal early graph still misses the decoder's pre-existing two
+    # electric-member bound; research absence itself does not fail the Lua query.
+
+
+def observed_research_fixture():
+    raw, bundle = example()
+    next(row for row in raw['fuel_targets'] if row['role'] == 'furnace')['burning'] = 'coal'
+    furnace_unit = next(row for row in raw['registry'] if row['role'] == 'furnace')['unit']
+    raw['research_work'] = {'status': 'observed', 'reason': 'current_research_activity',
+        'technology': 'current-study', 'progress': .25,
+        'lab': {'role': 'utility:lab', 'unit': 1002,
+                'input': [{'name': 'automation-science-pack', 'count': 2}]},
+        'targets': [{'role': 'furnace', 'unit': furnace_unit,
+                     'recipe': 'iron-plate', 'crafting': True, 'crafting_progress': .5,
+                     'burning': 'coal', 'input': [{'name': 'iron-ore', 'count': 30}]}]}
+    return raw, bundle
+
+
+@pytest.mark.parametrize('change', [
+    lambda r: r['research_work']['lab'].update(unit=999),
+    lambda r: r['research_work']['targets'].clear(),
+    lambda r: r['research_work']['targets'][0].update(burning=''),
+    lambda r: r['research_work']['targets'][0].update(recipe=''),
+    lambda r: r['research_work']['targets'][0]['input'].append({'name': 'iron-ore', 'count': 1}),
+    lambda r: r['research_work']['lab']['input'][0].update(count=-1),
+    lambda r: r['research_work'].update(progress=1.1),
+])
+def test_research_witness_rejects_missing_rebound_or_ambiguous_activity(change):
+    raw, bundle = observed_research_fixture()
+    assert checked(raw, bundle).research_work is not None
+    change(raw)
+    with pytest.raises(NativeEconomicsUnavailable):
+        checked(raw, bundle)
+
+
+def test_started_craft_without_current_burn_is_observational_only():
+    raw, bundle = observed_research_fixture()
+    next(row for row in raw['fuel_targets'] if row['role'] == 'furnace')['burning'] = ''
+    raw['research_work']['targets'][0]['burning'] = ''
+    facts = checked(raw, bundle)
+    assert facts.research_work.targets[0].crafting is True
+    assert facts.research_work.targets[0].burning == ''
+    assert facts.native_payback_proven is False
+    assert facts.mutation_authorized is False
 
 
 def paid_connector_runtime():
