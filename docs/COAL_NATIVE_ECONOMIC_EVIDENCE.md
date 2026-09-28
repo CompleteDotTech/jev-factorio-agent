@@ -89,6 +89,22 @@ runtime, topology, units or survey budgets do not qualify. Partial diagnostic
 rows never become an economic witness. Ordered arrays retain their type; a known
 empty-array position may accept the empty-map wire representation.
 
+The v2 fixed query also reads current research name/progress, the owned lab's
+science inputs, and every proposed external furnace's exact role/unit, current
+recipe, input, crafting state/progress and burning fuel **in the same RPC** as
+the graph and fuel targets. The decoder requires the complete furnace target
+set, exact lab membership in the owned electric graph, sorted bounded item
+rows, and the same burner identity already checked in the fuel projection.
+No current research yields an explicit unavailable record. These are
+instantaneous activity facts, not a lower bound on future coal consumption:
+the prototype `max_usage` is an upper rate, and `is_crafting()` can remain true
+while progress is stalled. Selected research before lab construction yields
+`research_lab_unowned` in this projection without failing the graph query.
+The read path still returns `native_payback_proven=false` and
+`mutation_authorized=false`. A bounded current-research material bill,
+receipt-bound burn or validated active-rate semantics, and same-RPC first
+payment recheck remain necessary before positive demand can enter admission.
+
 Two independent admission/payment integrations remain essential:
 
 The source-only `coal_current_evidence` helpers now bind a fully carried,
