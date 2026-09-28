@@ -287,7 +287,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 ),
                 "criteria": ([
                     "No demonstrated contribution to the bounded production objective",
-                    "Supplies useful inputs or evidenced capacity for the bounded task",
+                    "Supplies useful inputs, a current planner-linked intermediate craft, "
+                    "or evidenced capacity for the bounded task",
                     "Directly removes an observed production blocker or prevents due starvation",
                 ] if objective == "local_objective" else [
                     "The steps do not improve the active goal's required state",
@@ -302,7 +303,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "in `facts`, under `execution_contract`?"
                 ),
                 "criteria": [
-                    "Only moves, gathers resources, waits, or fuels an existing machine",
+                    "Only moves, gathers resources, waits, fuels an existing machine, "
+                    "or handcrafts from carried inputs without changing existing entities",
                     "Places new machinery without removing any existing entity",
                     "Stops, removes, or rebuilds existing factory infrastructure",
                 ],
