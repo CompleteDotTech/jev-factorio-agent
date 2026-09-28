@@ -187,7 +187,8 @@ def service_plan(planner, primary: str, source: str | None, path, acquire):
                  if row.get('amount', 0)]
     # An active research job with no schedule is an unknown deadline, not
     # permission to add optional service to the required furnace visit.
-    if (scheduled or snapshot.factory.get('research')) and len(consumers) > 1:
+    furnace_primary = entities[primary].get('name') in {'stone-furnace', 'steel-furnace'}
+    if furnace_primary and (scheduled or snapshot.factory.get('research')) and len(consumers) > 1:
         deadlines = [row['deadline_tick'] - snapshot.tick for row in scheduled
                      if row.get('deadline_tick') is not None]
         earliest = min(deadlines) if deadlines and len(deadlines) == len(scheduled) else None

@@ -42,14 +42,12 @@ def test_existing_science_or_power_need_defers_optional_reserve(deadline):
     else:
         state.factory['entities']['utility:boiler'] = machine('boiler', unit_number=901, fuel={})
     plan = direct(state, data)
-    # An unknown science deadline admits the required burner only; a power
-    # need without a scheduled science deadline still groups due burners.
-    assert plan.steps[0].parameters['quantity'] == (4 if deadline == 'science' else 8)
+    assert plan.steps[0].parameters['quantity'] == 8
+    # Route burners retain existing grouped due-service semantics even when
+    # an active research job has no qualified deadline.
+    assert plan.materials['fuel_service']['consumer_count'] == 2
     assert plan.materials['fuel_service']['reserve'] == 0
-    if deadline == 'science':
-        assert plan.materials['fuel_service']['deferred']['science_deadline_or_unknown_lead'] == 1
-    else:
-        assert plan.materials['fuel_service']['reserve_basis'] == 'science_or_power_deadline_defers_optional_reserve'
+    assert plan.materials['fuel_service']['reserve_basis'] == 'science_or_power_deadline_defers_optional_reserve'
 
 
 def test_no_extra_mining_while_useful_carried_stock_remains():
