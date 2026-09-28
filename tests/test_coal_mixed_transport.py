@@ -4,6 +4,7 @@ from copy import deepcopy
 from itertools import permutations
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from lupa.lua52 import LuaRuntime, LuaError
@@ -126,7 +127,9 @@ def test_python_and_native_accept_disjoint_mixed_intents_in_any_fixed_order(tmp_
 
 def test_adapter_validates_mixed_attachment_before_mutating_native_configuration():
     class Native:
-        def __init__(self): self.commands=[]; self.calls=[]
+        def __init__(self):
+            self.commands=[]; self.calls=[]
+            self.backend=SimpleNamespace(_native_attachment=None)
         def command(self, text): self.commands.append(text)
         def call(self, name, *args): self.calls.append((name, args))
     base = Native(); transport = SolidRouteFactory(base, MIXED)
