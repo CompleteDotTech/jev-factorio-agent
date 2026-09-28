@@ -305,7 +305,7 @@ class FairActions:
         raise NativePathNotFound("No native route to any bounded build approach")
 
     def place_entity(self, prototype: Any, position: Any, direction: Any,
-                     exact: bool = False) -> Any:
+                     exact: bool = False, connector: tuple[str, int] | None = None) -> Any:
         from fle.env import Position
 
         name = prototype.value[0]
@@ -315,7 +315,9 @@ class FairActions:
             site = self.call("find_build_site", name, target, 8)
             target, direction_value = site["position"], site["direction"]
         self.approach_build(Position(**target), name, direction_value)
-        result = self.call("place", name, target, direction_value)
+        result = (self.call("connector_place", connector[0], connector[1],
+                            name, target, direction_value) if connector else
+                  self.call("place", name, target, direction_value))
         return SimpleNamespace(
             name=result["name"], position=Position(**result["position"]),
             unit_number=result.get("unit_number"),
@@ -447,7 +449,8 @@ class FairActions:
             {(point["x"], point["y"]) for point in cells["existing"]},
         )
 
-    def connect(self, source: Any, target: Any, prototype: Any, fluid: str = "") -> None:
+    def connect(self, source: Any, target: Any, prototype: Any, fluid: str = "",
+                *, identity: dict | None = None) -> None:
         from fle.env import Direction, Position
         from ..planning.connections import (
             select_pole_positions,
@@ -538,7 +541,35 @@ class FairActions:
         ))["count"]
         if available < required:
             raise ConnectionPreflightRejected("insufficient_connection_materials")
-        for horizontal, vertical in route:
+        receipt = None
+        if identity is not None:
+            from ..planning.connection_identity import connection_key
+
+            if (set(identity) != {"source", "target", "kind", "fluid"}
+                    or identity["kind"] != name or identity["fluid"] != fluid):
+                raise ValueError("Connector identity changed before payment")
+            receipt = connection_key(identity)
+            prepared = decode_native(self.command(
+                "rcon.print(helpers.table_to_json(storage.campaign.connector_begin("
+                + ",".join(json.dumps(value) for value in (
+                    receipt, identity["source"], identity["target"], name, fluid))
+                + ",helpers.json_to_table(" + json.dumps(json.dumps([
+                    {"x": horizontal, "y": vertical,
+                     "existing": (horizontal, vertical) in existing}
+                    for horizontal, vertical in route
+                ])) + "))))"
+            ))
+            if prepared.get("id") != receipt:
+                raise RuntimeError("Native connector preparation receipt changed")
+        for index, (horizontal, vertical) in enumerate(route, 1):
             if (horizontal, vertical) not in existing:
+                connector_kwargs = {"connector": (receipt, index)} if receipt else {}
                 self.place_entity(prototype, Position(x=horizontal, y=vertical),
-                                  direction=Direction.UP, exact=True)
+                                  direction=Direction.UP, exact=True,
+                                  **connector_kwargs)
+        if receipt is not None:
+            completed = decode_native(self.command(
+                "rcon.print(helpers.table_to_json(storage.campaign.connector_finish("
+                + json.dumps(receipt) + ")))"))
+            if completed.get("id") != receipt:
+                raise RuntimeError("Native connector completion receipt changed")
