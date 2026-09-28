@@ -1,6 +1,7 @@
 """Selection regressions are synthetic, not native performance measurements."""
 from copy import deepcopy
 from dataclasses import replace
+import json
 
 import pytest
 
@@ -167,6 +168,79 @@ def test_choice_prefers_current_recipe_prerequisite_over_unlinked_lookahead_only
     linked['candidate_evidence'][iron.id]['raw_prerequisite'] = {
         'observed_tick': state.tick, 'planner_item_path': ['lab', 'iron-ore']}
     assert 'larger pickup quantity alone' not in choice_instruction(linked)
+
+
+def test_ready_lookahead_gear_craft_exposes_bounded_shared_bill_and_possible_overlap():
+    """Lab needs two more gears through belts; neither plan has completed output."""
+    state = snapshot(inventory={'iron-plate': 10, 'iron-gear-wheel': 10},
+                     nearby_resources={'copper-ore': 94, 'coal': 80, 'stone': 38})
+    state.factory['craft_jobs_protocol'] = 1
+    state.factory['entities']['recipe:copper-plate'] = machine(
+        fuel={'coal': 5}, energy=100)
+    data = catalog()
+    data.recipes.update({
+        'lab': recipe('lab', {'electronic-circuit': 10, 'iron-gear-wheel': 10,
+                             'transport-belt': 4}),
+        'electronic-circuit': recipe('electronic-circuit', {'copper-cable': 3,
+                                                          'iron-plate': 1}),
+        'copper-cable': recipe('copper-cable', {'copper-plate': 1}),
+        'copper-plate': recipe('copper-plate', {'copper-ore': 1}, 'smelting'),
+        'iron-gear-wheel': recipe('iron-gear-wheel', {'iron-plate': 2}),
+        'transport-belt': recipe('transport-belt', {'iron-plate': 1,
+                                                  'iron-gear-wheel': 1}),
+    })
+    data.recipes['transport-belt']['products'][0]['amount'] = 2
+    worker = ReadyWorkPlanner(data, state, 'rocket_launch')
+    worker._set_focus('lab', 1)
+    primary = worker._need('lab', 1)
+    worker.plan = lambda: primary
+    plans = worker.candidates()
+    assert plans[0].steps[0].action == 'factory_gather'
+    assert plans[0].steps[0].item == 'copper-ore'
+    gear = next(plan for plan in plans if plan.steps[0].item == 'iron-gear-wheel')
+    assert gear.materials['shared_bill_craft'] == {
+        'observed_tick': state.tick, 'local_target_item': 'lab',
+        'local_target_amount': 1, 'craft_item': 'iron-gear-wheel',
+        'bill_inventory_target': 12, 'inventory_now': 10,
+        'planned_product_units': 2,
+        'basis': 'current_catalog_shared_material_bill',
+    }
+    step = gear.steps[0]
+    gear = replace(gear, steps=(replace(step, action='factory_craft_job',
+        effect='craft_job_complete', parameters={**step.parameters, 'receipt': 'gear-test'}),))
+    plans = [plans[0], gear]
+    support = scheduling_context(state, data, plans, 'rocket_launch')
+    row = support['candidate_evidence'][gear.id]
+    assert row['craft_dependency'] is None
+    assert row['shared_bill_craft']['unfilled_bill_units'] == 2
+    assert row['shared_bill_craft']['forecast_is_not_paid_stock_or_completed_output'] is True
+    assert row['shared_bill_craft']['background_overlap_requires_native_admission'] is True
+    context, questions, offered = question_batch(
+        {'facts': state.for_jev(), **support}, plans)
+    assert offered == plans
+    assert len(json.dumps({'state': context, 'questions': questions},
+                          ensure_ascii=False, allow_nan=False).encode()) <= 32000
+    assert 'admitted receipt-tracked job' in questions['candidate']['instructions']
+    assert 'bounded catalog bill shortfall' in questions[gear.id + '/benefit']['instructions']
+    assert row['delivers_or_crafts'] == []
+
+    for changed in (
+            {'observed_tick': state.tick - 1},
+            {'bill_inventory_target': 13},
+            {'inventory_now': 9},
+            {'planned_product_units': 1},
+            {'local_target_item': 'unrelated'}):
+        bad = replace(gear, materials={**gear.materials, 'shared_bill_craft': {
+            **gear.materials['shared_bill_craft'], **changed}})
+        assert candidate_evidence(state, data, [bad])[bad.id]['shared_bill_craft'] is None
+    no_ready = deepcopy(state)
+    no_ready.factory['crafting_queue'] = 1
+    assert candidate_evidence(no_ready, data, [gear])[gear.id]['shared_bill_craft'] is None
+    no_bill = replace(gear, materials={**gear.materials, 'batches': 'malformed'})
+    assert candidate_evidence(state, data, [no_bill])[no_bill.id]['shared_bill_craft'] is None
+    alone = scheduling_context(state, data, [gear], 'rocket_launch')
+    _, alone_questions, _ = question_batch({'facts': state.for_jev(), **alone}, [gear])
+    assert 'admitted receipt-tracked job' not in alone_questions['candidate']['instructions']
 
 
 def test_stale_or_unrelated_raw_dependency_never_enters_candidate_evidence():
