@@ -12,7 +12,11 @@ from ..telemetry import Trace, phase
 class MiningOutpostFactory:
     def __init__(self, native) -> None:
         self.native = native
-        native.command(files('jev_factorio').joinpath('lua/mining_outposts.lua').read_text())
+        if getattr(native.backend, '_native_attachment', None) is not None:
+            from .native_attachment import require_asset
+            require_asset(native.backend._native_attachment, 'mining_outposts')
+        else:
+            native.command(files('jev_factorio').joinpath('lua/mining_outposts.lua').read_text())
 
     def __getattr__(self, name):
         return getattr(self.native, name)
