@@ -646,6 +646,83 @@ def test_native_shaped_recipe_input_transfer_binds_current_recipe_and_owned_furn
     assert missing()
 
 
+def test_ready_owned_output_pickup_has_current_start_facts_without_claiming_transfer():
+    state, data = snapshot(inventory={'iron-plate': 0}, player_position=(62, -27)), catalog()
+    role = 'recipe:iron-plate'
+    state.factory['entities'][role] = machine(unit_number=2547,
+        position={'x': 41, 'y': -111}, output={'iron-plate': 20},
+        input={}, fuel={'coal': 3}, crafting=False)
+    state.factory['production_sites'] = {'sources': {
+        role: {'state': 'owned', 'source_unit': 2547}}}
+    planner = ReadyWorkPlanner(data, state, 'rocket_launch')
+    planner._set_focus('lab', 1)
+    plan = planner._need('iron-plate', 20, ('item:lab',))
+    step = plan.steps[0]
+    assert step.action == 'factory_extract'
+    assert plan.materials['output_pickup']['planner_item_path'] == ['lab', 'iron-plate']
+    support = scheduling_context(state, data, [plan], 'rocket_launch')
+    row = support['candidate_evidence'][plan.id]
+    start = row['output_pickup_start_evidence']
+    assert start == {
+        'observed_tick': state.tick, 'planner_item_path': ['lab', 'iron-plate'],
+        'owned_source_role': role, 'owned_source_unit': 2547,
+        'ready_output_item': 'iron-plate', 'ready_output_quantity_now': 20,
+        'planned_pickup_quantity': 20,
+        'planned_native_receipt_id': step.parameters['receipt'],
+        'player_connected_and_bound_now': True,
+        'basis': 'current_planner_output_and_owned_native_machine',
+        'native_pickup_and_inventory_delta_require_verification': True,
+    }
+    assert state.inventory['iron-plate'] == 0
+    assert state.factory.get('receipts', {}) == {}
+    context, questions, offered = question_batch(
+        {'facts': state.for_jev(), **support}, [plan])
+    assert offered == [plan]
+    import json
+    assert len(json.dumps({'state': context, 'questions': questions},
+                          ensure_ascii=False, allow_nan=False).encode('utf-8')) <= 32000
+    assert 'bounded useful intermediate' in questions[plan.id + '/benefit']['instructions']
+    assert 'future pickup and inventory delta' in questions[
+        plan.id + '/needs_observation']['instructions']
+
+    stale_support = deepcopy(support)
+    stale_support['candidate_evidence'][plan.id][
+        'output_pickup_start_evidence']['observed_tick'] -= 1
+    _, stale_questions, _ = question_batch(
+        {'facts': state.for_jev(), **stale_support}, [plan])
+    assert 'bounded useful intermediate' not in stale_questions[
+        plan.id + '/benefit']['instructions']
+    assert 'future pickup and inventory delta' not in stale_questions[
+        plan.id + '/needs_observation']['instructions']
+
+    def evidence(changed_plan=plan):
+        return candidate_evidence(state, data, [changed_plan])[changed_plan.id][
+            'output_pickup_start_evidence']
+
+    provenance = plan.materials['output_pickup']
+    assert evidence(replace(plan, materials={**plan.materials, 'output_pickup': {
+        **provenance, 'observed_tick': state.tick - 1}})) is None
+    assert evidence(replace(plan, materials={**plan.materials, 'output_pickup': {
+        **provenance, 'planner_item_path': ['copper-plate', 'iron-plate']}})) is None
+    assert evidence(replace(plan, materials={**plan.materials, 'work_intent': {
+        'scope': 'lookahead', 'observed_tick': state.tick}})) is None
+    assert evidence(replace(plan, steps=(replace(step, parameters={**step.parameters,
+        'quantity': 21}),))) is None
+    assert evidence(replace(plan, steps=(replace(step, parameters={**step.parameters,
+        'receipt': 'stale'}),))) is None
+    state.factory['entities'][role]['output']['iron-plate'] = 19
+    assert evidence() is None
+    state.factory['entities'][role]['output']['iron-plate'] = 20
+    state.factory['production_sites']['sources'][role]['state'] = 'proposed'
+    assert evidence() is None
+    state.factory['production_sites']['sources'][role]['state'] = 'owned'
+    state.factory['entities'][role].pop('output')
+    assert evidence() is None
+    state.factory['entities'][role]['output'] = {'iron-plate': 20}
+    state.factory['player_bound'] = False
+    assert evidence() is None
+
+
 def test_local_rubric_does_not_require_one_pickup_to_launch_a_rocket():
     state, data, plans = transfers()
     support = scheduling_context(state, data, plans, 'rocket_launch')
