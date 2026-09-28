@@ -229,6 +229,40 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
         worker._economic_products = dict(self._remaining_products())
         return worker
 
+    def _shared_bill_candidate(self, plan: Plan | None, item: str, amount: int) -> Plan | None:
+        """Bind a speculative handcraft to this observation's current material bill."""
+        if (plan is None or self.focus is None or self.targets.get(item) != amount
+                or len(plan.steps) != 1):
+            return plan
+        step = plan.steps[0]
+        if step.action != 'factory_craft' or step.item != item:
+            return plan
+        recipe = self.catalog.recipes.get(step.parameters.get('recipe'), {})
+        products = recipe.get('products', [])
+        batches = step.parameters.get('batches')
+        carried = self.snapshot.inventory.get(item, 0)
+        if (type(amount) is not int or amount <= 0
+                or type(carried) is not int or not 0 <= carried < amount
+                or type(batches) is not int or batches <= 0
+                or len(products) != 1 or products[0].get('type') != 'item'
+                or products[0].get('name') != item
+                or products[0].get('probability', 1) != 1
+                or type(products[0].get('amount')) is not int
+                or products[0]['amount'] <= 0
+                or products[0]['amount'] * batches < amount - carried):
+            return plan
+        return replace(plan, materials={**(plan.materials or {}),
+            'shared_bill_craft': {
+                'observed_tick': self.snapshot.tick,
+                'local_target_item': self.focus[0],
+                'local_target_amount': self.focus[1],
+                'craft_item': item,
+                'bill_inventory_target': amount,
+                'inventory_now': carried,
+                'planned_product_units': products[0]['amount'] * batches,
+                'basis': 'current_catalog_shared_material_bill',
+            }})
+
     def candidates(self) -> list[Plan]:
         primary = self.plan()
         if primary is None:
@@ -251,34 +285,7 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
                 plan = worker._need(item, amount)
             except (KeyError, ValueError):
                 continue
-            if (plan and len(plan.steps) == 1
-                    and plan.steps[0].action == 'factory_craft'
-                    and plan.steps[0].item == item and self.focus is not None):
-                step = plan.steps[0]
-                recipe = self.catalog.recipes.get(step.parameters.get('recipe'), {})
-                products = recipe.get('products', [])
-                batches = step.parameters.get('batches')
-                carried = self.snapshot.inventory.get(item, 0)
-                if (type(amount) is int and amount > 0
-                        and type(carried) is int and 0 <= carried < amount
-                        and type(batches) is int and batches > 0
-                        and len(products) == 1 and products[0].get('type') == 'item'
-                        and products[0].get('name') == item
-                        and products[0].get('probability', 1) == 1
-                        and type(products[0].get('amount')) is int
-                        and products[0]['amount'] > 0
-                        and products[0]['amount'] * batches >= amount - carried):
-                    plan = replace(plan, materials={**(plan.materials or {}),
-                        'shared_bill_craft': {
-                            'observed_tick': self.snapshot.tick,
-                            'local_target_item': self.focus[0],
-                            'local_target_amount': self.focus[1],
-                            'craft_item': item,
-                            'bill_inventory_target': amount,
-                            'inventory_now': carried,
-                            'planned_product_units': products[0]['amount'] * batches,
-                            'basis': 'current_catalog_shared_material_bill',
-                        }})
+            plan = self._shared_bill_candidate(plan, item, amount)
             if plan and plan.steps[0].action in {
                 "factory_gather", "factory_insert", "factory_extract", "factory_craft"
             }:

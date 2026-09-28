@@ -157,6 +157,7 @@ class OutputBufferPlanner(ReadyWorkPlanner):
                 candidate = worker._need(item, amount)
             except (KeyError, ValueError):
                 continue
+            candidate = self._shared_bill_candidate(candidate, item, amount)
             if candidate and not worker._buffer_service and candidate.steps[0].action in {
                 "factory_gather", "factory_insert", "factory_extract", "factory_craft"
             }:

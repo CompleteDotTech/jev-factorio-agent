@@ -11,6 +11,8 @@ from jev_factorio.jev_client import MockJevClient
 from jev_factorio.planning.decision_support import candidate_evidence, distinct_candidates, scheduling_context
 from jev_factorio.planning.factory import FactoryPlanner
 from jev_factorio.planning.input_routes import InputRoutePlanner
+from jev_factorio.planning.mining_outposts import MiningOutpostPlanner
+from jev_factorio.planning.output_buffers import OutputBufferPlanner
 from jev_factorio.planning.ready_work import ReadyWorkPlanner
 from jev_factorio.skills import Plan, Step, compile_plans
 from test_factory import FactorySimulation, catalog, machine, recipe, snapshot
@@ -170,13 +172,18 @@ def test_choice_prefers_current_recipe_prerequisite_over_unlinked_lookahead_only
     assert 'larger pickup quantity alone' not in choice_instruction(linked)
 
 
-def test_ready_lookahead_gear_craft_exposes_bounded_shared_bill_and_possible_overlap():
+@pytest.mark.parametrize('planner_type', [ReadyWorkPlanner, OutputBufferPlanner,
+                                         MiningOutpostPlanner])
+def test_ready_lookahead_gear_craft_exposes_bounded_shared_bill_and_possible_overlap(planner_type):
     """Lab needs two more gears through belts; neither plan has completed output."""
     state = snapshot(inventory={'iron-plate': 10, 'iron-gear-wheel': 10},
                      nearby_resources={'copper-ore': 94, 'coal': 80, 'stone': 38})
     state.factory['craft_jobs_protocol'] = 1
     state.factory['entities']['recipe:copper-plate'] = machine(
         fuel={'coal': 5}, energy=100)
+    for key in ('output_buffers', 'input_routes', 'mining_outposts'):
+        state.factory[key] = {'protocol': 1, 'session_id': state.session_id,
+                              'tick': state.tick, 'sources': {}}
     data = catalog()
     data.recipes.update({
         'lab': recipe('lab', {'electronic-circuit': 10, 'iron-gear-wheel': 10,
@@ -190,7 +197,7 @@ def test_ready_lookahead_gear_craft_exposes_bounded_shared_bill_and_possible_ove
                                                   'iron-gear-wheel': 1}),
     })
     data.recipes['transport-belt']['products'][0]['amount'] = 2
-    worker = ReadyWorkPlanner(data, state, 'rocket_launch')
+    worker = planner_type(data, state, 'rocket_launch')
     worker._set_focus('lab', 1)
     primary = worker._need('lab', 1)
     worker.plan = lambda: primary
@@ -241,6 +248,52 @@ def test_ready_lookahead_gear_craft_exposes_bounded_shared_bill_and_possible_ove
     alone = scheduling_context(state, data, [gear], 'rocket_launch')
     _, alone_questions, _ = question_batch({'facts': state.for_jev(), **alone}, [gear])
     assert 'admitted receipt-tracked job' not in alone_questions['candidate']['instructions']
+
+
+def test_composed_planner_keeps_native_shaped_belt_bill_witness():
+    state = snapshot(inventory={'iron-gear-wheel': 12, 'iron-plate': 6},
+                     nearby_resources={'iron-ore': 50, 'coal': 80, 'stone': 38})
+    state.factory['craft_jobs_protocol'] = 1
+    state.factory['entities']['recipe:iron-plate'] = machine(fuel={'coal': 5}, energy=100)
+    for key in ('output_buffers', 'input_routes', 'mining_outposts'):
+        state.factory[key] = {'protocol': 1, 'session_id': state.session_id,
+                              'tick': state.tick, 'sources': {}}
+    data = catalog()
+    data.recipes.update({
+        'lab': recipe('lab', {'electronic-circuit': 10, 'iron-gear-wheel': 10,
+                             'transport-belt': 4}),
+        'electronic-circuit': recipe('electronic-circuit', {'iron-plate': 1}),
+        'iron-plate': recipe('iron-plate', {'iron-ore': 1}, 'smelting'),
+        'iron-gear-wheel': recipe('iron-gear-wheel', {'iron-plate': 2}),
+        'transport-belt': recipe('transport-belt', {'iron-plate': 1,
+                                                  'iron-gear-wheel': 1}),
+    })
+    data.recipes['transport-belt']['products'][0]['amount'] = 2
+    worker = MiningOutpostPlanner(data, state, 'rocket_launch')
+    worker._set_focus('lab', 1)
+    primary = worker._need('lab', 1)
+    worker.plan = lambda: primary
+    plans = worker.candidates()
+    belt = next(plan for plan in plans if plan.steps[0].item == 'transport-belt')
+    assert belt.steps[0].action == 'factory_craft'
+    assert belt.steps[0].parameters['batches'] == 2
+    assert belt.materials['shared_bill_craft']['bill_inventory_target'] == 4
+    assert belt.materials['shared_bill_craft']['planned_product_units'] == 4
+    step = belt.steps[0]
+    belt = replace(belt, steps=(replace(step, action='factory_craft_job',
+        effect='craft_job_complete', parameters={**step.parameters, 'receipt': 'belt-test'}),))
+    row = candidate_evidence(state, data, [primary, belt])[belt.id]
+    assert row['shared_bill_craft']['unfilled_bill_units'] == 4
+    assert row['shared_bill_craft']['expected_products_after_native_verification'] == 4
+    assert row['craft_dependency'] is None
+    for changed in ({'observed_tick': state.tick - 1},
+                    {'bill_inventory_target': 5},
+                    {'planned_product_units': 2}):
+        bad = replace(belt, materials={**belt.materials, 'shared_bill_craft': {
+            **belt.materials['shared_bill_craft'], **changed}})
+        assert candidate_evidence(state, data, [bad])[bad.id]['shared_bill_craft'] is None
+    worker._buffer_service = True
+    assert all(plan.steps[0].item != 'transport-belt' for plan in worker.candidates())
 
 
 def test_stale_or_unrelated_raw_dependency_never_enters_candidate_evidence():
