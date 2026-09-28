@@ -132,6 +132,38 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
         if "deterministic_ranking" in context:
             context["deterministic_ranking"] = [key for key in state["deterministic_ranking"]
                                                 if key in context["candidate_plans"]]
+        evidence = context.get('candidate_evidence') or {}
+        facts = state.get('facts')
+        tick = facts.get('tick') if isinstance(facts, dict) else None
+        local = state.get('local_objective')
+        primary = local.get('primary_target') if isinstance(local, dict) else None
+        target = primary.get('item') if isinstance(primary, dict) else None
+        def observed_gather(row):
+            start = row.get('gather_start_evidence') or {}
+            return (start.get('resource_in_current_observation') is True
+                    and start.get('fair_target_identity_observed') is True)
+        current_prerequisite = any(
+            isinstance(target, str) and target
+            and row.get('work_scope') == 'immediate' and observed_gather(row)
+            and isinstance(row.get('raw_prerequisite'), dict)
+            and row['raw_prerequisite'].get('observed_tick') == tick
+            and isinstance(row['raw_prerequisite'].get('planner_item_path'), list)
+            and row['raw_prerequisite']['planner_item_path'][:1] == [target]
+            for row in evidence.values())
+        unlinked_lookahead = any(
+            row.get('work_scope') == 'lookahead' and observed_gather(row)
+            and row.get('raw_prerequisite') is None
+            and row.get('fuel_prerequisite') is None
+            and row.get('urgency') == 0
+            for row in evidence.values())
+        choice_priority_hint = (
+            " When current observed start facts support both an immediate raw "
+            "prerequisite with a current planner recipe path and an unlinked "
+            "lookahead bulk gather with no observed urgency, favor the immediate "
+            "prerequisite unless another current fact justifies the lookahead work. "
+            "A larger pickup quantity alone is not such a fact. Later crafting "
+            "and output still require fresh native verification."
+            if current_prerequisite and unlinked_lookahead else "")
         questions = {
             "candidate": {
                 "type": "choice",
@@ -147,7 +179,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                                  "and actor readiness; expected output still needs native verification. "
                                  "Report confidence in choosing the best next action from this "
                                  "observed frontier, not confidence in completing the ultimate goal. "
-                                 "Do not assume other questions' answers are available."),
+                                 "Do not assume other questions' answers are available."
+                                 + choice_priority_hint),
                 "criteria": {**{p.id: p.description for p in selected},
                              "observe": "Gather another observation without mutating the factory"},
             }

@@ -124,6 +124,49 @@ def test_stone_gather_explains_current_lab_recipe_dependency_without_claiming_ou
     assert not plan.steps[0].allowed(snapshot(nearby_resources={}))
 
 
+def test_choice_prefers_current_recipe_prerequisite_over_unlinked_lookahead_only_when_observed():
+    state, data = snapshot(), catalog()
+    data.recipes['lab'] = recipe('lab', {'iron-plate': 1})
+    worker = ReadyWorkPlanner(data, state, 'rocket_launch')
+    worker._set_focus('lab', 1)
+    stone = worker._need('lab', 1)
+    worker.speculative = True
+    iron = worker._need('iron-ore', 36)
+    assert stone.steps[0].parameters['resource'] == 'stone'
+    assert iron.steps[0].parameters['resource'] == 'iron-ore'
+    support = scheduling_context(state, data, [stone, iron], 'rocket_launch')
+    immediate = support['candidate_evidence'][stone.id]
+    lookahead = support['candidate_evidence'][iron.id]
+    assert immediate['work_scope'] == 'immediate'
+    assert immediate['raw_prerequisite']['planner_item_path'][0] == 'lab'
+    assert lookahead['work_scope'] == 'lookahead' and lookahead['raw_prerequisite'] is None
+    assert lookahead['urgency'] == 0
+
+    def choice_instruction(rows, plans=(stone, iron)):
+        _, questions, _ = question_batch({'facts': state.for_jev(), **rows}, list(plans))
+        return questions['candidate']['instructions']
+
+    assert 'larger pickup quantity alone' in choice_instruction(support)
+    assert 'Later crafting and output still require fresh native verification' in choice_instruction(support)
+    single = scheduling_context(state, data, [stone], 'rocket_launch')
+    assert 'larger pickup quantity alone' not in choice_instruction(single, (stone,))
+
+    stale = deepcopy(support)
+    stale['candidate_evidence'][stone.id]['raw_prerequisite']['observed_tick'] -= 1
+    assert 'larger pickup quantity alone' not in choice_instruction(stale)
+    unknown = deepcopy(support)
+    unknown['candidate_evidence'][stone.id]['gather_start_evidence'][
+        'fair_target_identity_observed'] = False
+    assert 'larger pickup quantity alone' not in choice_instruction(unknown)
+    due = deepcopy(support)
+    due['candidate_evidence'][iron.id]['urgency'] = 1
+    assert 'larger pickup quantity alone' not in choice_instruction(due)
+    linked = deepcopy(support)
+    linked['candidate_evidence'][iron.id]['raw_prerequisite'] = {
+        'observed_tick': state.tick, 'planner_item_path': ['lab', 'iron-ore']}
+    assert 'larger pickup quantity alone' not in choice_instruction(linked)
+
+
 def test_stale_or_unrelated_raw_dependency_never_enters_candidate_evidence():
     state, data = snapshot(), catalog()
     plan = FactoryPlanner(data, state, 'iron_smelting')._need('iron-plate', 10)
