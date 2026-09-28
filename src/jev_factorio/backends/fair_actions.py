@@ -559,9 +559,10 @@ class FairActions:
                 raise RuntimeError("Native connector preparation receipt changed")
         for index, (horizontal, vertical) in enumerate(route, 1):
             if (horizontal, vertical) not in existing:
+                connector_kwargs = {"connector": (receipt, index)} if receipt else {}
                 self.place_entity(prototype, Position(x=horizontal, y=vertical),
                                   direction=Direction.UP, exact=True,
-                                  connector=(receipt, index) if receipt else None)
+                                  **connector_kwargs)
         if receipt is not None:
             completed = decode_native(self.command(
                 "rcon.print(helpers.table_to_json(storage.campaign.connector_finish("
