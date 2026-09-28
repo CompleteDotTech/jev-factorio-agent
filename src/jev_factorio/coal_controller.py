@@ -26,6 +26,35 @@ CHECKPOINT_FIELDS = {"coal_supply_schema", "coal_targets", "coal_epoch", "coal_c
 UNBOUND_FAULT = "Coal-source epoch unbound; native reconciliation required"
 
 
+def _ready_required_science(snapshot, catalog, plans) -> bool:
+    """Current executable science is a bounded reason to defer a new kit."""
+    from .planning.scheduling import research_schedule
+    try:
+        due = {row['item'] for row in research_schedule(snapshot, catalog) if row['due']}
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return False
+    if not due:
+        return False
+    entities = snapshot.factory.get('entities', {})
+    for plan in plans:
+        if len(plan.steps) != 1:
+            continue
+        step = plan.steps[0]
+        p = step.parameters or {}
+        item = p.get('item')
+        if (step.action == 'factory_extract' and item in due
+                and entities.get(p.get('role'), {}).get('output', {}).get(item, 0) > 0):
+            return True
+        if step.action == 'factory_insert' and p.get('role') == 'utility:lab' and item in due:
+            return True
+        if step.action == 'factory_craft':
+            recipe = catalog.recipes.get(p.get('recipe'), {})
+            if any(product.get('type') == 'item' and product.get('name') in due
+                   for product in recipe.get('products', [])):
+                return True
+    return False
+
+
 class CoalSupplyMixin:
     def __init__(self, backend, jev=None, *, coal_targets, coal_kit_policy=False, **options) -> None:
         if type(coal_kit_policy) is not bool:
@@ -215,7 +244,17 @@ class CoalSupplyMixin:
                 offer, self._coal_kit_evidence = coal_funding.candidate(
                     snapshot, self.catalog, **self._coal_funding_options())
                 if offer is not None:
-                    extra.append(offer)
+                    if state is None and _ready_required_science(snapshot, self.catalog, plans):
+                        # The model may choose any offered ID regardless of ranking.
+                        # Defer only a new optional kit; paid/pending work keeps
+                        # its durable continuation and ordinary fuel work remains.
+                        self._coal_kit_evidence = {**self._coal_kit_evidence,
+                            'selection_deferred_reason': 'ready_required_science'}
+                    else:
+                        # Ranking may trust only this decision's exact offer.
+                        snapshot._coal_kit_annotations = {
+                            offer.id: deepcopy(offer.to_dict())}
+                        extra.append(offer)
             except (ValueError, KeyError, TypeError, AttributeError):
                 self._coal_kit_evidence = {"reason": "unfunded_or_locked_bundle", "native_flow_proven": False}
         plans.extend(p for p in extra if p.id not in {p.id for p in plans} and self._step_allowed(p.steps[0], snapshot))

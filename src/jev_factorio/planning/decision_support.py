@@ -50,8 +50,10 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
         schedules = []  # Unsupported forecast is explicitly unknown below.
     due_packs = {row['item'] for row in schedules if row['due']}
     result = {}
-    from .solid_investment import ranking_marker
-    has_solid_offer = any(ranking_marker(plan, snapshot) for plan in plans)
+    from .solid_investment import ranking_marker as solid_marker
+    from .coal_funding import ranking_marker as coal_marker
+    has_solid_offer = any(solid_marker(plan, snapshot) for plan in plans)
+    has_coal_offer = any(coal_marker(plan, snapshot) for plan in plans)
     for index, plan in enumerate(plans):
         origin = _position(snapshot.player_position)
         travel, actor, unknown, reasons = 0.0, 0.0, [], []
@@ -145,9 +147,16 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             if outputs & due_packs:
                 urgency = max(urgency, 2)
                 reasons.append('ready_science_before_solid_investment')
-            if ranking_marker(plan, snapshot):
+            if solid_marker(plan, snapshot):
                 urgency = max(urgency, 1)
                 reasons.append('justified_downstream_investment')
+        if has_coal_offer:
+            if outputs & due_packs:
+                urgency = max(urgency, 2)
+                reasons.append('ready_science_before_coal_kit')
+            if coal_marker(plan, snapshot):
+                urgency = max(urgency, 1)
+                reasons.append('explicit_coal_kit_investment')
         target = (plan.materials or {}).get('local_objective')
         if target is not None:
             target = deepcopy(target)
