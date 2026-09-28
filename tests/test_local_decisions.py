@@ -473,7 +473,10 @@ def test_new_owned_copper_furnace_requests_bounded_startup_coal_with_current_evi
     assert row['fuel_prerequisite'] == {
         'observed_tick': state.tick, 'planner_item_path': ['lab', 'copper-plate'],
         'burner_role': role, 'burner_unit': 2546, 'fuel_now': 0,
+        'coal_in_inventory_now': 0, 'planned_gather_units': 5,
+        'established_service_target': None,
         'startup_target': 5, 'current_required_units': 5,
+        'current_unfunded_units': 5, 'gather_units_beyond_current_need': 0,
         'basis': 'current_planner_fuel_need_and_owned_native_burner',
         'later_fuel_transfer_and_output_require_fresh_native_preconditions': True,
     }
@@ -512,6 +515,80 @@ def test_established_burner_retains_bulk_service_target():
     assert plan.steps[0].action == 'factory_gather'
     assert plan.steps[0].threshold == 50
     assert plan.materials['fuel_prerequisite']['startup'] is False
+
+
+def test_established_burner_bulk_gather_separates_current_need_from_refill():
+    state, data = snapshot(inventory={'coal': 0}, player_position=(62, -27)), catalog()
+    role = 'recipe:iron-plate'
+    state.factory['entities'][role] = machine(unit_number=2547,
+        position={'x': 41, 'y': -111}, fuel={'coal': 3}, products_finished=20)
+    state.factory['production_sites'] = {'sources': {
+        role: {'state': 'owned', 'source_unit': 2547}}}
+    planner = ReadyWorkPlanner(data, state, 'rocket_launch')
+    planner._set_focus('lab', 1)
+    plan = planner._fuel(role, ('item:lab', 'item:electronic-circuit',
+                                'item:iron-plate'))
+    step = plan.steps[0]
+    assert step.action == 'factory_gather'
+    assert step.parameters['quantity'] == 47  # Keep paid grouped service.
+    support = scheduling_context(state, data, [plan], 'rocket_launch')
+    row = support['candidate_evidence'][plan.id]
+    assert row['fuel_prerequisite'] == {
+        'observed_tick': state.tick,
+        'planner_item_path': ['lab', 'electronic-circuit', 'iron-plate'],
+        'burner_role': role, 'burner_unit': 2547, 'fuel_now': 3,
+        'coal_in_inventory_now': 0, 'planned_gather_units': 47,
+        'established_service_target': 50, 'startup_target': None,
+        'current_required_units': 2, 'current_unfunded_units': 2,
+        'gather_units_beyond_current_need': 45,
+        'basis': 'current_planner_fuel_need_and_owned_native_burner',
+        'later_fuel_transfer_and_output_require_fresh_native_preconditions': True,
+    }
+    context, questions, offered = question_batch(
+        {'facts': state.for_jev(), **support}, [plan])
+    assert offered == [plan]
+    benefit = questions[plan.id + '/benefit']['instructions']
+    assert '2 coal still needed' in benefit
+    assert 'other 45 support' in benefit
+    assert 'not an urgent blocker' in benefit
+    assert 'later output' in benefit
+    import json
+    assert len(json.dumps({'state': context, 'questions': questions},
+                          ensure_ascii=False, allow_nan=False).encode('utf-8')) <= 32000
+
+    def no_hint(changed):
+        _, questions, _ = question_batch(
+            {'facts': state.for_jev(), **changed}, [plan])
+        return 'other 45 support' not in questions[plan.id + '/benefit']['instructions']
+
+    stale = deepcopy(support)
+    stale['candidate_evidence'][plan.id]['fuel_prerequisite']['observed_tick'] -= 1
+    assert no_hint(stale)
+    wrong_quantity = deepcopy(support)
+    wrong_quantity['candidate_evidence'][plan.id]['fuel_prerequisite'][
+        'planned_gather_units'] = 46
+    assert no_hint(wrong_quantity)
+    malformed_start = deepcopy(support)
+    malformed_start['candidate_evidence'][plan.id]['gather_start_evidence'] = 'observed'
+    assert no_hint(malformed_start)
+    wrong_plan = replace(plan, steps=(replace(step, parameters={
+        **step.parameters, 'quantity': 46}, threshold=46),))
+    assert candidate_evidence(state, data, [wrong_plan])[wrong_plan.id][
+        'fuel_prerequisite'] is None
+    no_target = deepcopy(support)
+    no_target['local_objective']['primary_target']['item'] = ''
+    assert no_hint(no_target)
+    state.factory['production_sites']['sources'][role]['state'] = 'proposed'
+    assert candidate_evidence(state, data, [plan])[plan.id]['fuel_prerequisite'] is None
+    state.factory['production_sites']['sources'][role]['state'] = 'owned'
+    state.factory['production_sites']['sources'][role]['source_unit'] = 999
+    assert candidate_evidence(state, data, [plan])[plan.id]['fuel_prerequisite'] is None
+    state.factory['production_sites']['sources'][role]['source_unit'] = 2547
+    state.factory['entities'][role]['fuel']['coal'] = 5
+    assert candidate_evidence(state, data, [plan])[plan.id]['fuel_prerequisite'] is None
+    state.factory['entities'][role]['fuel']['coal'] = 3
+    state.factory['entities'][role].pop('fuel')
+    assert candidate_evidence(state, data, [plan])[plan.id]['fuel_prerequisite'] is None
 
 
 def test_native_shaped_startup_fuel_transfer_has_current_paid_start_evidence():
