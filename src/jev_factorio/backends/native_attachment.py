@@ -8,13 +8,18 @@ chain before constructing an adapter, and must reuse it without Lua installation
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 from importlib.resources import files
+from pathlib import Path
 
 from ..iteration_timing import decode_native
 
 
 # These bytes were installed from main e759462 in the isolated native fixture.
 # Changing an asset requires an explicit reviewed migration, not silent reuse.
+PINNED_SOURCE_COMMIT = 'e75946253e9c0d9cda95a503e6c58110533347e4'
+PINNED_SOURCE_TREE = '571d72f19c56bd15e1a6fc6feef35172fa68894f'
 PINNED_ASSETS = {
     'fair_actions': 'cacb0396a75807bfd9b6987c732cbefe518e96517eb167611707e1ce48d2cbd4',
     'factory': 'f4f42f22b70ed7dc4a85dec627cdcd6be4d28df5c12e8a38066a13f0998ecdbc',
@@ -56,12 +61,12 @@ if c then ok=ok and good(c.observe) and good(c.transfer) and good(c.configure)
     and l and l.schema==1 and c.launch==l.launch and c.craft==l.craft
     and good(l.observer) and good(c.observation_snapshot) and good(c.observation_snapshot_v2)
 end
-if j then ok=ok and good(j.observe_wrapper) and good(j.previous_observe)
+if j then ok=ok and l and good(j.observe_wrapper) and good(j.previous_observe)
     and j.previous_observe==l.observer end
-if b then ok=ok and b.protocol==1 and good(b.observer) and good(b.transfer)
+if b then ok=ok and j and l and b.protocol==1 and good(b.observer) and good(b.transfer)
     and b.previous_observe==j.observe_wrapper and b.previous_transfer==l.transfer
     and script.get_event_handler(defines.events.on_tick)==b.tick_handler end
-if i then ok=ok and i.protocol==1 and i.previous_observe==b.observer
+if i then ok=ok and b and i.protocol==1 and i.previous_observe==b.observer
     and i.previous_transfer==b.transfer and good(i.observer) and good(i.transfer) end
 if s then ok=ok and s.protocol==1 and s.implementation_revision==4
     and s.contract_family=="straight-solid-corridor-v1"
@@ -75,6 +80,11 @@ if o then ok=ok and o.protocol==1 and i and good(c.observe_mining_outposts) end
 if p then ok=ok and p.protocol==1 and i and good(c.observe_production_sites) end
 if x then ok=ok and x.protocol==1 and i and b and p and j and not o
     and c.successors_enabled==true and good(c.observe_successors) end
+if c and s then ok=ok and c.observe==s.observer and c.transfer==s.transfer
+elseif c and i then ok=ok and c.observe==i.observer and c.transfer==i.transfer
+elseif c and b then ok=ok and c.observe==b.observer and c.transfer==b.transfer
+elseif c and j then ok=ok and c.observe==j.observe_wrapper and c.transfer==l.transfer
+elseif c then ok=ok and c.observe==l.observer and c.transfer==l.transfer end
 local modules={fair_actions=true,factory=c~=nil,launch_readiness=l~=nil,
     observation=c~=nil,observation_v2=c~=nil,craft_jobs=j~=nil,
     output_buffers=b~=nil,input_routes=i~=nil,production_sites=p~=nil,
@@ -98,6 +108,31 @@ def readback(client):
             or set(result['modules']) != set(PINNED_ASSETS)
             or any(type(flag) is not bool for flag in result['modules'].values())):
         raise RuntimeError('Existing native callback installation requires reconciliation')
+    receipt_path = os.environ.get('JEV_NATIVE_ATTACHMENT_RECEIPT')
+    if not receipt_path:
+        raise RuntimeError('Existing native installation requires a source-bound attachment receipt')
+    path = Path(receipt_path)
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError('Native attachment receipt is missing or is a symlink')
+    if os.name == 'posix':
+        stat = path.stat()
+        if stat.st_uid != os.geteuid() or stat.st_mode & 0o077:
+            raise RuntimeError('Native attachment receipt must be owned by the controller and private')
+    try:
+        receipt = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError('Native attachment receipt cannot be read') from exc
+    if (not isinstance(receipt, dict)
+            or set(receipt) != {'schema', 'session_id', 'actor_unit',
+                                'installed_source_commit', 'installed_source_tree',
+                                'installed_assets'}
+            or receipt['schema'] != 'jev.native-attachment.v1'
+            or receipt['session_id'] != result['session_id']
+            or receipt['actor_unit'] != result['actor_unit']
+            or receipt['installed_source_commit'] != PINNED_SOURCE_COMMIT
+            or receipt['installed_source_tree'] != PINNED_SOURCE_TREE
+            or receipt['installed_assets'] != PINNED_ASSETS):
+        raise RuntimeError('Native attachment receipt does not match the retained session and source')
     return result
 
 
