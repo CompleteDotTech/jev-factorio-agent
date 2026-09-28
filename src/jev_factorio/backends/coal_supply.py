@@ -26,9 +26,17 @@ class CoalSupplyFactory:
             raise ValueError("Coal supply requires an explicitly bound solid-route attachment")
         coal.validate_transport_intents(self.targets, current.intents)
         self.native = native
-        native.command(files("jev_factorio").joinpath("lua/coal_supply.lua").read_text())
-        native.call("set_coal_targets", self.targets)
-        native.call("set_coal_admission_evidence", coal_economic_admission)
+        if getattr(native.backend, '_native_attachment', None) is not None:
+            from .native_attachment import require_asset
+            require_asset(native.backend._native_attachment, 'coal_supply')
+            retained = native.backend._native_attachment
+            if (retained['coal_targets'] != self.targets
+                    or retained['coal_admission_evidence'] is not coal_economic_admission):
+                raise RuntimeError('Retained native coal treatment differs from requested targets')
+        else:
+            native.command(files("jev_factorio").joinpath("lua/coal_supply.lua").read_text())
+            native.call("set_coal_targets", self.targets)
+            native.call("set_coal_admission_evidence", coal_economic_admission)
 
     def __getattr__(self, name):
         return getattr(self.native, name)

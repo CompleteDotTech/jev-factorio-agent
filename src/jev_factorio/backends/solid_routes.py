@@ -35,8 +35,14 @@ class SolidRouteFactory:
     def __init__(self, native, intents) -> None:
         self.intents = validate_intents(intents)
         self.native = native
-        native.command(files("jev_factorio").joinpath("lua/solid_routes.lua").read_text())
-        native.call("set_solid_intents", self.intents)
+        if getattr(native.backend, '_native_attachment', None) is not None:
+            from .native_attachment import require_asset
+            require_asset(native.backend._native_attachment, 'solid_routes')
+            if native.backend._native_attachment['solid_intents'] != self.intents:
+                raise RuntimeError('Retained native solid treatment differs from requested intents')
+        else:
+            native.command(files("jev_factorio").joinpath("lua/solid_routes.lua").read_text())
+            native.call("set_solid_intents", self.intents)
 
     def __getattr__(self, name):
         return getattr(self.native, name)
