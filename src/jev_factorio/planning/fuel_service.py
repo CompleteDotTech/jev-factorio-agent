@@ -80,9 +80,13 @@ def service_plan(planner, primary: str, source: str | None, path, acquire):
         if unit in observed and observed[unit] != identity:
             raise ValueError('Aliased fuel observations disagree')
         observed[unit] = identity
-        if name not in {'burner-inserter', 'burner-mining-drill'}:
+        furnace = name in {'stone-furnace', 'steel-furnace'}
+        if not furnace and name not in {'burner-inserter', 'burner-mining-drill'}:
             return
-        if current >= 2:
+        # Furnace fuel already in its inventory can power the next bounded
+        # production step. A five-coal service target is not a reason to halt
+        # science before that step. Route burners retain their two-coal trigger.
+        if current >= (1 if furnace else 2):
             return
         if insertable == 0:
             if role == primary:
@@ -176,6 +180,39 @@ def service_plan(planner, primary: str, source: str | None, path, acquire):
         if leg is not None:
             extra_ticks += math.ceil(leg * TRAVEL_TICKS_PER_TILE) + SERVICE_TICKS
         cursor = position(entities[selected['role']].get('position'))
+    # Optional visits must not extend a known science refill past its current
+    # deadline. Unknown route geometry or deadline is no proof of spare time.
+    from .scheduling import research_schedule
+    scheduled = [row for row in research_schedule(snapshot, planner.catalog)
+                 if row.get('amount', 0)]
+    if scheduled and len(consumers) > 1:
+        deadlines = [row['deadline_tick'] - snapshot.tick for row in scheduled
+                     if row.get('deadline_tick') is not None]
+        earliest = min(deadlines) if len(deadlines) == len(scheduled) else None
+        coal_point = position(snapshot.factory.get('fair_resource_targets', {})
+                              .get('coal', {}).get('position'))
+
+        def service_lead(rows):
+            if origin is None or coal_point is None:
+                return None
+            points = [origin, coal_point]
+            for row in rows:
+                point = position(entities[row['role']].get('position'))
+                if point is None:
+                    return None
+                points.append(point)
+            distance = sum(sum(abs(a-b) for a,b in zip(left, right))
+                           for left, right in zip(points, points[1:]))
+            return (math.ceil(distance * TRAVEL_TICKS_PER_TILE)
+                    + len(rows) * SERVICE_TICKS
+                    + sum(row['deficit'] for row in rows) * RAW_TICKS_PER_ITEM)
+
+        while len(consumers) > 1:
+            lead = service_lead(consumers)
+            if earliest is not None and lead is not None and lead < earliest:
+                break
+            consumers.pop()
+            deferred['science_deadline_or_unknown_lead'] += 1
     deficit = sum(row['deficit'] for row in consumers)
     carried = _quantity(snapshot.inventory.get('coal', 0))
     spendable = min(carried, _quantity(planner.ledger.carried.get('coal', 0)))

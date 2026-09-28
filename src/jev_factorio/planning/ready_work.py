@@ -38,6 +38,49 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
         self.speculative = False
         self.allow_service_visits = True
 
+    def _fuel(self, role, path):
+        """Do not turn a stocked owned furnace's service threshold into a blocker.
+
+        A positive fuel inventory is not a guarantee for the whole forecast
+        batch. The next ore/input action and its receipt get a fresh observation;
+        actual empty fuel is serviced by the existing due-consumer policy.
+        Mock/legacy snapshots without production-site ownership keep the base
+        planner's established behavior.
+        """
+        machine = self.entities.get(role, {})
+        if (not role.startswith('recipe:') or machine.get('name') not in
+                {'stone-furnace', 'steel-furnace'}):
+            return super()._fuel(role, path)
+        sites = self.factory.get('production_sites')
+        if not isinstance(sites, dict):
+            return super()._fuel(role, path)
+        # Older synthetic/legacy snapshots contain a partial site map without
+        # a current record for this role. They cannot qualify the native due
+        # policy; retain their established planner behavior. A native partial
+        # observation still fails closed below.
+        mock_sources = sites.get('sources')
+        if self.snapshot.world_kind == 'mock' and (sites.get('protocol') != 1
+                or isinstance(mock_sources, dict) and role not in mock_sources):
+            return super()._fuel(role, path)
+        if (sites.get('protocol') != 1 or sites.get('session_id') != self.snapshot.session_id
+                or sites.get('tick') != self.snapshot.tick):
+            raise ValueError('Furnace ownership observation is stale')
+        sources = sites.get('sources')
+        owned = sources.get(role) if isinstance(sources, dict) else None
+        unit = machine.get('unit_number')
+        if (not isinstance(owned, dict) or owned.get('state') != 'owned'
+                or type(unit) is not int or unit <= 0
+                or owned.get('source_unit') != unit):
+            raise ValueError('Furnace fuel service requires current owned source identity')
+        fuel = machine.get('fuel')
+        if (not isinstance(fuel, dict) or type(fuel.get('coal', 0)) is not int
+                or fuel.get('coal', 0) < 0):
+            raise ValueError('Furnace fuel telemetry unavailable')
+        if fuel.get('coal', 0) > 0:
+            return None
+        from .fuel_service import service_plan
+        return service_plan(self, role, role, path, self._need)
+
     def _plan(self, *args, **kwargs) -> Plan:
         plan = super()._plan(*args, **kwargs)
         if self.focus is None:
