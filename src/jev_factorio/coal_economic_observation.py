@@ -44,7 +44,7 @@ RATES = {
 }
 POLE_RADII = {'small-electric-pole': 2.5, 'medium-electric-pole': 3.5,
               'big-electric-pole': 2, 'substation': 9}
-ROOT_KEYS = set(('schema base_version mods query_status reason epoch registry prototypes poles '
+ROOT_KEYS = set(('schema base_version mods query_status reason epoch registry connector_routes prototypes poles '
     'supply_surveys electric_members fluid_members fuel_targets sources coal_fuel_joules '
     'fluid_prototypes pole_prototypes buffer_witnesses').split())
 
@@ -181,17 +181,20 @@ def query_sha256():
 
 
 def decode(raw: dict, *, expected_epoch: dict, expected_bundle: dict,
-           unit_qualification: dict) -> NativeEconomics:
+           unit_qualification: dict, expected_connectors: dict | None = None,
+           expected_routes: dict | None = None) -> NativeEconomics:
     """Derive bounded facts; no caller flag/hash can establish eligibility."""
     try:
-        return _decode(raw, expected_epoch, expected_bundle, unit_qualification)
+        return _decode(raw, expected_epoch, expected_bundle, unit_qualification,
+                       expected_connectors, expected_routes)
     except NativeEconomicsUnavailable:
         raise
     except (KeyError, TypeError, AttributeError, IndexError, ValueError, OverflowError) as error:
         raise NativeEconomicsUnavailable('invalid_native_projection') from error
 
 
-def _decode(raw, expected_epoch, expected_bundle, unit_qualification):
+def _decode(raw, expected_epoch, expected_bundle, unit_qualification, expected_connectors,
+            expected_routes):
     require(isinstance(raw, dict) and raw.get('query_status') == 'observed', 'native_projection_unsupported')
     fields(raw, ' '.join(ROOT_KEYS))
     require(raw['schema'] == SCHEMA and raw['reason'] == 'bounded_native_projection'
@@ -242,6 +245,55 @@ def _decode(raw, expected_epoch, expected_bundle, unit_qualification):
         require(type(row['surface_index']) is int and row['surface_index'] == epoch.surface_index
                 and type(row['force_index']) is int and row['force_index'] == epoch.force_index, 'foreign_native_owner')
         point(row['position']); bounds(row['bounds']); owned[unit] = row
+    if expected_connectors is None:
+        expected_connectors = {}
+    if expected_routes is None:
+        expected_routes = {}
+    require(isinstance(expected_routes, dict) and len(expected_routes) <= 128,
+            'invalid_connector_binding')
+    native_routes = unique_rows(raw['connector_routes'], 'id', 0, 128)
+    require(set(native_routes) == set(expected_routes), 'connector_route_binding_mismatch')
+    route_fields = ('id source target source_unit target_unit kind fluid actor_unit session_id '
+                    'surface_index force_index state owned paid cell_count')
+    for receipt, expected in expected_routes.items():
+        row = native_routes[receipt]
+        fields(row, route_fields)
+        require(isinstance(expected, dict) and set(expected) == set(route_fields.split())
+                and row == expected and row['state'] == 'complete' and row['owned'] is True,
+                'connector_route_binding_mismatch')
+        require(row['session_id'] == epoch.session_id and row['actor_unit'] == actor_unit
+                and row['surface_index'] == epoch.surface_index
+                and row['force_index'] == epoch.force_index,
+                'connector_route_epoch_mismatch')
+        integer(row['source_unit'], 1); integer(row['target_unit'], 1)
+        integer(row['paid'], 1, 128); integer(row['cell_count'], 1, 128)
+        require(row['paid'] == row['cell_count'] and row['kind'] in {'pipe', 'small-electric-pole'},
+                'connector_route_unqualified')
+        require(row['source'] in registry and row['target'] in registry
+                and registry[row['source']]['unit'] == row['source_unit']
+                and registry[row['target']]['unit'] == row['target_unit'],
+                'connector_endpoint_changed')
+        require(sum(role.startswith(f'connector:{receipt}:') for role in expected_connectors)
+                == row['cell_count'], 'connector_route_cell_mismatch')
+    require(isinstance(expected_connectors, dict) and len(expected_connectors) <= 128,
+            'invalid_connector_binding')
+    connector_roles = {role for role in registry if role.startswith('connector:')}
+    require(connector_roles == set(expected_connectors), 'connector_binding_mismatch')
+    for role, expected in expected_connectors.items():
+        require(isinstance(expected, dict) and set(expected) == {'unit', 'name', 'position'},
+                'invalid_connector_binding')
+        receipt, separator, index = role.removeprefix('connector:').rpartition(':')
+        require(role.startswith('connector:') and separator and len(receipt) == 64
+                and all(char in '0123456789abcdef' for char in receipt)
+                and index.isascii() and index.isdigit() and str(integer(int(index), 1, 128)) == index,
+                'invalid_connector_binding')
+        row = registry[role]
+        require(row['unit'] == integer(expected['unit'], 1)
+                and row['name'] == expected['name']
+                and row['position'] == expected['position']
+                and row['name'] in {'pipe', 'small-electric-pole'},
+                'connector_payment_changed')
+        point(expected['position'])
     witnesses = unique_rows(raw['buffer_witnesses'], 'name', 2, 2)
     require(set(witnesses) == {'electric-mining-drill', 'inserter'}, 'missing_buffer_witness')
     for name, witness in witnesses.items():

@@ -1,8 +1,10 @@
 # Bounded native coal economics evidence
 
 `lua/coal_economics.lua` is a fixed read-only projection and
-`coal_economic_observation.decode` validates its bounded typed facts. Neither is
-wired to production observation, admission or payment. Successful decoding always
+`coal_economic_observation.decode` validates its bounded typed facts. The coal
+adapter can now run this fixed read-only query against a current unpaid bundle
+and bind paid connector cells to the reconciled checkpoint ledger. It is not
+wired to production admission or payment. Successful decoding always
 retains `mutation_authorized=false` and `native_payback_proven=false`. Synthetic
 fixtures establish source behavior, not native profitability or ownership history.
 
@@ -87,13 +89,19 @@ runtime, topology, units or survey budgets do not qualify. Partial diagnostic
 rows never become an economic witness. Ordered arrays retain their type; a known
 empty-array position may accept the empty-map wire representation.
 
-Two independent ownership/payment integrations remain essential:
+Two independent admission/payment integrations remain essential:
 
-- Ordinary `FairActions.connect` currently discards placed pipe/pole unit IDs and
-  `factory_connect` does not register them. Paid connector journals and checkpoint
-  receipts must establish these exact owners before this graph can qualify.
-  Same-force nearby entities are never adopted by this decoder.
+- The fixed query admits only complete, wholly paid connector-ledger cells with
+  exact native unit, position, owner epoch and endpoint identity. The adapter
+  requires a session checkpoint and compares each route against the same-tick
+  native connector summary before querying. The query projects bounded route
+  identity and endpoint roles/units, which the decoder compares against that
+  checkpoint along with every paid cell. Incomplete, rebound, stale or foreign
+  routes fail closed. A read-only qualified graph remains evidence, not
+  permission to make the first coal payment.
 - Manual task/actor-time journals, demand/acquisition forecasts, paid bootstrap
   acquisition and atomic proof-bound first-payment pending/receipt checks are
   separate. Native facts alone do not authorize spending. Existing policy remains
-  deferred until those integrations and native trials are complete.
+  deferred until those integrations and native trials are complete. This
+  connector-bound read path is partial issue #101 source work, not completion of
+  coal-network admission or native acceptance.
