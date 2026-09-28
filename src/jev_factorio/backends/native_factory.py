@@ -20,6 +20,7 @@ class NativeFactory:
         raw = self.command(files("jev_factorio").joinpath("lua/catalog.lua").read_text())
         self.catalog = Catalog.from_dict(decode_native(raw))
         self.command(files("jev_factorio").joinpath("lua/factory.lua").read_text())
+        self.command(files("jev_factorio").joinpath("lua/connector_ownership.lua").read_text())
         self.command("do\n" + files("jev_factorio").joinpath("lua/launch_readiness.lua").read_text() + "\nend")
         self.command("storage.campaign.discover()")
 
@@ -315,7 +316,7 @@ class NativeFactory:
                 source, target = self.entity(parameters["source"]), self.entity(parameters["target"])
                 source, target = source.position, target.position
             self.backend._fair.connect(source, target, self.prototype(parameters["kind"]),
-                                       parameters["fluid"])
+                                       parameters["fluid"], identity=parameters)
             return f"Constructed {parameters['kind']} connection; native topology must verify"
         if action == "factory_research":
             self.call("research", parameters["technology"])

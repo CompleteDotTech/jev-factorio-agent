@@ -172,6 +172,8 @@ campaign.observe = function()
         entities = entities,
         force_entity_counts = force_entity_counts,
         connectors = connectors,
+        connector_ownership = campaign.observe_connector_ownership and
+            campaign.observe_connector_ownership() or nil,
         receipts = campaign.receipts,
         connections = campaign.connections,
         researched = researched,
