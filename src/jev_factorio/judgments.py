@@ -237,8 +237,49 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
         }
         for plan in selected:
             pointer = f"`candidate_plans[{json.dumps(plan.id)}]`"
-            placement_start = ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get(
-                'placement_start_evidence')
+            row = evidence.get(plan.id)
+            row = row if isinstance(row, dict) else {}
+            placement_start = row.get('placement_start_evidence')
+            placement_dependency = row.get('placement_dependency')
+            placement_step = plan.steps[0] if len(plan.steps) == 1 else None
+            placement_path = (placement_dependency.get('planner_item_path')
+                              if isinstance(placement_dependency, dict) else None)
+            qualified_placement = (
+                isinstance(placement_start, dict)
+                and isinstance(placement_dependency, dict)
+                and placement_step is not None
+                and placement_step.action == 'factory_place'
+                and isinstance(placement_step.parameters, dict)
+                and placement_step.parameters.get('name') == 'stone-furnace'
+                and isinstance(placement_step.parameters.get('role'), str)
+                and placement_step.parameters['role'].startswith('recipe:')
+                and isinstance(placement_step.parameters.get('anchor'), str)
+                and bool(placement_step.parameters['anchor'])
+                and placement_step.costs == {'stone-furnace': 1}
+                and row.get('work_scope') == 'immediate'
+                and row.get('unknowns') == []
+                and type(tick) is int
+                and placement_start.get('observed_tick') == tick
+                and placement_dependency.get('observed_tick') == tick
+                and placement_start.get('site_state') == 'proposed'
+                and all(placement_start.get(key) is True for key in (
+                    'native_offer_checked_current_site_clearance',
+                    'paid_furnace_in_inventory_now', 'no_source_owned_at_role_now',
+                    'player_connected_and_bound_now', 'crafting_queue_empty_now',
+                    'native_preflight_rechecks_offer_and_actor'))
+                and placement_start.get('site_anchor') ==
+                    placement_step.parameters.get('anchor')
+                and placement_start.get('source_role') ==
+                    placement_step.parameters.get('role')
+                and placement_dependency.get('machine_for_recipe') ==
+                    placement_step.parameters.get('role')
+                and placement_dependency.get('basis') ==
+                    'current_recursive_planner_and_validated_native_site'
+                and isinstance(target, str) and bool(target)
+                and isinstance(placement_path, list) and len(placement_path) >= 2
+                and placement_path[0] == target
+                and placement_path[-1] ==
+                    placement_step.parameters['role'].removeprefix('recipe:'))
             craft_hint = (
                 " `craft_start_evidence` shows the current actor, queue, recipe, "
                 "and carried ingredients needed to start this handcraft; "
@@ -252,9 +293,14 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 else ""
             )
             place_hint = (
-                " `placement_dependency` links this paid machine placement to the "
-                "current planner target; native transport and output remain unverified."
-                if ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('placement_dependency')
+                " `placement_start_evidence` and `placement_dependency` bind this "
+                "paid furnace to a currently offered, unoccupied source role on "
+                "the local planner path. Placing it provides evidenced bounded "
+                "capacity (score level 1); it does not yet demonstrate downstream "
+                "production-blocker removal (level 2). Another current contrary "
+                "fact can lower the score. Native placement receipt, fuel, input, "
+                "transport and output remain unverified and need fresh checks."
+                if qualified_placement
                 else ""
             )
             fuel_hint = (

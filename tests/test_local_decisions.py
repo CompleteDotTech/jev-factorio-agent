@@ -391,8 +391,24 @@ def test_paid_joint_furnace_placement_has_observed_site_and_lab_dependency():
         {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
         [plan])
     assert context['candidate_evidence'][plan.id]['placement_dependency'] == row['placement_dependency']
-    assert 'native transport and output remain unverified' in str(questions)
+    benefit = questions[plan.id + '/benefit']['instructions']
+    assert 'evidenced bounded capacity (score level 1)' in benefit
+    assert 'production-blocker removal (level 2)' in benefit
+    assert 'transport and output remain unverified' in benefit
     assert 'unverified walking path or future build receipt' in str(questions)
+    for section, key, value in (
+            ('placement_start_evidence', 'observed_tick', state.tick - 1),
+            ('placement_start_evidence', 'paid_furnace_in_inventory_now', False),
+            ('placement_start_evidence', 'no_source_owned_at_role_now', False),
+            ('placement_start_evidence', 'native_offer_checked_current_site_clearance', False),
+            ('placement_start_evidence', 'site_anchor', 'wrong-site'),
+            ('placement_dependency', 'planner_item_path', ['unrelated', 'copper-plate']),
+            ('placement_dependency', 'machine_for_recipe', 'recipe:iron-plate')):
+        altered = deepcopy(context)
+        altered['candidate_evidence'][plan.id][section][key] = value
+        _, bad_questions, _ = question_batch(altered, [plan])
+        assert 'evidenced bounded capacity (score level 1)' not in (
+            bad_questions[plan.id + '/benefit']['instructions'])
     missing = replace(plan, materials={key: value for key, value in plan.materials.items()
                                        if key != 'local_objective'})
     assert candidate_evidence(state, data, [missing])[missing.id]['placement_dependency'] is None
