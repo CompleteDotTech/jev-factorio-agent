@@ -143,6 +143,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                                  "travel distance is not proof of arrival. Uncertain later "
                                  "crafting, research, or travel outcome is checked after this "
                                  "bounded step and does not by itself require another observation. "
+                                 "For a handcraft, `craft_start_evidence` describes current inputs "
+                                 "and actor readiness; expected output still needs native verification. "
                                  "Report confidence in choosing the best next action from this "
                                  "observed frontier, not confidence in completing the ultimate goal. "
                                  "Do not assume other questions' answers are available."),

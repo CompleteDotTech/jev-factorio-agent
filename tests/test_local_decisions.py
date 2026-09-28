@@ -155,6 +155,48 @@ def test_tree_named_wood_target_is_valid_gather_start_evidence():
     assert row['raw_prerequisite']['direct_product'] == 'wooden-chest'
 
 
+def test_receipt_tracked_handcraft_has_current_start_facts_without_fake_travel():
+    state, data = snapshot(inventory={'stone': 5}), catalog()
+    state.factory['craft_jobs_protocol'] = 1
+    plan = FactoryPlanner(data, state, 'iron_smelting')._need('stone-furnace', 1)
+    step = plan.steps[0]
+    plan = replace(plan, steps=(replace(step, action='factory_craft_job',
+        effect='craft_job_complete', parameters={**step.parameters, 'receipt': 'stone-test'}),))
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    assert row['unknowns'] == []
+    assert row['travel_tiles_lower_bound'] == 0
+    assert row['delivers_or_crafts'] == []  # A queued craft has not delivered output.
+    assert row['craft_start_evidence'] == {
+        'observed_tick': state.tick, 'native_recipe': 'stone-furnace',
+        'input_costs_match_native_recipe': True, 'inputs_in_inventory_now': True,
+        'recipe_unlocked_and_handcraftable': True,
+        'player_connected_and_bound': True, 'crafting_queue_empty': True,
+        'craft_job_protocol_ready': True,
+        'expected_products_after_native_verification': {'stone-furnace': 1},
+        'native_receipt_required_for_completion': True,
+    }
+    context, questions, _ = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'iron_smelting')},
+        [plan])
+    assert context['candidate_evidence'][plan.id]['craft_start_evidence'] == row['craft_start_evidence']
+    assert 'expected output still needs native verification' in str(questions)
+    assert plan.steps[0].allowed(state)
+
+    state.factory['craft_jobs_protocol'] = True  # Bool must not impersonate protocol version 1.
+    bad = candidate_evidence(state, data, [plan])[plan.id]['craft_start_evidence']
+    assert bad['craft_job_protocol_ready'] is False
+    assert not plan.steps[0].allowed(state)
+    state.factory['craft_jobs_protocol'] = 1
+    state.inventory['stone'] = 0
+    bad = candidate_evidence(state, data, [plan])[plan.id]['craft_start_evidence']
+    assert bad['inputs_in_inventory_now'] is False
+    assert not plan.steps[0].allowed(state)
+    stale = replace(plan, materials={'work_intent': {'observed_tick': state.tick - 1}})
+    assert candidate_evidence(state, data, [stale])[stale.id]['craft_start_evidence'] is None
+    changed = replace(plan, steps=(replace(plan.steps[0], costs={'stone': 4}),))
+    assert candidate_evidence(state, data, [changed])[changed.id]['craft_start_evidence'] is None
+
+
 def test_local_rubric_does_not_require_one_pickup_to_launch_a_rocket():
     state, data, plans = transfers()
     support = scheduling_context(state, data, plans, 'rocket_launch')
