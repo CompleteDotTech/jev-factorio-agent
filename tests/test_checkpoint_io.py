@@ -49,7 +49,15 @@ def test_external_or_process_changes_invalidate_coalescing(tmp_path, change):
     memory.save(path)
     expected = path.read_bytes()
     if change == 'delete': path.unlink()
-    elif change == 'overwrite': path.write_bytes(expected.replace(b'running', b'blocked'))
+    elif change == 'overwrite':
+        before = path.stat()
+        changed = expected.replace(b'"running"', b'"blocked"')
+        assert changed != expected
+        path.write_bytes(changed)
+        # The coalescing contract uses metadata to detect external edits.
+        # Make this edit observable even on a coarse or fast filesystem.
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 2_000_000_000))
+        assert path.stat().st_mtime_ns != before.st_mtime_ns
     elif change == 'replace':
         other = tmp_path/'other';other.write_bytes(expected);os.replace(other, path)
     elif change == 'other_path': path = tmp_path/'other.json'
