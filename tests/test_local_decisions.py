@@ -160,6 +160,7 @@ def test_furnace_craft_keeps_current_lab_planner_provenance_without_claiming_lab
     state.factory['craft_jobs_protocol'] = 1
     plan = ReadyWorkPlanner(data, state, 'rocket_launch')._need('lab', 1)
     assert plan.steps[0].action == 'factory_craft'
+    assert plan.materials['local_objective']['item'] == 'lab'
     assert plan.materials['craft_dependency'] == {
         'observed_tick': state.tick, 'recipe': 'stone-furnace',
         'product': 'stone-furnace',
@@ -190,6 +191,11 @@ def test_furnace_craft_keeps_current_lab_planner_provenance_without_claiming_lab
     unrelated = replace(plan, materials={**plan.materials, 'craft_dependency': {
         **plan.materials['craft_dependency'], 'planner_item_path': ['unrelated', 'stone-furnace']}})
     assert candidate_evidence(state, data, [unrelated])[unrelated.id]['craft_dependency'] is None
+    missing_target = replace(plan, materials={key: value for key, value in plan.materials.items()
+                                              if key != 'local_objective'})
+    assert candidate_evidence(state, data, [missing_target])[missing_target.id]['craft_dependency'] is None
+    empty_target = replace(plan, materials={**plan.materials, 'local_objective': {'item': ''}})
+    assert candidate_evidence(state, data, [empty_target])[empty_target.id]['craft_dependency'] is None
     data.recipes['stone-furnace']['enabled'] = False
     assert candidate_evidence(state, data, [plan])[plan.id]['craft_dependency'] is None
 
