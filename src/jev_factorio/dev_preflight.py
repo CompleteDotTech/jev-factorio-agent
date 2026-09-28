@@ -112,7 +112,7 @@ def probe(config_path: Path, checkpoint_path: Path, *, client_factory=None,
           dmi_path: Path = DMI_UUID) -> dict:
     config = load_json(stable_read(config_path, private=True))
     if (not isinstance(config, dict) or set(config) != CONFIG_KEYS
-            or type(config['schema']) is not int or config['schema'] != 1
+            or type(config['schema']) is not int or config['schema'] not in (1, 2)
             or type(config['port']) is not int or not 1 <= config['port'] <= 65535
             or not isinstance(config['session_id'], str) or not 0 < len(config['session_id']) <= 128
             or not isinstance(config['password_file'], str) or not Path(config['password_file']).is_absolute()):
@@ -122,13 +122,17 @@ def probe(config_path: Path, checkpoint_path: Path, *, client_factory=None,
     if expected == production or actual != expected or actual == production:
         raise ValueError('Development VM identity mismatch; no network connection attempted')
     checkpoint, checkpoint_hash = checkpoint_read(checkpoint_path)
+    if config['schema'] == 2:
+        from .dev_preflight_v2 import idle_checkpoint
+        idle_checkpoint(checkpoint)
     if checkpoint['session_id'] != config['session_id']:
         raise ValueError('Checkpoint differs from pinned session; no network connection attempted')
     password_raw = stable_read(Path(config['password_file']), maximum=4096, private=True)
     password = password_raw.decode('utf-8').rstrip('\r\n')
     if not password or '\n' in password or '\r' in password or '\x00' in password:
         raise ValueError('Invalid private RCON credential file')
-    code = files('jev_factorio').joinpath('lua/acceptance_probe.lua').read_text()
+    query = 'lua/acceptance_probe.lua' if config['schema'] == 1 else 'lua/acceptance_probe_v2.lua'
+    code = files('jev_factorio').joinpath(query).read_text(encoding='utf-8')
     if client_factory is None:
         from factorio_rcon import RCONClient
         client_factory = RCONClient
@@ -143,8 +147,14 @@ def probe(config_path: Path, checkpoint_path: Path, *, client_factory=None,
         client.close()
     if sha256(stable_read(checkpoint_path)) != checkpoint_hash:
         raise ValueError('Checkpoint changed during native probe')
-    issues = inspect_native(native, checkpoint, config['session_id'])
-    return {'schema': 'jev-factorio.dev-preflight.v1',
+    if config['schema'] == 2:
+        from .dev_preflight_v2 import inspect_native as inspect_v2
+        from .dev_preflight_v2 import normalize_native
+        native = normalize_native(native)
+        issues = inspect_v2(native, checkpoint, config['session_id'])
+    else:
+        issues = inspect_native(native, checkpoint, config['session_id'])
+    report = {'schema': 'jev-factorio.dev-preflight.v' + str(config['schema']),
         'observed_at_utc': datetime.now(timezone.utc).isoformat(),
         'vm_uuid': actual, 'production_vm_uuid': production,
         'checkpoint_sha256': checkpoint_hash, 'query_sha256': sha256(code.encode()),
@@ -152,6 +162,10 @@ def probe(config_path: Path, checkpoint_path: Path, *, client_factory=None,
         'gameplay_started': False, 'deployment_authorized': False,
         'limitations': ['Read-only point-in-time evidence, not a single-writer lease or throughput test.',
                        'VM isolation, matching save/checkpoint handoff and native trials remain operator gates.']}
+    if config['schema'] == 2:
+        from .dev_preflight_v2 import SCOPE
+        report.update(ownership_scope=SCOPE, native_acceptance_proven=False)
+    return report
 
 
 def cli(argv=None) -> None:

@@ -126,6 +126,45 @@ def checked_economic_binding(trial: dict, initial: dict, final: dict, rows: list
                     raise ValueError('Coal economic admission requires native protocol 2')
 
 
+def checked_preflight(preflight: dict, trial: dict, initial: dict, rows=None) -> None:
+    """Legacy unsupported evidence and qualified v2 are separate boundaries."""
+    if (not isinstance(preflight, dict)
+            or preflight.get('checkpoint_sha256') != trial['initial_checkpoint_sha256']
+            or preflight.get('vm_uuid') != trial['vm_uuid']
+            or preflight.get('production_vm_uuid') != trial['production_vm_uuid']):
+        raise ValueError('Preflight differs from complete trial boundary')
+    if preflight.get('schema') == 'jev-factorio.dev-preflight.v1':
+        if (preflight.get('ready_for_coordinated_validation') is not False
+                or not {'solid_preflight_not_supported', 'coal_preflight_not_supported'} <=
+                       set(preflight.get('issues', []))):
+            raise ValueError('Legacy complete preflight must retain unsupported ownership')
+        return
+    from .dev_preflight_v2 import REPORT_SCHEMA, SCOPE, inspect_native, query_sha256
+    if (preflight.get('schema') != REPORT_SCHEMA or preflight.get('ownership_scope') != SCOPE
+            or preflight.get('ready_for_coordinated_validation') is not True
+            or preflight.get('issues') != [] or preflight.get('gameplay_started') is not False
+            or preflight.get('deployment_authorized') is not False
+            or preflight.get('native_acceptance_proven') is not False
+            or preflight.get('query_sha256') != query_sha256()
+            or inspect_native(preflight.get('native'), initial, initial['session_id'])):
+        raise ValueError('Unqualified v2 transport ownership preflight')
+    if rows is not None:
+        native = preflight['native']
+        if not rows or rows[0]['state']['tick'] < native['tick']:
+            raise ValueError('Gameplay precedes ownership preflight')
+        for row in rows:
+            for label in ('state', 'after_state'):
+                runtime = row[label]['factory'].get('acceptance_runtime')
+                if (not isinstance(runtime, dict) or any(not same(runtime.get(k), native[k])
+                        for k in ('session_id', 'player_index', 'actor_unit', 'surface_index',
+                                  'force_index', 'mods'))):
+                    raise ValueError('Gameplay differs from preflight actor identity')
+
+
+def same(left, right):
+    return canonical(left) == canonical(right)
+
+
 def project_record(row: dict, redactor: Redactor, omissions: Counter) -> dict:
     if not isinstance(row, dict):
         raise ValueError('Invalid gameplay record')
@@ -190,15 +229,8 @@ def capture(*, gameplay: Path, trial_path: Path, initial_checkpoint: Path,
         raise ValueError('Initial checkpoint differs from predeclared trial')
     preflight_raw = stable_read(preflight_path)
     preflight = load_json(preflight_raw)
-    if (preflight.get('schema') != 'jev-factorio.dev-preflight.v1'
-            or preflight.get('checkpoint_sha256') != trial['initial_checkpoint_sha256']
-            or preflight.get('vm_uuid') != trial['vm_uuid']
-            or preflight.get('production_vm_uuid') != trial['production_vm_uuid']
-            or preflight.get('ready_for_coordinated_validation') is not False
-            or not {'solid_preflight_not_supported', 'coal_preflight_not_supported'} <=
-                   set(preflight.get('issues', []))):
-        raise ValueError('Preflight differs from complete trial boundary')
     initial, final = checked_checkpoint(initial_raw), checked_checkpoint(final_raw)
+    checked_preflight(preflight, trial, initial)
     checked_checkpoint_progress(initial, final)
     if (initial.get('solid_intents') != trial['solid_intents']
             or final.get('solid_intents') != trial['solid_intents']
@@ -215,6 +247,7 @@ def capture(*, gameplay: Path, trial_path: Path, initial_checkpoint: Path,
     redactor = Redactor(dict(os.environ if environ is None else environ))
     omissions = Counter()
     projected = [project_record(row, redactor, omissions) for row in records(raw)]
+    checked_preflight(preflight, trial, initial, projected)
     checked_economic_binding(trial, initial, final, projected)
     for row in projected:
         for label in ('state', 'after_state'):
@@ -273,6 +306,7 @@ def verify(directory: Path) -> dict:
     preflight = load_json(content['preflight.json'])
     initial = checked_checkpoint(content['initial-checkpoint.json'])
     final = checked_checkpoint(content['final-checkpoint.json'])
+    checked_preflight(preflight, trial, initial, projected)
     checked_checkpoint_progress(initial, final)
     checked_economic_binding(trial, initial, final, projected)
     if (trial['schema'] != TRIAL_SCHEMA_V2 or len(projected) != manifest.get('records')
@@ -281,13 +315,6 @@ def verify(directory: Path) -> dict:
             or manifest.get('deployment_authorized') is not False
             or manifest.get('source_initial_checkpoint_sha256') != trial['initial_checkpoint_sha256']
             or manifest.get('source_save', {}).get('sha256') != trial['initial_save_sha256']
-            or preflight.get('schema') != 'jev-factorio.dev-preflight.v1'
-            or preflight.get('checkpoint_sha256') != trial['initial_checkpoint_sha256']
-            or preflight.get('vm_uuid') != trial['vm_uuid']
-            or preflight.get('production_vm_uuid') != trial['production_vm_uuid']
-            or preflight.get('ready_for_coordinated_validation') is not False
-            or not {'solid_preflight_not_supported', 'coal_preflight_not_supported'} <=
-                   set(preflight.get('issues', []))
             or any(cp.get('solid_intents') != trial['solid_intents']
                    or cp.get('coal_targets') != trial['coal_targets']
                    or cp.get('solid_science_policy') is not trial['configuration']['solid_science_policy']
