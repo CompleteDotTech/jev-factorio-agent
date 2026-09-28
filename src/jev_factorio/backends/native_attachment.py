@@ -90,6 +90,8 @@ if c and c.connector_ledger then ok=ok and c.connector_ledger.protocol==1
 if n then ok=ok and type(n.assets)=="table" and type(nc)=="table"
     and nc.fair_tick==(f and f.tick_handler)
     and nc.observe==(c and c.observe)
+    and nc.snapshot_v1==(c and c.observation_snapshot)
+    and nc.snapshot_v2==(c and c.observation_snapshot_v2)
     and nc.transfer==(c and c.transfer)
     and nc.configure==(c and c.configure)
     and nc.connector_begin==(c and c.connector_begin)
@@ -169,7 +171,10 @@ def prepare_install_command(script: str, attachment=None) -> str:
         '"Native asset revision changed"); n.assets[name]=hash end; '
         'local c=rt.campaign; local f=rt.fair; '
         'n.callbacks={fair_tick=f and f.tick_handler or nil, '
-        'observe=c and c.observe or nil,transfer=c and c.transfer or nil, '
+        'observe=c and c.observe or nil, '
+        'snapshot_v1=c and c.observation_snapshot or nil, '
+        'snapshot_v2=c and c.observation_snapshot_v2 or nil, '
+        'transfer=c and c.transfer or nil, '
         'configure=c and c.configure or nil, '
         'connector_begin=c and c.connector_begin or nil, '
         'connector_finish=c and c.connector_finish or nil, '

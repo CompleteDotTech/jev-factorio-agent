@@ -59,6 +59,8 @@ def test_preflight_is_fixed_read_only_query_and_rejects_partial_chain(tmp_path, 
     assert 'c.observe==b.observer and c.transfer==b.transfer' in PROBE
     assert 'c.observe==j.observe_wrapper and c.transfer==l.transfer' in PROBE
     assert 'nc.observe==(c and c.observe)' in PROBE
+    assert 'nc.snapshot_v1==(c and c.observation_snapshot)' in PROBE
+    assert 'nc.snapshot_v2==(c and c.observation_snapshot_v2)' in PROBE
     assert 'nc.connector_begin==(c and c.connector_begin)' in PROBE
     for corruption in ('qualified', 'missing_module', 'wrong_schema'):
         row = qualified()
@@ -148,6 +150,49 @@ def test_fresh_install_records_exact_assets_and_reattaches_without_external_rece
     row['native_installation']['assets'].pop('connector_ownership')
     with pytest.raises(RuntimeError, match='requires reconciliation'):
         readback(Client())
+
+
+def test_versioned_probe_rejects_replaced_observer_closure_without_mutation():
+    LuaRuntime = pytest.importorskip('lupa.lua52').LuaRuntime
+    lua = LuaRuntime(unpack_returned_tuples=True)
+    results = []
+    lua.globals().rcon = lua.table_from({'print': results.append})
+    lua.globals().helpers = lua.table_from({
+        'table_to_json': lambda row: row['qualified'],
+        'json_to_table': lambda encoded: lua.table_from(json.loads(encoded)),
+    })
+    lua.execute('''
+        local actor={valid=true,unit_number=17}
+        local force={};local surface={}
+        actor.force=force;actor.surface=surface
+        local player={connected=true,character=actor,force=force,surface=surface,
+                      cheat_mode=false}
+        game={speed=1,tick_paused=false,get_player=function() return player end}
+        local function callback() end
+        local fair={actor=callback,bind=callback,observe=callback,place=callback,
+                    tick_handler=callback}
+        local launch={schema=1,launch=callback,craft=callback,observer=callback,
+                      transfer=callback}
+        local campaign={launch=launch.launch,craft=launch.craft,
+                        observe=launch.observer,transfer=launch.transfer,
+                        configure=callback,observation_snapshot=callback,
+                        observation_snapshot_v2=callback}
+        jev_fle_runtime={jev_session_id='synthetic-session',agent_characters={[1]=actor},
+                         campaign=campaign,fair=fair,launch_readiness=launch}
+    ''')
+    source = files('jev_factorio').joinpath('lua/factory.lua').read_text()
+    marker = prepare_install_command(source)[len(source) + 1:]
+    lua.execute(marker)
+    lua.execute(PROBE)
+    assert results.pop() is True
+    lua.execute('jev_fle_runtime.campaign.observation_snapshot_v2=function() end')
+    lua.execute(PROBE)
+    assert results.pop() is False
+    lua.execute('jev_fle_runtime.campaign.observation_snapshot_v2='
+                'jev_fle_runtime.native_installation.callbacks.snapshot_v2')
+    lua.execute('jev_fle_runtime.campaign.observation_snapshot=function() end')
+    lua.execute(PROBE)
+    assert results.pop() is False
 
 
 def test_install_marker_records_once_and_refuses_changed_hash():
