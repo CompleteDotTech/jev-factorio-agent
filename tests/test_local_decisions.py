@@ -273,6 +273,7 @@ def test_furnace_craft_keeps_current_lab_planner_provenance_without_claiming_lab
         {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
         [plan])
     assert context['candidate_evidence'][plan.id]['craft_dependency'] == row['craft_dependency']
+    assert 'Prefer this bounded craft over observe' in questions['candidate']['instructions']
     assert 'later production still need fresh native receipt and precondition checks' in str(questions)
     benefit = questions[plan.id + '/benefit']['instructions']
     observation = questions[plan.id + '/needs_observation']['instructions']
@@ -287,6 +288,7 @@ def test_furnace_craft_keeps_current_lab_planner_provenance_without_claiming_lab
         {'facts': state.for_jev(), **scheduling_context(state, data, [stale], 'rocket_launch')},
         [stale])
     assert stale_context['candidate_evidence'][stale.id]['craft_dependency'] is None
+    assert 'Prefer this bounded craft over observe' not in stale_questions['candidate']['instructions']
     assert 'bounded intermediate product' not in stale_questions[stale.id + '/benefit']['instructions']
     stale_start = replace(plan, materials={**plan.materials,
         'work_intent': {'observed_tick': state.tick - 1}})
@@ -295,6 +297,7 @@ def test_furnace_craft_keeps_current_lab_planner_provenance_without_claiming_lab
          **scheduling_context(state, data, [stale_start], 'rocket_launch')},
         [stale_start])
     assert stale_start_context['candidate_evidence'][stale_start.id]['craft_start_evidence'] is None
+    assert 'Prefer this bounded craft over observe' not in stale_start_questions['candidate']['instructions']
     assert 'future completion is not a missing start observation' not in (
         stale_start_questions[stale_start.id + '/needs_observation']['instructions'])
     unrelated = replace(plan, materials={**plan.materials, 'craft_dependency': {
@@ -307,6 +310,42 @@ def test_furnace_craft_keeps_current_lab_planner_provenance_without_claiming_lab
     assert candidate_evidence(state, data, [empty_target])[empty_target.id]['craft_dependency'] is None
     data.recipes['stone-furnace']['enabled'] = False
     assert candidate_evidence(state, data, [plan])[plan.id]['craft_dependency'] is None
+
+
+@pytest.mark.parametrize('change', [
+    ('start', 'inputs_in_inventory_now', False),
+    ('start', 'crafting_queue_empty', False),
+    ('start', 'player_connected_and_bound', False),
+    ('start', 'recipe_unlocked_and_handcraftable', False),
+    ('start', 'native_recipe', 'wrong-recipe'),
+    ('start', 'observed_tick', -1),
+    ('start', 'native_receipt_required_for_completion', False),
+    ('dependency', 'observed_tick', -1),
+    ('dependency', 'planner_item_path', ['unrelated', 'stone-furnace']),
+    ('row', 'unknowns', ['missing native actor']),
+])
+def test_handcraft_choice_hint_requires_current_complete_start_and_path(change):
+    state, data = snapshot(inventory={'stone': 5}), catalog()
+    data.recipes['lab'] = recipe('lab', {'iron-plate': 1})
+    state.factory['craft_jobs_protocol'] = 1
+    planner = ReadyWorkPlanner(data, state, 'rocket_launch')
+    planner._set_focus('lab', 1)
+    plan = planner._need('lab', 1)
+    step = plan.steps[0]
+    plan = replace(plan, steps=(replace(step, action='factory_craft_job',
+        effect='craft_job_complete', parameters={**step.parameters, 'receipt': 'lab-test'}),))
+    context = {'facts': state.for_jev(),
+               **scheduling_context(state, data, [plan], 'rocket_launch')}
+    _, questions, _ = question_batch(context, [plan])
+    assert 'Prefer this bounded craft over observe' in questions['candidate']['instructions']
+    altered = deepcopy(context)
+    section, key, value = change
+    row = altered['candidate_evidence'][plan.id]
+    nested = {'start': 'craft_start_evidence',
+              'dependency': 'craft_dependency', 'row': None}[section]
+    (row[nested] if nested else row)[key] = value
+    _, questions, _ = question_batch(altered, [plan])
+    assert 'Prefer this bounded craft over observe' not in questions['candidate']['instructions']
 
 
 def test_paid_joint_furnace_placement_has_observed_site_and_lab_dependency():

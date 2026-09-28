@@ -164,6 +164,51 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
             "A larger pickup quantity alone is not such a fact. Later crafting "
             "and output still require fresh native verification."
             if current_prerequisite and unlinked_lookahead else "")
+        craft_choice_hint = ""
+        if len(selected) == 1 and type(tick) is int and isinstance(target, str) and target:
+            plan = selected[0]
+            row = evidence.get(plan.id)
+            if isinstance(row, dict) and len(plan.steps) == 1:
+                step = plan.steps[0]
+                start = row.get('craft_start_evidence')
+                dependency = row.get('craft_dependency')
+                path = dependency.get('planner_item_path') if isinstance(dependency, dict) else None
+                expected = (start.get('expected_products_after_native_verification')
+                            if isinstance(start, dict) else None)
+                if (step.action == 'factory_craft_job'
+                        and isinstance(step.item, str) and step.item
+                        and isinstance(step.parameters, dict)
+                        and isinstance(step.parameters.get('receipt'), str)
+                        and bool(step.parameters['receipt'])
+                        and row.get('work_scope') == 'immediate'
+                        and row.get('unknowns') == []
+                        and isinstance(start, dict)
+                        and start.get('observed_tick') == tick
+                        and start.get('native_recipe') == step.parameters.get('recipe')
+                        and all(start.get(key) is True for key in (
+                            'input_costs_match_native_recipe', 'inputs_in_inventory_now',
+                            'recipe_unlocked_and_handcraftable', 'player_connected_and_bound',
+                            'crafting_queue_empty', 'craft_job_protocol_ready',
+                            'native_receipt_required_for_completion'))
+                        and isinstance(expected, dict)
+                        and type(expected.get(step.item)) is int
+                        and expected[step.item] > 0
+                        and isinstance(dependency, dict)
+                        and dependency.get('observed_tick') == tick
+                        and dependency.get('current_craft_product') == step.item
+                        and dependency.get('basis') == (
+                            'current_recursive_planner_provenance_and_native_recipe')
+                        and isinstance(path, list) and len(path) >= 2
+                        and path[0] == target and path[-1] == step.item):
+                    craft_choice_hint = (
+                        " The sole offered handcraft has current native recipe, "
+                        "carried-input, actor, queue, and receipt-protocol start facts "
+                        "plus a current planner path to the local target. Prefer this "
+                        "bounded craft over observe unless another current fact "
+                        "identifies a specific missing or contradictory start condition. "
+                        "Do not require certainty that the eventual target will finish; "
+                        "this craft and later output still require native receipt and "
+                        "fresh postcondition checks.")
         questions = {
             "candidate": {
                 "type": "choice",
@@ -180,7 +225,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                                  "Report confidence in choosing the best next action from this "
                                  "observed frontier, not confidence in completing the ultimate goal. "
                                  "Do not assume other questions' answers are available."
-                                 + choice_priority_hint),
+                                 + choice_priority_hint + craft_choice_hint),
                 "criteria": {**{p.id: p.description for p in selected},
                              "observe": "Gather another observation without mutating the factory"},
             }
