@@ -42,11 +42,18 @@ LEGACY_OBSERVATION_SHA256 = 'f51ea4aeb66b5c11366dbfe37cb755f2187152fa634928ac8a9
 EXPANDED_OBSERVATION_PROFILE = 'e759-observation-v2-expanded-oil-v3'
 EXPANDED_OBSERVATION_SHA256 = '5cde46b9aea45840c17f820252611defe7b4eb4e82ba3cfe1d0d5d25225a6351'
 EXPANDED_OBSERVATION_ASSET = 'observation_v2_anchor_v3.lua'
+WATER_ORIGIN_OBSERVATION_PROFILE = 'e759-observation-v2-water-origin-v4'
+WATER_ORIGIN_OBSERVATION_SHA256 = '3e989a8a6686a964f457a5c9820dc7ad68f1e25dcbd8a8ca3d02218271be6989'
+WATER_ORIGIN_OBSERVATION_ASSET = 'observation_v2_water_origin_v4.lua'
 
 
 def _asset_source(name, profile=False):
-    if name == 'observation_v2' and profile != LEGACY_OBSERVATION_PROFILE:
-        return files('jev_factorio').joinpath('lua/' + EXPANDED_OBSERVATION_ASSET)
+    if name == 'observation_v2':
+        if profile == LEGACY_OBSERVATION_PROFILE:
+            return files('jev_factorio').joinpath('lua/observation_v2.lua')
+        asset = (EXPANDED_OBSERVATION_ASSET if profile == EXPANDED_OBSERVATION_PROFILE
+                 else WATER_ORIGIN_OBSERVATION_ASSET)
+        return files('jev_factorio').joinpath('lua/' + asset)
     return files('jev_factorio').joinpath('lua/' + name + '.lua')
 
 
@@ -225,10 +232,13 @@ def readback(client, *, receipt_path=None):
                        for value in native['assets'].values())):
             raise RuntimeError('Native installed-source manifest requires reconciliation')
         profile = native['profile']
-        if profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE}:
-            observation_hash = (LEGACY_OBSERVATION_SHA256
-                                if profile == LEGACY_OBSERVATION_PROFILE
-                                else EXPANDED_OBSERVATION_SHA256)
+        if profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE,
+                       WATER_ORIGIN_OBSERVATION_PROFILE}:
+            observation_hash = {
+                LEGACY_OBSERVATION_PROFILE: LEGACY_OBSERVATION_SHA256,
+                EXPANDED_OBSERVATION_PROFILE: EXPANDED_OBSERVATION_SHA256,
+                WATER_ORIGIN_OBSERVATION_PROFILE: WATER_ORIGIN_OBSERVATION_SHA256,
+            }[profile]
             if (result['modules']['connector_ownership']
                     or result['modules']['successors']
                     or native['assets'].get('factory') != PINNED_ASSETS['factory']
@@ -241,7 +251,8 @@ def readback(client, *, receipt_path=None):
             raise RuntimeError('Unknown native installation profile requires reconciliation')
         for name, expected in native['assets'].items():
             source = _asset_source(name, profile)
-            if profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE} and name != 'observation_v2':
+            if profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE,
+                           WATER_ORIGIN_OBSERVATION_PROFILE} and name != 'observation_v2':
                 continue  # Exact e759 hash is pinned; retained closure is reused.
             if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
                 raise RuntimeError('Native Lua source differs from installed manifest')
@@ -287,7 +298,8 @@ def require_asset(attachment, name):
     expected = (manifest['assets'].get(name) if isinstance(manifest, dict)
                 else PINNED_ASSETS.get(name))
     if (isinstance(manifest, dict)
-            and profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE}
+            and profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE,
+                            WATER_ORIGIN_OBSERVATION_PROFILE}
             and name != 'observation_v2'):
         if expected != PINNED_ASSETS.get(name):
             raise RuntimeError('Retained native asset differs from the legacy profile')

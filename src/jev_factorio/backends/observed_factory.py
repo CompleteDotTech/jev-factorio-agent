@@ -18,9 +18,9 @@ class ObservedFactory(NativeFactory):
             require_asset(backend._native_attachment, 'observation_v2')
         else:
             self.command(files("jev_factorio").joinpath("lua/observation.lua").read_text())
-            from .native_attachment import EXPANDED_OBSERVATION_ASSET
+            from .native_attachment import WATER_ORIGIN_OBSERVATION_ASSET
             ready = self.command(
-                files("jev_factorio").joinpath("lua/" + EXPANDED_OBSERVATION_ASSET).read_text())
+                files("jev_factorio").joinpath("lua/" + WATER_ORIGIN_OBSERVATION_ASSET).read_text())
             if ready.strip() != 'JEV_ATOMIC_READY|2':
                 raise RuntimeError('Native coherent observation negotiation failed')
         self.coherent_observation_version = 2

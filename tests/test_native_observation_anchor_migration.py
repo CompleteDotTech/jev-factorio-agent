@@ -12,6 +12,8 @@ from jev_factorio.backends.native_attachment import (
     EXPANDED_OBSERVATION_SHA256, LEGACY_OBSERVATION_PROFILE,
     LEGACY_OBSERVATION_SHA256, PROBE, prepare_install_command, readback,
     require_asset, PINNED_ASSETS, PINNED_SOURCE_COMMIT, PINNED_SOURCE_TREE,
+    WATER_ORIGIN_OBSERVATION_ASSET, WATER_ORIGIN_OBSERVATION_PROFILE,
+    WATER_ORIGIN_OBSERVATION_SHA256,
 )
 from jev_factorio.backends.native_observation_anchor_migration import (
     SENTINEL, _command, _manifest, migrate_observation_anchor_v3,
@@ -31,10 +33,13 @@ def test_new_asset_digest_and_fresh_installer_logical_identity():
     source = files('jev_factorio').joinpath('lua/' + EXPANDED_OBSERVATION_ASSET).read_bytes()
     assert hashlib.sha256(source).hexdigest() == EXPANDED_OBSERVATION_SHA256
     assert EXPANDED_OBSERVATION_SHA256 != LEGACY_OBSERVATION_SHA256
+    assert prepare_install_command(source.decode('utf-8')) == source.decode('utf-8')
+    source = files('jev_factorio').joinpath('lua/' + WATER_ORIGIN_OBSERVATION_ASSET).read_bytes()
+    assert hashlib.sha256(source).hexdigest() == WATER_ORIGIN_OBSERVATION_SHA256
     command = prepare_install_command(source.decode('utf-8'))
     assert command != source.decode('utf-8')
     assert 'observation_v2' in command
-    assert EXPANDED_OBSERVATION_SHA256 in command
+    assert WATER_ORIGIN_OBSERVATION_SHA256 in command
     assert prepare_install_command(
         files('jev_factorio').joinpath('lua/observation_v2.lua').read_text()
     ) == files('jev_factorio').joinpath('lua/observation_v2.lua').read_text()
@@ -52,6 +57,11 @@ def test_old_and_new_attachment_profiles_are_exact_and_distinct():
     assert proposed['assets']['observation_v2'] == EXPANDED_OBSERVATION_SHA256
     row['native_installation'] = proposed
     assert readback(Client())['native_installation']['profile'] == EXPANDED_OBSERVATION_PROFILE
+    assert require_asset(row, 'observation_v2')
+    row['native_installation'] = {**proposed, 'profile': WATER_ORIGIN_OBSERVATION_PROFILE,
+                                  'assets': {**proposed['assets'],
+                                             'observation_v2': WATER_ORIGIN_OBSERVATION_SHA256}}
+    assert readback(Client())['native_installation']['profile'] == WATER_ORIGIN_OBSERVATION_PROFILE
     assert require_asset(row, 'observation_v2')
     row['native_installation']['assets']['observation_v2'] = LEGACY_OBSERVATION_SHA256
     with pytest.raises(RuntimeError, match='profile requires reconciliation'):

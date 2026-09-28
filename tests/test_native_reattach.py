@@ -12,7 +12,7 @@ import pytest
 from jev_factorio.backends.fair_actions import FairActions
 from jev_factorio.backends.fle import FleBackend
 from jev_factorio.backends.native_attachment import (
-    EXPANDED_OBSERVATION_ASSET,
+    WATER_ORIGIN_OBSERVATION_ASSET,
     PINNED_ASSETS, PINNED_SOURCE_COMMIT, PINNED_SOURCE_TREE, PROBE,
     readback, require_asset, prepare_install_command, NATIVE_SCHEMA,
     _installer_scripts,
@@ -136,7 +136,7 @@ def test_fresh_install_records_exact_assets_and_reattaches_without_external_rece
         'schema': NATIVE_SCHEMA, 'session_id': row['session_id'],
         'actor_unit': row['actor_unit'], 'profile': False,
         'assets': {name: hashlib.sha256(
-            root.joinpath(EXPANDED_OBSERVATION_ASSET if name == 'observation_v2'
+            root.joinpath(WATER_ORIGIN_OBSERVATION_ASSET if name == 'observation_v2'
                           else name + '.lua').read_bytes()).hexdigest()
                    for name, enabled in row['modules'].items() if enabled},
     }
