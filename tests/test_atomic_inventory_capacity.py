@@ -204,6 +204,9 @@ def test_actual_lua_does_not_cache_headroom_or_mix_ticks():
 @pytest.mark.parametrize('headroom', [0, 1, 3, 50])
 def test_actual_lua_to_decoder_to_fuel_acquisition(monkeypatch, headroom):
     backend, native, payload, calls = setup(monkeypatch)
+    from jev_factorio.backends.native_attachment import LEGACY_OBSERVATION_PROFILE
+    backend._native_attachment = {
+        'native_installation': {'profile': LEGACY_OBSERVATION_PROFILE}}
     due, catalog = due_scenario()
     lua = runtime()
     with_native_capacity(lua, str(headroom))

@@ -193,6 +193,9 @@ def test_bootstrap_connected_chest_just_beyond_actor_radius(pinned):
 
 def test_radius_boundary_payload_passes_actual_python_decoder(monkeypatch):
     backend, _, payload, calls = atomic_setup(monkeypatch)
+    from jev_factorio.backends.native_attachment import LEGACY_OBSERVATION_PROFILE
+    backend._native_attachment = {
+        'native_installation': {'profile': LEGACY_OBSERVATION_PROFILE}}
     lua = runtime()
     lua.execute('''player.position={x=0,y=0};add_drill(51,999,0);add_chest(52,1001,0)
         storage.campaign.observation_snapshot_v2(0,51)''')
