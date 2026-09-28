@@ -118,6 +118,11 @@ def controller(backend, tmp_path, *, kind=ScenarioLoop, resume=False):
         loop.memory = loop.memory_type(
             backend.state.session_id, "rocket_launch", active_goal="rocket_launch",
             completed_goals={"stockpile_fuel": 0, "bootstrap_mining": 0}, last_tick=300)
+        # This fixture starts after paid output construction; retain that
+        # explicit provenance instead of asking the controller to adopt it.
+        loop.memory.output_commitments = {
+            source: {key: deepcopy(row[key]) for key in ('source_unit', 'layout', 'parts')}
+            for source, row in backend.state.factory['output_buffers']['sources'].items()}
     return loop
 
 

@@ -251,7 +251,7 @@ def test_response_validation_never_depends_on_profiler_permission(nested, enable
 
 @pytest.mark.parametrize('change', [
     'chest.valid=false', 'chest.force={index=99}', 'chest.surface={index=99}',
-    'chest.name="steel-chest"', 'chest.position.x=1001.2',
+    'chest.name="steel-chest"', 'chest.position.x=1001.6',
 ])
 def test_output_endpoint_rejects_missing_foreign_or_misaligned_chest(change):
     lua = runtime()
@@ -276,7 +276,7 @@ def test_endpoint_included_only_once_within_existing_actor_radius():
     lua.execute('''add_drill(51,0,0);add_chest(52,2,0);storage.campaign.observation_snapshot_v2(0,51)
         assert(#captured.bootstrap.placed_entities==2 and captured.bootstrap.iron_ore_collected==7)
         assert(query_count==4)
-        local q=queries[2];assert(q.name=="wooden-chest" and q.limit==2 and q.radius==.15)
+        local q=queries[2];assert(q.name=="wooden-chest" and q.limit==2 and q.radius==.75)
         assert(q.position.x==2 and q.position.y==0 and q.force==force)''')
 
 
@@ -357,7 +357,7 @@ def test_lua_endpoint_query_bounds_match_decoder_contract():
     lua = runtime()
     lua.execute('add_drill(51,0,0);add_chest(52,2,0);storage.campaign.observation_snapshot_v2(0,51)')
     bounds = converted(lua.globals().captured)['bounds']
-    assert bounds['bootstrap_output_radius'] == .15
+    assert bounds['bootstrap_output_radius'] == .75
     assert bounds['bootstrap_output_limit'] == 2
 
 
