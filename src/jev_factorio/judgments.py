@@ -154,6 +154,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
         }
         for plan in selected:
             pointer = f"`candidate_plans[{json.dumps(plan.id)}]`"
+            placement_start = ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get(
+                'placement_start_evidence')
             craft_hint = (
                 " `craft_dependency` traces this current craft to the planner target; "
                 "later production still needs fresh native checks."
@@ -209,6 +211,12 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "when present; do not treat the unverified travel outcome as a missing "
                     "start fact. "
                     "Future action outcomes will be verified after execution, not assumed now."
+                    + (" For a placement, `placement_start_evidence` combines a current "
+                       "surveyed site offer with observed actor/queue facts. Judge missing "
+                       "start facts from those "
+                       "values; an unverified walking path or future build receipt is not a "
+                       "missing start observation."
+                       if placement_start else "")
                 ),
             }
         size = len(json.dumps({"state": context, "questions": questions},

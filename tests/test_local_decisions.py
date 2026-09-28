@@ -226,6 +226,9 @@ def test_paid_joint_furnace_placement_has_observed_site_and_lab_dependency():
     assert row['travel_tiles_lower_bound'] == round((42**2 + 109**2) ** .5, 3)
     assert row['placement_start_evidence']['site_position'] == {'x': -42, 'y': -109}
     assert row['placement_start_evidence']['paid_furnace_in_inventory_now'] is True
+    assert row['placement_start_evidence']['native_offer_checked_current_site_clearance'] is True
+    assert row['placement_start_evidence']['player_connected_and_bound_now'] is True
+    assert row['placement_start_evidence']['crafting_queue_empty_now'] is True
     assert row['placement_dependency'] == {
         'observed_tick': state.tick, 'planner_item_path': ['lab', 'copper-plate'],
         'machine_for_recipe': role,
@@ -238,6 +241,7 @@ def test_paid_joint_furnace_placement_has_observed_site_and_lab_dependency():
         [plan])
     assert context['candidate_evidence'][plan.id]['placement_dependency'] == row['placement_dependency']
     assert 'native transport and output remain unverified' in str(questions)
+    assert 'unverified walking path or future build receipt' in str(questions)
     missing = replace(plan, materials={key: value for key, value in plan.materials.items()
                                        if key != 'local_objective'})
     assert candidate_evidence(state, data, [missing])[missing.id]['placement_dependency'] is None
@@ -247,6 +251,16 @@ def test_paid_joint_furnace_placement_has_observed_site_and_lab_dependency():
     assert unfunded['placement_dependency'] is None
     assert not plan.steps[0].allowed(state)
     state.inventory['stone-furnace'] = 1
+    state.factory['crafting_queue'] = 1
+    busy = candidate_evidence(state, data, [plan])[plan.id]
+    assert busy['placement_start_evidence']['crafting_queue_empty_now'] is False
+    assert busy['placement_dependency'] is None
+    state.factory['crafting_queue'] = 0
+    state.factory['player_bound'] = False
+    unbound = candidate_evidence(state, data, [plan])[plan.id]
+    assert unbound['placement_start_evidence']['player_connected_and_bound_now'] is False
+    assert unbound['placement_dependency'] is None
+    state.factory['player_bound'] = True
     state.factory['entities'][role] = machine(position={'x': -42, 'y': -109})
     occupied = candidate_evidence(state, data, [plan])[plan.id]
     assert occupied['placement_start_evidence']['no_source_owned_at_role_now'] is False
@@ -261,6 +275,9 @@ def test_paid_joint_furnace_placement_has_observed_site_and_lab_dependency():
     state.factory['production_sites']['tick'] = state.tick
     data.recipes['copper-plate']['enabled'] = False
     assert candidate_evidence(state, data, [plan])[plan.id]['placement_dependency'] is None
+    data.recipes['copper-plate']['enabled'] = True
+    state.factory['production_sites']['sources'][role]['reason'] = 'survey_not_due'
+    assert candidate_evidence(state, data, [plan])[plan.id]['placement_start_evidence'] is None
 
 
 def test_local_rubric_does_not_require_one_pickup_to_launch_a_rocket():
