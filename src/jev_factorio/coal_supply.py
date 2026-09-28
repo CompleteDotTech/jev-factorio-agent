@@ -213,13 +213,26 @@ def corridor_reservations_clear(cell, rows) -> bool:
 
 def sources(snapshot) -> dict:
     data = snapshot.factory.get("coal_supply")
-    if (not isinstance(data, dict) or set(data) != {"protocol", "session_id", "tick", "actor_index", "surface_index", "force_index", "targets", "committed", "sources", "reason"}
-            or not solid.integer(data["protocol"], 1, 1) or data["session_id"] != snapshot.session_id
+    base_fields = {"protocol", "session_id", "tick", "actor_index", "surface_index", "force_index", "targets", "committed", "sources", "reason"}
+    if not isinstance(data, dict) or type(data.get("protocol")) is not int or data["protocol"] not in (1, 2):
+        raise ValueError("Missing or stale coal supply observation")
+    if (set(data) != (base_fields if data["protocol"] == 1 else base_fields | {"admission"})
+            or data["session_id"] != snapshot.session_id
             or not solid.integer(data["tick"]) or data["tick"] != snapshot.tick
             or any(not solid.integer(data[k], 1) for k in ("actor_index", "surface_index", "force_index"))
             or type(data["committed"]) is not bool or not isinstance(data["sources"], dict)
             or data["reason"] not in REASONS):
         raise ValueError("Missing or stale coal supply observation")
+    if data["protocol"] == 2:
+        admission = data["admission"]
+        bound = {"session_id", "tick", "actor_index", "surface_index", "force_index"}
+        if (not isinstance(admission, dict)
+                or set(admission) != bound | {"protocol", "qualified", "reason"}
+                or type(admission["protocol"]) is not int or admission["protocol"] != 1
+                or any(admission[key] != data[key] for key in bound)
+                or admission["qualified"] is not False
+                or admission["reason"] != "electric_conversion_and_construction_cost_unknown"):
+            raise ValueError("Coal admission evidence is incomplete or unbound")
     targets = validate_targets(data["targets"])
     rows = data["sources"]
     if (rows and set(rows) != set(targets)) or (data["committed"] and not rows):
