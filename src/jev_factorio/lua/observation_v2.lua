@@ -97,8 +97,12 @@ local function valid_target(player, entry)
     player.update_selected_entity(entity.position)
     return player.selected==entity
 end
-local function bootstrap(player, expected_unit)
+local function bootstrap(player, expected_unit, expected_position)
     if expected_unit ~= nil then assert(integer(expected_unit,1,9007199254740991),"Invalid bootstrap binding") end
+    if expected_position ~= nil then
+        assert(expected_unit ~= nil, "Unbound bootstrap position")
+        expected_position=point(expected_position)
+    end
     local found=player.surface.find_entities_filtered{
         force=player.force, name={"burner-mining-drill","wooden-chest"},
         position=player.position, radius=1000, limit=129}
@@ -113,6 +117,26 @@ local function bootstrap(player, expected_unit)
         names[#names+1]=entity.name
         if entity.name=="burner-mining-drill" and
             ((expected_unit and entity.unit_number==expected_unit) or (not expected_unit and not selected)) then selected=entity end
+    end
+    if selected and expected_position then
+        assert(selected.position.x==expected_position.x
+            and selected.position.y==expected_position.y,
+            "Bound bootstrap drill position changed")
+    end
+    -- The actor may have moved beyond the local scan. Recheck only the exact
+    -- position previously observed for this unit; never adopt a nearby drill.
+    if expected_unit and expected_position and not selected then
+        local entity=player.surface.find_entity("burner-mining-drill",expected_position)
+        assert(entity and entity.valid and entity.name=="burner-mining-drill"
+            and entity.unit_number==expected_unit
+            and entity.surface.index==player.surface.index
+            and entity.force.index==player.force.index
+            and entity.position.x==expected_position.x
+            and entity.position.y==expected_position.y,
+            "Bound bootstrap drill missing or replaced")
+        assert(#names<128,"Bootstrap observation budget exceeded")
+        selected=entity
+        names[#names+1]=entity.name
     end
     if expected_unit then assert(selected,"Bound bootstrap drill missing or replaced") end
     local result={placed_entities=names,drill=false,output_connected=false,iron_ore_collected=0,query_limit=129}
@@ -180,7 +204,7 @@ local function anchors(player)
     if best then result.water={name=best.name,position={x=best.position.x+.5,y=best.position.y+.5},surface_index=player.surface.index} end
     return result
 end
-campaign.observation_snapshot_v2=function(generation,expected_drill)
+campaign.observation_snapshot_v2=function(generation,expected_drill,expected_position)
     assert(integer(generation,0,9007199254740991))
     local player=storage.fair.actor()
     local controls=storage.fair.observe() -- preserve the existing lease heartbeat
@@ -193,7 +217,7 @@ campaign.observation_snapshot_v2=function(generation,expected_drill)
     local inventory=contents(main_inventory)
     local inventory_capacity=actor_coal_capacity(main_inventory,tick)
     fuel_capacities(factory,player)
-    local initial=bootstrap(player,expected_drill)
+    local initial=bootstrap(player,expected_drill,expected_position)
     finish(timer,"campaign_snapshot")
     local radius=factory.exploration_radius
     assert(integer(radius,1,32),"Invalid exploration bound")

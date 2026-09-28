@@ -3,11 +3,12 @@ import json
 import hashlib
 import os
 from dataclasses import asdict
+from importlib.resources import files
 
 import pytest
 
 from jev_factorio.backends.native_attachment import (
-    PINNED_ASSETS, PINNED_SOURCE_COMMIT, PINNED_SOURCE_TREE,
+    LEGACY_OBSERVATION_SHA256, PINNED_ASSETS, PINNED_SOURCE_COMMIT, PINNED_SOURCE_TREE,
     PROBE, readback, require_asset,
 )
 from jev_factorio.backends.native_observation_migration import (
@@ -30,6 +31,13 @@ def legacy():
 def test_migration_profile_refuses_any_existing_or_new_connector_installation():
     row = legacy()
     assert _manifest(row)['profile'] == LEGACY_OBSERVATION_PROFILE
+    assert LEGACY_OBSERVATION_PROFILE == 'e759-observation-v2-bound-bootstrap-v2'
+    assert LEGACY_OBSERVATION_SHA256 == hashlib.sha256(
+        files('jev_factorio').joinpath('lua/observation_v2.lua').read_bytes()).hexdigest()
+    assert PINNED_ASSETS['observation_v2'] == '983307da88317e690582511d2514046fd8819b2cd6ffa6d0832725b2a450710f'
+    assert _manifest(row)['assets']['observation_v2'] == LEGACY_OBSERVATION_SHA256
+    assert all(_manifest(row)['assets'][name] == value for name, value in PINNED_ASSETS.items()
+               if name not in {'observation_v2', 'successors'})
     row['modules']['connector_ownership'] = True
     with pytest.raises(RuntimeError, match='unmodified e759'):
         _manifest(row)
@@ -64,6 +72,23 @@ def test_migrated_profile_accepts_only_original_modules_and_reviewed_observer():
     row['native_installation']['assets']['successors'] = PINNED_ASSETS['successors']
     with pytest.raises(RuntimeError, match='profile requires reconciliation'):
         readback(Client())
+
+
+def test_old_output_tile_profile_is_not_reinterpreted_as_new_observer():
+    row = legacy()
+    row['native_installation'] = _manifest(row)
+    row['native_installation']['profile'] = 'e759-observation-v2-output-tile-v1'
+    row['native_installation']['assets']['observation_v2'] = (
+        '30cce48ab896579473d625d38daea86dc7c61710092255436974d0111b41b416')
+
+    class Client:
+        def send_command(self, command):
+            return json.dumps(row)
+
+    with pytest.raises(RuntimeError, match='Unknown native installation profile'):
+        readback(Client())
+    with pytest.raises(RuntimeError, match='unmodified e759'):
+        _manifest(row)  # An existing old profile is not a fresh v1 migration.
 
 
 def _lua_fixture(lua):

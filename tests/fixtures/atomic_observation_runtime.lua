@@ -20,6 +20,10 @@ end
 surface.find_entity=function(name,p)
     local e=resources[name]
     if e and e.valid and e.position.x==p.x and e.position.y==p.y then return e end
+    for _,entity in ipairs(entities) do
+        if entity.valid and entity.name==name
+            and entity.position.x==p.x and entity.position.y==p.y then return entity end
+    end
 end
 surface.find_entities_filtered=function(q)
     query_count=query_count+1;queries=queries or {};queries[#queries+1]=q

@@ -16,10 +16,17 @@ checkpoint is allowed; migration never unblocks or edits it. The actor must be
 idle at normal speed immediately before the native command.
 
 One Lua `pcall` command replaces only `campaign.observation_snapshot_v2` with
-the exact reviewed output-tile observer from PR #161. It installs a version 2
-profile containing the original e759 hashes for all retained modules and the
-new observer hash. An in-command error restores the original observer and
-removes the new manifest. A successful readback must match the same session,
+the exact reviewed output-tile and bound-bootstrap observer from PRs #161 and
+#180. It installs a version 2 profile containing the original e759 hashes for
+all retained modules and the new observer hash
+`f51ea4aeb66b5c11366dbfe37cb755f2187152fa634928ac8a911f670d746780`.
+The previous `e759-observation-v2-output-tile-v1` profile and its
+`30cce48ab896579473d625d38daea86dc7c61710092255436974d0111b41b416`
+observer hash are rejected by this source. An existing old-profile installation
+requires separate owner reconciliation; it is never silently upgraded. The
+original e759 v1 receipt hashes remain unchanged. An in-command error restores
+the original observer and removes the new manifest. A successful readback must
+match the same session,
 actor, module set, hashes and callback chain. The original v1 receipt is
 retained. The profile disables paid connector actions because that capability
 was never installed in this campaign.

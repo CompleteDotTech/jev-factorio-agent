@@ -138,6 +138,9 @@ def test_bootstrap_without_fle_entity_conversion(monkeypatch):
     assert result.iron_ore_collected == 7 and result.drill_output_connected
     assert result.factory['drill_output_role'] == 'bootstrap:output'
     assert backend._drill.unit_number == 51
+    backend.observe()
+    assert 'observation_snapshot_v2(0, 51,' in _[-1]
+    assert 'helpers.json_to_table' in _[-1]
     payload['bootstrap']['drill']['unit_number'] = 52
     with pytest.raises(ValueError, match='bootstrap'): backend.observe()
 
