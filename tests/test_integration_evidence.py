@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from jev_factorio import integration_evidence as report
+from jev_factorio.solid_routes import commitment
 from jev_factorio.acceptance_io import canonical
 from integration_evidence_fixtures import evidence
 
@@ -26,6 +27,38 @@ def test_reconciled_fixture_is_still_not_native_acceptance():
     assert not value['deployment_authorized'] and not value['external_authenticity_proven']
     assert 'native_coal_mining_bootstrap_and_network_fuel_provenance' in value['remaining_gates']
     assert 'private-fixture' not in json.dumps(value)
+
+
+def test_unrelated_intermediate_route_cannot_qualify_science_delivery():
+    rows, trial, initial, final = evidence()
+    trial['downstream_recipes'] = ['transport-belt']
+    for record in rows:
+        for label in ('state', 'after_state'):
+            state = record[label]
+            for route in state['factory']['solid_routes']['routes'].values():
+                if route['target']['inventory'] != 'input':
+                    continue
+                route['target']['recipe'] = 'transport-belt'
+                state['factory']['entities'][route['target']['role']]['recipe'] = 'transport-belt'
+    for checkpoint, state in ((initial, rows[0]['state']),
+                              (final, rows[-1]['after_state'])):
+        checkpoint['solid_commitments'] = {
+            key: commitment(route) for key, route in
+            state['factory']['solid_routes']['routes'].items()}
+
+    result = report.analyze_rows(rows, trial, initial, final)
+    assert result['integrity_checks_passed'], result['issues']
+    assert result['science']['force_consumed_with_single_owned_lab'] > 0
+    assert result['transport']['downstream_routes_with_flow_and_production'] == 0
+    assert 'downstream_flow_and_production_not_measured' in result['outcome_gaps']
+    assert not result['measurement_checks_passed']
+
+
+def test_routed_science_pack_with_lab_delivery_and_consumption_qualifies():
+    result = report.analyze_rows(*evidence())
+    assert result['integrity_checks_passed'], result['issues']
+    assert result['transport']['downstream_routes_with_flow_and_production'] == 1
+    assert result['measurement_checks_passed']
 
 
 @pytest.mark.parametrize('status', ['failed', None, 'unexpected', [], {}])

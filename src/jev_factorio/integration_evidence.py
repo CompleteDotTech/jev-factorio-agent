@@ -733,7 +733,12 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                  if v['sent'] > 0 and v['attributed_received'] > 0
                  and v['attributed_positive_boundaries'] >= 3]
     coal = [v for v in qualified if v['kind'] == 'coal' and v['item'] == 'coal']
+    # An intermediate route does not itself explain separate lab receipts.
+    # Until a complete dependency chain is bound, require the routed target
+    # recipe to name a pack also newly delivered to and consumed by the lab.
     downstream = [v for v in qualified if v['kind'] == 'downstream' and v['recipe'] in trial['downstream_recipes']
+                  and v['recipe'] in trial['science_packs']
+                  and deliveries[v['recipe']] > 0 and consumptions[v['recipe']] > 0
                   and _integer(v['target_first_products']) and _integer(v['target_last_products'])
                   and v['target_last_products'] > v['target_first_products']]
     outcome(len({v['target_unit'] for v in coal}) < 2, 'two_distinct_fuel_consumers_not_measured')

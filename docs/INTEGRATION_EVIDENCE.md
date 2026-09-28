@@ -112,7 +112,7 @@ Do not reuse its values for a campaign. Unknown or missing top-level keys fail.
 | `max_no_science_progress_seconds` | Integer 1–600, chosen before inspecting outcomes |
 | `science_packs` | Nonempty unique list from the existing science-pack whitelist |
 | `research_goal` | Declared currently feasible research milestone |
-| `downstream_recipes` | Nonempty unique bounded recipe-name list for observed science dependencies |
+| `downstream_recipes` | Nonempty unique bounded recipe-name list for observed science dependencies; a route counts toward integrated downstream flow only if its target recipe names a declared science pack also newly observed in owned-lab delivery and consumption. This is correlated evidence, not proof that those exact lab units came from that target. An intermediate-only route needs a separate validated dependency-chain witness. |
 | `minimum_timing_samples` | Integer 2–50000, chosen before inspecting outcomes |
 | `regression_limits` | `max_iteration_p95_ratio` in 0.01–10 and `min_science_rate_ratio` in 0–10 |
 
