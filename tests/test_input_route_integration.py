@@ -42,7 +42,9 @@ def test_reconstructed_controllers_reuse_nested_native_adapters(background):
     state = game()
     state.factory["craft_job_inventory"] = {"tick": state.tick, "items": {"coal": 5}}
     native = SimpleNamespace(command=commands.append, observe=lambda snapshot: snapshot)
-    backend = SimpleNamespace(_factory=native, enable_factory=native_catalog)
+    backend = SimpleNamespace(_factory=native, enable_factory=native_catalog,
+                              _native_attachment=None)
+    native.backend = backend
     base = BackgroundWorkLoop if background else HierarchicalLoop
     loop_type = input_loop_type(buffered_loop_type(base))
     options = {"policy": "deterministic", "factory_scheduling": "ready-work"}
