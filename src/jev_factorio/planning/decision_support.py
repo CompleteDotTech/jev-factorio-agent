@@ -95,7 +95,8 @@ def _placement_start_evidence(snapshot, plan):
         site = production_site_sources(snapshot).get(parameters.get('role'), {})
     except (ValueError, KeyError, TypeError):
         return None
-    if (site.get('state') != 'proposed' or site.get('anchor') != parameters.get('anchor')
+    if (site.get('state') != 'proposed' or site.get('reason') != 'joint_layout_available'
+            or site.get('anchor') != parameters.get('anchor')
             or parameters.get('name') != 'stone-furnace'
             or step.costs != {'stone-furnace': 1}
             or _position(site.get('position')) is None):
@@ -106,9 +107,15 @@ def _placement_start_evidence(snapshot, plan):
         'site_anchor': parameters['anchor'],
         'site_position': deepcopy(site['position']),
         'site_state': 'proposed',
+        'native_offer_checked_current_site_clearance': True,
         'paid_furnace_in_inventory_now': snapshot.inventory.get('stone-furnace', 0) >= 1,
         'no_source_owned_at_role_now': parameters['role'] not in snapshot.factory.get('entities', {}),
+        'player_connected_and_bound_now': (
+            snapshot.factory.get('player_connected') is True
+            and snapshot.factory.get('player_bound') is True),
+        'crafting_queue_empty_now': snapshot.factory.get('crafting_queue') == 0,
         'travel_is_lower_bound_not_arrival_proof': True,
+        'native_preflight_rechecks_offer_and_actor': True,
         'later_transport_and_output_require_native_verification': True,
     }
 
@@ -298,6 +305,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
         if (placement_start is not None
                 and placement_start['paid_furnace_in_inventory_now'] is True
                 and placement_start['no_source_owned_at_role_now'] is True
+                and placement_start['player_connected_and_bound_now'] is True
+                and placement_start['crafting_queue_empty_now'] is True
                 and isinstance(provenance, dict)):
             path = provenance.get('planner_item_path')
             role = placement_start['source_role']
