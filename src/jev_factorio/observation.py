@@ -180,13 +180,24 @@ class ProfiledRcon:
 @contextmanager
 def profile_backend(backend):
     profile = ObservationProfile()
-    original = backend._instance.rcon_client
-    backend._instance.rcon_client = ProfiledRcon(original, profile)
+    instance = backend._instance
+    original = instance.rcon_client
+    # FLE 0.4.3 tools retain LuaScriptManager as their connection and call
+    # manager.rcon_client. Wrap that shared reference too, so helper RPCs are
+    # counted inside their inclusive helper interval rather than disappearing.
+    manager = getattr(instance, 'lua_script_manager', None)
+    shared_manager_client = manager is not None and getattr(manager, 'rcon_client', None) is original
+    profiled = ProfiledRcon(original, profile)
+    instance.rcon_client = profiled
+    if shared_manager_client:
+        manager.rcon_client = profiled
     backend._observation_profile = profile
     try:
         yield profile
     finally:
-        backend._instance.rcon_client = original
+        instance.rcon_client = original
+        if shared_manager_client:
+            manager.rcon_client = original
         backend._observation_profile = None
         backend.last_observation_profile = profile.summary()
 
