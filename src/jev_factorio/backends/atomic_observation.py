@@ -16,6 +16,10 @@ RAW_ITEMS = frozenset({'wood', 'coal', 'iron-ore', 'copper-ore', 'stone'})
 BOUNDS = {'anchor_radius': 256, 'anchor_limit': 129,
           'bootstrap_radius': 1000, 'bootstrap_limit': 129,
           'bootstrap_output_radius': .75, 'bootstrap_output_limit': 2}
+EXPANDED_ANCHOR_BOUNDS = {
+    **BOUNDS, 'anchor_radius': 1024, 'water_radius': 256,
+    'oil_query_radii': [256, 512, 1024],
+}
 
 
 def _map(value: Any, label: str, limit: int = 4096) -> dict:
@@ -79,8 +83,24 @@ def _actor_capacity(value: Any, tick: int) -> dict | None:
 def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
     """Read and validate one v2 snapshot before exposing any of its native facts."""
     from fle.env import Position
+    from .native_attachment import (
+        EXPANDED_OBSERVATION_PROFILE, LEGACY_OBSERVATION_PROFILE,
+    )
 
     backend = native.backend
+    attachment = getattr(backend, '_native_attachment', None)
+    if attachment is None:
+        expected_bounds = EXPANDED_ANCHOR_BOUNDS  # Fresh installations use v3.
+    else:
+        installed = attachment.get('native_installation')
+        profile = installed.get('profile') if isinstance(installed, dict) else None
+        if profile == LEGACY_OBSERVATION_PROFILE:
+            expected_bounds = BOUNDS
+        elif profile == EXPANDED_OBSERVATION_PROFILE or (
+                profile is False and isinstance(installed, dict)):
+            expected_bounds = EXPANDED_ANCHOR_BOUNDS
+        else:
+            raise ValueError('Unqualified atomic observer profile')
     prior = getattr(native, '_coherent_identity', None)
     prior_drill = getattr(native, '_coherent_drill', None)
     # A just-built fair bootstrap drill is also identity-bound, when available.
@@ -161,9 +181,29 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
     if launched < baseline:
         raise ValueError('Atomic launch counter regressed')
     bounds = result.get('bounds')
-    if (not isinstance(bounds, dict) or bounds != BOUNDS
-            or any(type(value) is not type(BOUNDS[key]) for key, value in bounds.items())):
+    if not isinstance(bounds, dict):
         raise ValueError('Invalid atomic query bounds')
+    if (bounds != expected_bounds
+            or any(type(value) is not type(expected_bounds[key])
+                   for key, value in bounds.items())
+            or (expected_bounds is EXPANDED_ANCHOR_BOUNDS
+                and any(type(radius) is not int for radius in bounds['oil_query_radii']))):
+        raise ValueError('Invalid atomic query bounds')
+    anchor_diagnostics = result.get('anchor_diagnostics')
+    if expected_bounds is EXPANDED_ANCHOR_BOUNDS:
+        if (not isinstance(anchor_diagnostics, dict)
+                or set(anchor_diagnostics) != {'oil', 'water', 'selection'}
+                or anchor_diagnostics['selection'] != 'bounded_witness_not_global_nearest'
+                or any(not isinstance(anchor_diagnostics[item], dict)
+                       or set(anchor_diagnostics[item]) != {'radius', 'saturated'}
+                       or type(anchor_diagnostics[item]['radius']) is not int
+                       or type(anchor_diagnostics[item]['saturated']) is not bool
+                       for item in ('oil', 'water'))
+                or anchor_diagnostics['oil']['radius'] not in (256, 512, 1024)
+                or anchor_diagnostics['water']['radius'] != 256):
+            raise ValueError('Invalid atomic anchor diagnostics')
+    elif anchor_diagnostics is not None:
+        raise ValueError('Unexpected atomic anchor diagnostics')
     bootstrap = result.get('bootstrap')
     if (not isinstance(bootstrap, dict) or type(bootstrap.get('query_limit')) is not int
             or bootstrap['query_limit'] != 129
@@ -217,7 +257,9 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
             x, y = _position(value.get('position'))
             resources[item] = Position(x=x, y=y)
             nearby[item] = math.hypot(x - position[0], y - position[1])
-            if group == 'anchors' and nearby[item] > BOUNDS['anchor_radius'] + 2:
+            anchor_radius = (anchor_diagnostics['water' if item == 'water' else 'oil']['radius']
+                             if anchor_diagnostics is not None else bounds['anchor_radius'])
+            if group == 'anchors' and nearby[item] > anchor_radius + 2:
                 raise ValueError('Atomic anchor outside query bounds')
             if group == 'targets':
                 targets[item] = {k: value[k] for k in ('name', 'position', 'surface_index')}
@@ -238,6 +280,8 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
     factory['fair_resource_targets'] = targets
     factory['observation_snapshot_schema'] = 2
     factory['observation_query_bounds'] = dict(bounds)
+    if anchor_diagnostics is not None:
+        factory['observation_anchor_diagnostics'] = anchor_diagnostics
     if drill:
         for role, entity in factory['entities'].items():
             if (isinstance(entity, dict) and entity.get('name') == 'wooden-chest'
