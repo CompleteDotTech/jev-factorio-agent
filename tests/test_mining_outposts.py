@@ -129,6 +129,58 @@ def test_kit_acquisition_does_not_recursively_build_another_outpost():
     assert step.action != outposts.COMMAND
 
 
+def test_native_stocked_furnace_can_gather_ore_for_its_outpost_drill_kit():
+    """A drill made from this furnace's plates must not strand ore behind itself."""
+    state, data = state_fixture()
+    state.world_kind = 'fle'
+    state.inventory = {'wooden-chest': 1, 'iron-gear-wheel': 10}
+    furnace = state.factory['entities']['recipe:iron-plate']
+    furnace.update(unit_number=2547, fuel={'coal': 3}, products_finished=20,
+                   input={}, output={})
+    state.factory['production_sites'] = {
+        'protocol': 1, 'session_id': state.session_id, 'tick': state.tick,
+        'sources': {'recipe:iron-plate': {
+            'state': 'owned', 'source_unit': 2547,
+        }},
+    }
+    data.recipes['burner-mining-drill'] = recipe('burner-mining-drill', {'iron-plate': 5})
+    before = deepcopy(state)
+
+    plan = MiningOutpostPlanner(data, state, 'rocket_launch')._need('iron-plate', 10)
+
+    assert plan.steps[0].action == 'factory_gather'
+    # The independent drill kit currently needs five plates, so it gathers
+    # five paid ore first; it does not pre-gather the outer ten-plate demand.
+    assert plan.steps[0].parameters == {'resource': 'iron-ore', 'quantity': 5}
+    assert plan.steps[0].allowed(state)
+    assert state == before
+
+
+def test_outpost_kit_still_collects_paid_plate_output_before_manual_ore():
+    state, data = state_fixture()
+    state.inventory = {'wooden-chest': 1, 'coal': 5}
+    state.factory['entities']['recipe:iron-plate']['output'] = {'iron-plate': 5}
+    data.recipes['burner-mining-drill'] = recipe('burner-mining-drill', {'iron-plate': 5})
+
+    step = MiningOutpostPlanner(data, state, 'rocket_launch')._need(RESOURCE, 20).steps[0]
+
+    assert step.action == 'factory_extract'
+    assert step.parameters['role'] == 'recipe:iron-plate'
+    assert step.parameters['item'] == 'iron-plate'
+    assert step.parameters['quantity'] == 5
+    assert step.allowed(state)
+
+
+def test_outpost_kit_independent_path_still_rejects_its_own_recipe_cycle():
+    state, data = state_fixture()
+    state.inventory = {'wooden-chest': 1, 'coal': 5}
+    data.recipes['burner-mining-drill'] = recipe(
+        'burner-mining-drill', {'burner-mining-drill': 1})
+
+    with pytest.raises(ValueError, match='Cyclic production dependency'):
+        MiningOutpostPlanner(data, state, 'rocket_launch')._need(RESOURCE, 20)
+
+
 @pytest.mark.parametrize('mode', ['small', 'bootstrap', 'other_goal', 'existing_ore', 'no_offer'])
 def test_manual_fallback_and_existing_paid_supply_remain_available(mode):
     state, data = state_fixture(); amount, goal = 20, 'rocket_launch'
