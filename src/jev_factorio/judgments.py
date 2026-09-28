@@ -326,6 +326,43 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "verification remains required."
                 if recipe_input_start else ""
             )
+            pickup_start = row.get('output_pickup_start_evidence')
+            pickup_step = plan.steps[0] if len(plan.steps) == 1 else None
+            pickup_path = (pickup_start.get('planner_item_path')
+                           if isinstance(pickup_start, dict) else None)
+            qualified_pickup = (
+                pickup_step is not None and pickup_step.action == 'factory_extract'
+                and pickup_step.effect == 'transfer' and pickup_step.costs == {}
+                and isinstance(pickup_step.parameters, dict)
+                and row.get('work_scope') == 'immediate' and row.get('unknowns') == []
+                and isinstance(pickup_start, dict) and pickup_start.get('observed_tick') == tick
+                and pickup_start.get('basis') ==
+                    'current_planner_output_and_owned_native_machine'
+                and pickup_start.get('player_connected_and_bound_now') is True
+                and pickup_start.get('native_pickup_and_inventory_delta_require_verification') is True
+                and pickup_start.get('owned_source_role') == pickup_step.parameters.get('role')
+                and pickup_start.get('ready_output_item') == pickup_step.parameters.get('item')
+                and pickup_start.get('planned_pickup_quantity') ==
+                    pickup_step.parameters.get('quantity')
+                and pickup_start.get('planned_native_receipt_id') ==
+                    pickup_step.parameters.get('receipt')
+                and type(pickup_start.get('ready_output_quantity_now')) is int
+                and type(pickup_start.get('planned_pickup_quantity')) is int
+                and pickup_start['ready_output_quantity_now'] >=
+                    pickup_start['planned_pickup_quantity'] > 0
+                and isinstance(target, str) and bool(target)
+                and isinstance(pickup_path, list) and len(pickup_path) >= 1
+                and pickup_path[0] == target
+                and pickup_path[-1] == pickup_step.parameters.get('item'))
+            pickup_hint = (
+                " `output_pickup_start_evidence` ties already observed output at an "
+                "owned native machine to the current local planner path and planned "
+                "receipt. Collecting that output supplies a bounded useful intermediate "
+                "(score level 1); it does not finish the downstream target or prove "
+                "pickup. Another current contrary fact can lower the score. The native "
+                "pickup receipt and player inventory delta still require verification."
+                if qualified_pickup else ""
+            )
             questions[plan.id + "/benefit"] = {
                 "type": "score",
                 "instructions": (
@@ -335,6 +372,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "`raw_prerequisite` is evidence that gathering supplies an input to "
                     "the named native recipe, not that the later craft already happened."
                     + craft_hint + place_hint + fuel_hint + transfer_hint + input_hint
+                    + pickup_hint
                 ),
                 "criteria": ([
                     "No demonstrated contribution to the bounded production objective",
@@ -389,6 +427,11 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                        "Judge only missing start facts; the transfer and output "
                        "still need native verification."
                        if recipe_input_start else "")
+                    + (" For a current output pickup, `output_pickup_start_evidence` "
+                       "records ready output, owned source, actor, planner path and "
+                       "planned receipt. Judge missing start facts from those values; "
+                       "the future pickup and inventory delta require native verification."
+                       if qualified_pickup else "")
                     + (" For a placement, `placement_start_evidence` combines a current "
                        "surveyed site offer with observed actor/queue facts. Judge missing "
                        "start facts from those "

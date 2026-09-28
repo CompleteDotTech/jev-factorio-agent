@@ -202,6 +202,77 @@ def _recipe_input_transfer_start_evidence(snapshot, catalog, plan):
     }
 
 
+def _output_pickup_start_evidence(snapshot, catalog, plan):
+    """Describe ready output at an owned native source, never a completed pickup."""
+    if len(plan.steps) != 1:
+        return None
+    step = plan.steps[0]
+    materials = plan.materials or {}
+    provenance = materials.get('output_pickup')
+    local = materials.get('local_objective')
+    intent = materials.get('work_intent')
+    p = step.parameters or {}
+    if (step.action != 'factory_extract' or step.effect != 'transfer'
+            or step.costs != {} or not isinstance(provenance, dict)
+            or not isinstance(local, dict) or not isinstance(intent, dict)
+            or intent.get('scope') != 'immediate'
+            or intent.get('observed_tick') != snapshot.tick
+            or provenance.get('observed_tick') != snapshot.tick):
+        return None
+    role, item, quantity = p.get('role'), p.get('item'), p.get('quantity')
+    if (not isinstance(role, str) or not role.startswith('recipe:')
+            or not isinstance(item, str) or not item
+            or type(quantity) is not int or not 1 <= quantity <= 200):
+        return None
+    factory = snapshot.factory
+    entities = factory.get('entities')
+    sites = factory.get('production_sites')
+    if not isinstance(entities, dict) or not isinstance(sites, dict):
+        return None
+    machine = entities.get(role)
+    sources = sites.get('sources')
+    source = sources.get(role) if isinstance(sources, dict) else None
+    if not isinstance(machine, dict) or not isinstance(source, dict):
+        return None
+    unit = machine.get('unit_number')
+    output = machine.get('output')
+    available = output.get(item) if isinstance(output, dict) else None
+    recipe_name = role.removeprefix('recipe:')
+    recipe = catalog.recipes.get(recipe_name)
+    path = provenance.get('planner_item_path')
+    if (type(unit) is not int or unit <= 0
+            or source.get('state') != 'owned' or source.get('source_unit') != unit
+            or not isinstance(recipe, dict) or recipe.get('name') != recipe_name
+            or recipe.get('hidden') or not catalog.enabled(recipe, snapshot.researched or [])
+            or not any(product.get('type') == 'item' and product.get('name') == item
+                       for product in recipe.get('products', []))
+            or not isinstance(path, list) or not 1 <= len(path) <= 32
+            or any(not isinstance(part, str) or not part for part in path)
+            or path[0] != local.get('item') or path[-1] != item
+            or provenance.get('source_role') != role
+            or provenance.get('source_unit') != unit
+            or provenance.get('item') != item
+            or type(available) is not int or available < quantity
+            or provenance.get('observed_output') != available
+            or p.get('receipt') != f'{snapshot.tick}:factory_extract:{role}:{item}'
+            or factory.get('player_connected') is not True
+            or factory.get('player_bound') is not True):
+        return None
+    return {
+        'observed_tick': snapshot.tick,
+        'planner_item_path': list(path),
+        'owned_source_role': role,
+        'owned_source_unit': unit,
+        'ready_output_item': item,
+        'ready_output_quantity_now': available,
+        'planned_pickup_quantity': quantity,
+        'planned_native_receipt_id': p['receipt'],
+        'player_connected_and_bound_now': True,
+        'basis': 'current_planner_output_and_owned_native_machine',
+        'native_pickup_and_inventory_delta_require_verification': True,
+    }
+
+
 def candidate_evidence(snapshot, catalog, plans) -> dict:
     """Describe the admitted frontier without inventing downstream output."""
     entities = snapshot.factory.get('entities', {})
@@ -218,6 +289,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
     for index, plan in enumerate(plans):
         placement_start = _placement_start_evidence(snapshot, plan)
         recipe_input_transfer_start = _recipe_input_transfer_start_evidence(snapshot, catalog, plan)
+        output_pickup_start = _output_pickup_start_evidence(snapshot, catalog, plan)
         origin = _position(snapshot.player_position)
         travel, actor, unknown, reasons = 0.0, 0.0, [], []
         harvest_thresholds = {}
@@ -588,6 +660,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'placement_start_evidence': placement_start,
             'placement_dependency': placement_dependency,
             'recipe_input_transfer_start_evidence': recipe_input_transfer_start,
+            'output_pickup_start_evidence': output_pickup_start,
             'research_deadline_tick': min((row['deadline_tick'] for row in schedules
                 if row['item'] in outputs and row['deadline_tick'] is not None), default=None),
             'requires_investment': any(s.action in {'factory_place', 'factory_connect',
