@@ -326,6 +326,9 @@ def test_new_owned_copper_furnace_requests_bounded_startup_coal_with_current_evi
     oversized = replace(plan, steps=(replace(plan.steps[0], threshold=50,
         parameters={'resource': 'coal', 'quantity': 50}),))
     assert candidate_evidence(state, data, [oversized])[oversized.id]['fuel_prerequisite'] is None
+    state.factory['entities'][role].pop('fuel')
+    assert candidate_evidence(state, data, [plan])[plan.id]['fuel_prerequisite'] is None
+    state.factory['entities'][role]['fuel'] = {}
     state.factory['fair_resource_targets'].pop('coal')
     absent_site = candidate_evidence(state, data, [plan])[plan.id]
     assert absent_site['fuel_prerequisite'] is None
