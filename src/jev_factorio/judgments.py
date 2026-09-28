@@ -133,7 +133,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
             context["deterministic_ranking"] = [key for key in state["deterministic_ranking"]
                                                 if key in context["candidate_plans"]]
         evidence = context.get('candidate_evidence') or {}
-        tick = (state.get('facts') or {}).get('tick')
+        facts = state.get('facts')
+        tick = facts.get('tick') if isinstance(facts, dict) else None
         local = state.get('local_objective')
         primary = local.get('primary_target') if isinstance(local, dict) else None
         target = primary.get('item') if isinstance(primary, dict) else None
