@@ -361,9 +361,62 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                     'later_steps_require_fresh_native_preconditions': True,
                 }
         fuel_prerequisite = None
+        fuel_transfer_start = None
         fuel = (plan.materials or {}).get('fuel_prerequisite')
         local = (plan.materials or {}).get('local_objective')
         local_item = local.get('item') if isinstance(local, dict) else None
+        if isinstance(fuel, dict) and len(plan.steps) == 1:
+            step = plan.steps[0]
+            parameters = step.parameters or {}
+            role = fuel.get('source_role')
+            machine = entities.get(role, {}) if isinstance(role, str) else {}
+            fuel_bag = machine.get('fuel')
+            current = fuel_bag.get('coal', 0) if isinstance(fuel_bag, dict) else None
+            recipe_name = role.removeprefix('recipe:') if isinstance(role, str) else ''
+            recipe = catalog.recipes.get(recipe_name, {})
+            prototype = catalog.machines.get(machine.get('name'), {})
+            path = fuel.get('planner_item_path')
+            carried = snapshot.inventory.get('coal')
+            startup = current == 0 and machine.get('products_finished', 0) == 0
+            expected_target = min(5 if startup else 50, catalog.stack_sizes.get('coal', 50))
+            required = expected_target - current if _finite(current) else None
+            if (step.action == 'factory_insert' and step.effect == 'transfer'
+                    and parameters.get('item') == 'coal' and parameters.get('role') == role
+                    and type(required) is int and required > 0
+                    and parameters.get('quantity') == required
+                    and parameters.get('receipt') == f'{snapshot.tick}:factory_insert:{role}:coal'
+                    and step.costs == {'coal': required}
+                    and type(carried) is int and carried >= required
+                    and fuel.get('observed_tick') == snapshot.tick
+                    and isinstance(role, str) and role.startswith('recipe:')
+                    and type(machine.get('unit_number')) is int
+                    and machine['unit_number'] == fuel.get('source_unit')
+                    and current == fuel.get('observed_fuel')
+                    and fuel.get('target_fuel') == expected_target
+                    and fuel.get('startup') is startup
+                    and isinstance(fuel_bag, dict)
+                    and prototype.get('burner') is True
+                    and recipe.get('name') == recipe_name and not recipe.get('hidden')
+                    and catalog.enabled(recipe, snapshot.researched or [])
+                    and bool(prototype.get('categories', {}).get(recipe.get('category')))
+                    and isinstance(local_item, str) and bool(local_item)
+                    and isinstance(path, list) and 1 <= len(path) <= 32
+                    and all(isinstance(item, str) and item for item in path)
+                    and path[0] == local_item and path[-1] == recipe_name
+                    and snapshot.factory.get('player_connected') is True
+                    and snapshot.factory.get('player_bound') is True):
+                fuel_transfer_start = {
+                    'observed_tick': snapshot.tick,
+                    'planner_item_path': list(path),
+                    'burner_role': role,
+                    'burner_unit': machine['unit_number'],
+                    'fuel_now': current,
+                    'coal_in_inventory_now': carried,
+                    'coal_to_transfer': required,
+                    'native_receipt': parameters['receipt'],
+                    'basis': 'current_planner_need_owned_burner_and_paid_inventory',
+                    'native_transfer_and_later_output_require_verification': True,
+                }
         if (isinstance(fuel, dict) and len(plan.steps) == 1
                 and plan.steps[0].action == 'factory_gather'
                 and (plan.steps[0].parameters or {}).get('resource') == 'coal'
@@ -427,6 +480,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'raw_prerequisite': prerequisite_evidence,
             'gather_start_evidence': gather_start,
             'fuel_prerequisite': fuel_prerequisite,
+            'fuel_transfer_start_evidence': fuel_transfer_start,
             'craft_start_evidence': craft_start,
             'craft_dependency': craft_dependency,
             'placement_start_evidence': placement_start,
