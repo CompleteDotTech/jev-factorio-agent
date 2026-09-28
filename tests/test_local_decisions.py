@@ -241,6 +241,18 @@ def test_paid_joint_furnace_placement_has_observed_site_and_lab_dependency():
     missing = replace(plan, materials={key: value for key, value in plan.materials.items()
                                        if key != 'local_objective'})
     assert candidate_evidence(state, data, [missing])[missing.id]['placement_dependency'] is None
+    state.inventory['stone-furnace'] = 0
+    unfunded = candidate_evidence(state, data, [plan])[plan.id]
+    assert unfunded['placement_start_evidence']['paid_furnace_in_inventory_now'] is False
+    assert unfunded['placement_dependency'] is None
+    assert not plan.steps[0].allowed(state)
+    state.inventory['stone-furnace'] = 1
+    state.factory['entities'][role] = machine(position={'x': -42, 'y': -109})
+    occupied = candidate_evidence(state, data, [plan])[plan.id]
+    assert occupied['placement_start_evidence']['no_source_owned_at_role_now'] is False
+    assert occupied['placement_dependency'] is None
+    assert not plan.steps[0].allowed(state)
+    state.factory['entities'].pop(role)
     state.factory['production_sites']['tick'] -= 1
     stale = candidate_evidence(state, data, [plan])[plan.id]
     assert stale['placement_start_evidence'] is None and stale['placement_dependency'] is None
