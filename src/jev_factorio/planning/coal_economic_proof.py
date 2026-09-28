@@ -16,6 +16,8 @@ POLICY = 'owned-steam-coal-v1'
 MAX_TICKS = 216_000
 MAX_INTEGER = 2**53 - 1
 MILLION = 1_000_000
+PLACEMENT_ACTOR_TICKS = 300
+WALK_ACTOR_TICKS_PER_TILE = 20
 KIT_ITEMS = {'electric-mining-drill', 'wooden-chest', 'inserter', 'transport-belt'}
 LOAD_NAMES = {'electric-mining-drill', 'inserter', 'assembling-machine-1',
               'assembling-machine-2', 'lab', 'offshore-pump'}
@@ -227,6 +229,7 @@ class EconomicInput:
     acquisition_actor_ticks_forecast: int
     acquisition_evidence_sha256: str
     construction_walk_tiles_forecast: int
+    startup_elapsed_game_ticks_forecast: int
     recurring_service_actor_ticks_forecast: int
     power: Power
     manual_cycle: ManualCycle
@@ -235,7 +238,8 @@ class EconomicInput:
     def parse(cls, value):
         _fields(value, 'schema policy base_version mods epoch bundle_sha256 catalog_sha256 '
                 'horizon_ticks sources kit acquisition_actor_ticks_forecast acquisition_evidence_sha256 '
-                'construction_walk_tiles_forecast recurring_service_actor_ticks_forecast power manual_cycle')
+                'construction_walk_tiles_forecast startup_elapsed_game_ticks_forecast '
+                'recurring_service_actor_ticks_forecast power manual_cycle')
         if (value['schema'] != INPUT_SCHEMA or value['policy'] != POLICY
                 or value['base_version'] != '2.0.77' or value['mods'] != {'base': '2.0.77'}):
             raise ValueError('Unsupported coal economics protocol or native treatment')
@@ -270,12 +274,22 @@ class EconomicInput:
         if (tuple((row.target_role, row.target_unit) for row in manual.deliveries)
                 != tuple((row.target_role, row.target_unit) for row in sources)):
             raise ValueError('Manual cycle must account for each exact source target')
-        return cls(epoch, _hash(value['bundle_sha256']), _hash(value['catalog_sha256']),
+        result = cls(epoch, _hash(value['bundle_sha256']), _hash(value['catalog_sha256']),
             _integer(value['horizon_ticks'], 600, MAX_TICKS), sources, kit,
             _integer(value['acquisition_actor_ticks_forecast'], 0, MAX_TICKS),
             _hash(value['acquisition_evidence_sha256']),
             _integer(value['construction_walk_tiles_forecast'], 0, 10_000),
+            _integer(value['startup_elapsed_game_ticks_forecast'], 0, MAX_TICKS),
             _integer(value['recurring_service_actor_ticks_forecast'], 0, MAX_TICKS), power, manual)
+        if result.startup_elapsed_game_ticks_forecast < result.startup_actor_ticks_forecast:
+            raise ValueError('Elapsed startup forecast cannot be shorter than serial actor work')
+        return result
+
+    @property
+    def startup_actor_ticks_forecast(self):
+        return (self.acquisition_actor_ticks_forecast
+                + sum(count for _, count in self.kit) * PLACEMENT_ACTOR_TICKS
+                + self.construction_walk_tiles_forecast * WALK_ACTOR_TICKS_PER_TILE)
 
     def to_dict(self):
         value = asdict(self)

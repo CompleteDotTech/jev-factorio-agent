@@ -54,15 +54,20 @@ energy loss. Unsupported evidence remains deferred by the production gate.
 ## Calculations and units
 
 The fixed `owned-steam-coal-v1` policy uses a horizon of 600–216,000 game ticks.
-Acquisition and placement/walking time reduce the source's active forecast
-window. Source capacity uses native mining speed/time, a declared 75% utilization
+The explicit `startup_elapsed_game_ticks_forecast` reduces the source's active
+forecast window and prices bootstrap fuel. It must be at least the sum of serial
+acquisition, placement and walking actor-time estimates. API waits and crafting
+gaps can increase elapsed game time without increasing active actor work. The
+declared elapsed estimate is not a guaranteed scheduling upper bound; production
+integration still needs native deadline and fresh fuel-reserve enforcement.
+Source capacity uses native mining speed/time, a declared 75% utilization
 forecast and finite ore as a ceiling. Neither value promises actual future flow.
 
 Operating coal is rounded upward from the complete existing and proposed load
 maximum over the whole horizon, plus buffer capacity, divided by qualified
 boiler/generator efficiency and coal fuel value. Full-horizon charging intentionally
 overestimates partial construction and idle time. Generation capacity must cover
-that maximum. Bootstrap fuel must cover construction's projected consumption and
+that maximum. Bootstrap fuel must cover elapsed startup's projected consumption and
 buffer charge. This is deliberately conservative and may reject investments that
 a later, independently qualified workload model could justify.
 
@@ -90,5 +95,7 @@ paid continuation. The current always-negative production gate remains unchanged
 
 Synthetic tests demonstrate positive/negative arithmetic, asymmetric service
 allocation, capacity/stock/burn limits, strict types, proof tampering and compatible
-unit comparisons. They do not demonstrate actual engine economics, native
+unit comparisons. Inter-call delay tests hold actor cost fixed while reducing the
+active forecast window and increasing bootstrap fuel. They do not demonstrate
+actual engine economics, native
 selection, paid first-payment proof, campaign acceptance or deployment.

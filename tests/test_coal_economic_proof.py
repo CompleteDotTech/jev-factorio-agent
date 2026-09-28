@@ -28,6 +28,7 @@ def example():
         'kit': {'electric-mining-drill': 2, 'wooden-chest': 2, 'inserter': 4, 'transport-belt': 8},
         'acquisition_actor_ticks_forecast': 1000, 'acquisition_evidence_sha256': 'c' * 64,
         'construction_walk_tiles_forecast': 20, 'recurring_service_actor_ticks_forecast': 1000,
+        'startup_elapsed_game_ticks_forecast': 6200,
         'power': {'network_id': 7, 'boiler_role': 'utility:boiler', 'boiler_unit': 11,
             'generator_units': [12], 'topology_sha256': '1' * 64,
             'unit_qualification_sha256': '2' * 64, 'prototype_sha256': '3' * 64,
@@ -157,13 +158,14 @@ def test_unknown_or_mismatched_evidence_cannot_force_positive(case):
     with pytest.raises(ValueError): evaluate(raw)
 
 
-@pytest.mark.parametrize('case', ['tick', 'unit', 'power', 'cost', 'result', 'authorization', 'bool_alias'])
+@pytest.mark.parametrize('case', ['tick', 'unit', 'power', 'cost', 'elapsed', 'result', 'authorization', 'bool_alias'])
 def test_proof_binds_all_inputs_and_derived_terms(case):
     result = evaluate(example())
     if case == 'tick': result['input']['epoch']['tick'] += 1
     if case == 'unit': result['input']['sources'][0]['target_unit'] += 1
     if case == 'power': result['input']['power']['topology_sha256'] = 'f' * 64
     if case == 'cost': result['input']['acquisition_actor_ticks_forecast'] += 1
+    if case == 'elapsed': result['input']['startup_elapsed_game_ticks_forecast'] += 1
     if case == 'result': result['terms']['operating_coal_upper'] = 0
     if case == 'authorization': result['mutation_authorized'] = True
     if case == 'bool_alias': result['eligible'] = 1
@@ -195,6 +197,7 @@ def test_material_opportunity_budget_is_separate_from_time_payback():
     raw['manual_cycle']['coal_delivered'] += 4
     raw['kit'].update({'electric-mining-drill': 4, 'wooden-chest': 4, 'inserter': 8,
                        'transport-belt': 96})
+    raw['startup_elapsed_game_ticks_forecast'] = 35_000
     result = evaluate(raw)
     assert result['terms']['material_opportunity_points'] == 224
     assert result['reason'] == 'material_opportunity_budget'
@@ -217,3 +220,28 @@ def test_carried_kit_still_prices_placement_and_operating_fuel():
     result = evaluate(raw)
     assert result['terms']['startup_actor_ticks_forecast'] == 4800
     assert result['terms']['operating_coal_upper'] > 0
+
+
+def test_inter_call_gaps_cost_game_time_and_fuel_without_inventing_actor_work():
+    raw = example()
+    baseline = evaluate(raw)
+    raw['startup_elapsed_game_ticks_forecast'] = 20_000
+    delayed = evaluate(raw)
+    assert baseline['eligible'] is True
+    assert delayed['reason'] == 'bootstrap_fuel_shortfall'
+    before, after = baseline['terms'], delayed['terms']
+    assert before['total_actor_cost_ticks_forecast'] == after['total_actor_cost_ticks_forecast'] == 7200
+    assert before['manual_actor_ticks_avoided_forecast'] == after['manual_actor_ticks_avoided_forecast']
+    assert after['active_ticks_forecast'] == 80_000 < before['active_ticks_forecast']
+    assert after['bootstrap_fuel_joules_required_forecast'] > before['bootstrap_fuel_joules_required_forecast']
+    assert after['branches'][0]['capacity_coal_forecast'] < before['branches'][0]['capacity_coal_forecast']
+    assert delayed['mutation_authorized'] is False and delayed['native_payback_proven'] is False
+    assert validate_proof(delayed) == delayed
+
+
+@pytest.mark.parametrize('elapsed', [None, True, 6200.0, '6200', -1, 6199, 216_001])
+def test_elapsed_startup_requires_bounded_integer_and_serial_actor_time(elapsed):
+    raw = example()
+    raw['startup_elapsed_game_ticks_forecast'] = elapsed
+    with pytest.raises(ValueError):
+        EconomicInput.parse(raw)
