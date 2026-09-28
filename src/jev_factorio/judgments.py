@@ -165,6 +165,12 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 if ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('craft_dependency')
                 else ""
             )
+            place_hint = (
+                " `placement_dependency` links this paid machine placement to the "
+                "current planner target; native transport and output remain unverified."
+                if ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('placement_dependency')
+                else ""
+            )
             questions[plan.id + "/benefit"] = {
                 "type": "score",
                 "instructions": (
@@ -173,7 +179,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "from one bounded local production action. A current "
                     "`raw_prerequisite` is evidence that gathering supplies an input to "
                     "the named native recipe, not that the later craft already happened."
-                    + craft_hint
+                    + craft_hint + place_hint
                 ),
                 "criteria": ([
                     "No demonstrated contribution to the bounded production objective",
