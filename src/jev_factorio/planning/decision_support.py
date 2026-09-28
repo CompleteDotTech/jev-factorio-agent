@@ -300,7 +300,10 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
         provenance = (plan.materials or {}).get('placement_dependency')
         local = (plan.materials or {}).get('local_objective')
         target_item = local.get('item') if isinstance(local, dict) else None
-        if placement_start is not None and isinstance(provenance, dict):
+        if (placement_start is not None
+                and placement_start['paid_furnace_in_inventory_now'] is True
+                and placement_start['no_source_owned_at_role_now'] is True
+                and isinstance(provenance, dict)):
             path = provenance.get('planner_item_path')
             role = placement_start['source_role']
             product = role.removeprefix('recipe:')
