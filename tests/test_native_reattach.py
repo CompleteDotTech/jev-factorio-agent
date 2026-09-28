@@ -17,9 +17,12 @@ from jev_factorio.backends.mining_outposts import MiningOutpostFactory
 
 
 def qualified():
+    modules = dict.fromkeys(PINNED_ASSETS, True)
+    modules['connector_ownership'] = False
     return {'schema': 1, 'qualified': True, 'session_id': 'synthetic-session',
-            'actor_unit': 17, 'modules': dict.fromkeys(PINNED_ASSETS, True),
-            'solid_intents': [], 'coal_targets': [], 'coal_admission_evidence': False}
+            'actor_unit': 17, 'modules': modules,
+            'solid_intents': [], 'coal_targets': [], 'coal_admission_evidence': False,
+            'native_installation': False}
 
 
 def test_preflight_is_fixed_read_only_query_and_rejects_partial_chain(tmp_path, monkeypatch):

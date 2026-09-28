@@ -293,6 +293,12 @@ class NativeFactory:
                           parameters["quantity"], parameters["receipt"], action == "factory_extract")
             return f"Transferred {parameters['quantity']} {parameters['item']} ({parameters['receipt']})"
         if action == "factory_connect":
+            attachment = getattr(self.backend, '_native_attachment', None)
+            if (attachment is not None and
+                    isinstance(attachment.get('native_installation'), dict) and
+                    attachment['native_installation'].get('profile') ==
+                    'e759-observation-v2-output-tile-v1'):
+                raise RuntimeError('Retained native campaign has no paid connector ledger')
             from fle.env import Position
 
             if parameters["kind"] == "pipe":
