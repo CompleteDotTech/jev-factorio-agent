@@ -166,6 +166,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
         scope = scope if scope in {'immediate', 'lookahead'} else 'unclassified'
         prerequisite = (plan.materials or {}).get('raw_prerequisite')
         prerequisite_evidence = None
+        gather_start = None
         if (isinstance(prerequisite, dict) and prerequisite.get('observed_tick') == snapshot.tick
                 and len(plan.steps) == 1 and plan.steps[0].action == 'factory_gather'):
             step = plan.steps[0]
@@ -190,6 +191,17 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                     'basis': 'current_planner_dependency_and_native_catalog_recipe',
                     'later_steps_require_fresh_native_preconditions': True,
                 }
+                site = snapshot.factory.get('fair_resource_targets', {}).get(ingredient, {})
+                gather_start = {
+                    'resource_in_current_observation': ingredient in snapshot.nearby_resources,
+                    'fair_target_identity_observed': (
+                        isinstance(site, dict) and site.get('name') == ingredient
+                        and type(site.get('surface_index')) is int and site['surface_index'] > 0
+                        and _position(site.get('position')) is not None),
+                    'resource_inventory_now': snapshot.inventory.get(ingredient, 0),
+                    'target_inventory_after_this_step': step.threshold,
+                    'travel_is_lower_bound_not_arrival_proof': True,
+                }
         passive = all(s.action in {'factory_wait', 'idle'} for s in plan.steps)
         result[plan.id] = {
             'work_scope': scope,
@@ -201,6 +213,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'processed_units': quantities, 'material_costs': costs,
             'delivers_or_crafts': sorted(outputs), 'unknowns': sorted(set(unknown)),
             'raw_prerequisite': prerequisite_evidence,
+            'gather_start_evidence': gather_start,
             'research_deadline_tick': min((row['deadline_tick'] for row in schedules
                 if row['item'] in outputs and row['deadline_tick'] is not None), default=None),
             'requires_investment': any(s.action in {'factory_place', 'factory_connect',
