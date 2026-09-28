@@ -58,7 +58,7 @@ def evaluate(raw: dict) -> dict:
         # could burn in the horizon. The boiler baseline excludes the new loads.
         burn_upper = (_ceil_div(existing_rate * evidence.horizon_ticks * MILLION**2, conversion)
                       if internal else source.consumer_max_joules_per_tick * evidence.horizon_ticks)
-        additional_demand_ceiling = _ceil_div(max(0, burn_upper - source.consumer_stored_fuel_joules),
+        additional_demand_ceiling = _ceil_div(max(0, burn_upper - source.consumer_stored_fuel_joules_upper),
                                               power.coal_fuel_joules)
         branch_terms.append({'target_role': source.target_role, 'target_unit': source.target_unit,
             'capacity_coal_forecast': capacity, 'required_coal_forecast': required,
