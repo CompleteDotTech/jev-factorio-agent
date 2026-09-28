@@ -2,7 +2,7 @@
 -- No runtime callbacks, storage writes, handlers, grants or connector creation.
 local out={schema="jev.coal-native-economics.v1",base_version=script.active_mods.base,
     mods=script.active_mods,query_status="unsupported",reason="unqualified",
-    epoch={},registry={},prototypes={},buffer_witnesses={},poles={},supply_surveys={},electric_members={},
+    epoch={},registry={},connector_routes={},prototypes={},buffer_witnesses={},poles={},supply_surveys={},electric_members={},
     fluid_members={},fuel_targets={},sources={}}
 local function need(ok,code) if not ok then error(code,0) end end
 local function finite(x,lo,hi)
@@ -63,7 +63,49 @@ local ok,reason=pcall(function()
         out.registry[#out.registry+1]={role=role,unit=e.unit_number,name=e.name,quality=e.quality.name,
             surface_index=e.surface.index,force_index=e.force.index,position=point(e.position),bounds=box(e.bounding_box)}
     end
-    sorted(out.registry,"role")
+    -- Ordinary connector parts are paid into their own durable ledger, not the
+    -- campaign role registry. Only complete, wholly paid routes may enter this
+    -- economic graph. A partial or foreign cell cannot be adopted by proximity.
+    local ledger=c.connector_ledger
+    need(ledger and ledger.protocol==1 and not ledger.active and type(ledger.routes)=="table",
+        "connector_ledger_unavailable")
+    local connector_count=0
+    for receipt,row in pairs(bounded(ledger.routes,128)) do
+        need(type(receipt)=="string" and #receipt==64 and not receipt:find("[^0-9a-f]"),
+            "connector_receipt_invalid")
+        need(row.id==receipt and row.state=="complete" and row.owned==true and not row.pending
+            and row.session_id==rt.jev_session_id and row.actor_unit==actor.unit_number
+            and row.surface_index==actor.surface.index and row.force_index==actor.force.index
+            and (row.kind=="pipe" or row.kind=="small-electric-pole")
+            and type(row.cells)=="table" and #row.cells>=1 and #row.cells<=1200
+            and row.paid==#row.cells and row.external==0,
+            "connector_route_unqualified")
+        local source,target=c.entities[row.source],c.entities[row.target]
+        need(source and target and source.valid and target.valid
+            and source.unit_number==row.source_unit and target.unit_number==row.target_unit,
+            "connector_endpoint_changed")
+        out.connector_routes[#out.connector_routes+1]={id=receipt,source=row.source,target=row.target,
+            source_unit=row.source_unit,target_unit=row.target_unit,kind=row.kind,fluid=row.fluid,
+            actor_unit=row.actor_unit,session_id=row.session_id,surface_index=row.surface_index,
+            force_index=row.force_index,state=row.state,owned=row.owned,paid=row.paid,
+            cell_count=#row.cells}
+        for index,cell in ipairs(sequence(row.cells,1200)) do
+            connector_count=connector_count+1;need(connector_count<=128,"survey_bound")
+            local position=point(cell.position)
+            local e=actor.surface.find_entity(row.kind,position)
+            need(cell.paid==1 and not cell.external and not cell.pending
+                and e and e.valid and e.force==actor.force and e.quality.name=="normal"
+                and e.position.x==position.x and e.position.y==position.y
+                and e.unit_number==cell.unit_number and not owned[e.unit_number],
+                "connector_payment_changed")
+            local role="connector:"..receipt..":"..index
+            need(#out.registry<2048,"survey_bound")
+            owned[e.unit_number]=role;entities[e.unit_number]=e
+            out.registry[#out.registry+1]={role=role,unit=e.unit_number,name=e.name,quality=e.quality.name,
+                surface_index=e.surface.index,force_index=e.force.index,position=point(e.position),bounds=box(e.bounding_box)}
+        end
+    end
+    sorted(out.registry,"role");sorted(out.connector_routes,"id")
     -- An omitted prototype capacity reads as zero on this engine. Price future
     -- drills/inserters from actual owned, normal-quality instances instead.
     -- Base-only treatment and the bounded registry make this a narrow witness,

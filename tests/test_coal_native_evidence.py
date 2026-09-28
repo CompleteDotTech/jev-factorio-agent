@@ -24,7 +24,7 @@ def example():
         'query_status': 'observed', 'reason': 'bounded_native_projection',
         'epoch': {'session_id': 'explicit-synthetic-native-graph', 'tick': 10000,
                   'actor_index': 1, 'actor_unit': 999999, 'surface_index': 1, 'force_index': 1},
-        'registry': [], 'prototypes': [], 'buffer_witnesses': [], 'poles': [], 'supply_surveys': [],
+        'registry': [], 'connector_routes': [], 'prototypes': [], 'buffer_witnesses': [], 'poles': [], 'supply_surveys': [],
         'electric_members': [], 'fluid_members': [], 'fuel_targets': [], 'sources': [],
         'coal_fuel_joules': 4_000_000,
         'fluid_prototypes': [{'name': 'steam', 'heat_capacity': 200, 'default_temperature': 15, 'max_temperature': 5000},
@@ -126,6 +126,40 @@ def test_bounded_owned_graph_derives_cost_without_authorizing_gameplay():
     with pytest.raises(FrozenInstanceError): result.actor_unit = 2
 
 
+def test_paid_connector_registry_requires_exact_checkpoint_identity():
+    raw, bundle = example()
+    role = 'connector:' + 'a' * 64 + ':1'
+    position = {'x': 100.5, 'y': 200.5}
+    raw['registry'].append({'role': role, 'unit': 9000, 'name': 'pipe',
+        'quality': 'normal', 'surface_index': raw['epoch']['surface_index'],
+        'force_index': raw['epoch']['force_index'], 'position': position,
+        'bounds': {'left_top': {'x': 100.1, 'y': 200.1},
+                   'right_bottom': {'x': 100.9, 'y': 200.9}}})
+    raw['registry'].sort(key=lambda row: row['role'])
+    expected = {role: {'unit': 9000, 'name': 'pipe', 'position': position}}
+    roles = {row['role']: row['unit'] for row in raw['registry']}
+    route = {'id': 'a' * 64, 'source': 'utility:boiler', 'target': 'utility:engine',
+             'source_unit': roles['utility:boiler'], 'target_unit': roles['utility:engine'],
+             'kind': 'pipe', 'fluid': 'steam', 'actor_unit': raw['epoch']['actor_unit'],
+             'session_id': raw['epoch']['session_id'], 'surface_index': raw['epoch']['surface_index'],
+             'force_index': raw['epoch']['force_index'], 'state': 'complete', 'owned': True,
+             'paid': 1, 'cell_count': 1}
+    raw['connector_routes'] = [route]
+    def bound(value, binding):
+        return decode(value, expected_epoch=deepcopy(value['epoch']),
+                      expected_bundle=bundle, unit_qualification=UNIT_QUALIFICATION,
+                      expected_connectors=binding, expected_routes={route['id']: route})
+    assert bound(raw, expected).mutation_authorized is False
+    for changed in ({}, {role: {**expected[role], 'unit': 9001}},
+                    {role: {**expected[role], 'name': 'small-electric-pole'}},
+                    {role: {**expected[role], 'position': {'x': 101.5, 'y': 200.5}}}):
+        with pytest.raises(NativeEconomicsUnavailable):
+            bound(raw, changed)
+    raw['registry'][-1]['force_index'] += 1
+    with pytest.raises(NativeEconomicsUnavailable):
+        bound(raw, expected)
+
+
 @pytest.mark.parametrize('case', ['unsupported', 'eligible', 'units', 'mod', 'prototype', 'bool_rate',
     'unknown_load', 'split_power', 'missing_pole', 'asymmetric_wire', 'missing_supply', 'missing_coverage',
     'foreign_coverage', 'missing_engine_fluid', 'missing_pipe_peer', 'asymmetric_pipe', 'wrong_segment',
@@ -206,7 +240,8 @@ def lua_runtime(raw, bundle):
         player={index=1,connected=true,character=actor,cheat_mode=false}
         game={tick=model.epoch.tick,speed=1,tick_paused=false,connected_players={player},
             get_player=function(index) return index==1 and player or nil end}
-        campaign={entities={},observe=forbidden};fair={actor=forbidden}
+        campaign={entities={},observe=forbidden,
+            connector_ledger={protocol=1,routes={},active=nil}};fair={actor=forbidden}
         jev_fle_runtime={campaign=campaign,fair=fair,agent_characters={actor},jev_bound_player_index=1,
             jev_player_index=1,jev_session_id=model.epoch.session_id,coal_supply={revision=4,committed=false,targets={},rows={}}}
         q=jev_fle_runtime.coal_supply
@@ -307,6 +342,12 @@ def lua_runtime(raw, bundle):
             if options.limit and #result>options.limit then while #result>options.limit do table.remove(result) end end
             return result
         end
+        surface.find_entity=function(name,position)
+            for _,e in ipairs(all_entities) do
+                if e.name==name and e.position.x==position.x and e.position.y==position.y then return e end
+            end
+            return nil
+        end
         helpers={table_to_json=function(value) projected=value;return '{}' end}
         rcon={print=function(value) response=value end}
     ''')
@@ -331,6 +372,111 @@ def test_full_raw_query_derives_supported_facts_without_callbacks_or_state_write
     assert lua.eval('storage.unchanged and next(storage)=="unchanged"')
     assert lua.eval('#q.targets') == 2
     assert lua.eval('game.tick') == raw['epoch']['tick']
+
+
+def paid_connector_runtime():
+    raw, bundle = example()
+    lua = lua_runtime(raw, bundle)
+    receipt = 'a' * 64
+    lua.globals().connector_receipt = receipt
+    lua.execute('''
+        local position={x=1000.5,y=1000.5}
+        local e={valid=true,unit_number=9000,name='pipe',quality={name='normal'},
+            position=position,bounding_box={left_top={x=1000.1,y=1000.1},
+                right_bottom={x=1000.9,y=1000.9}},surface=surface,force=force,
+            prototype=prototypes.entity.pipe,type='pipe'}
+        by_unit[9000]=e;all_entities[#all_entities+1]=e
+        campaign.connector_ledger.routes[connector_receipt]={id=connector_receipt,
+            source='utility:boiler',target='utility:engine',
+            source_unit=campaign.entities['utility:boiler'].unit_number,
+            target_unit=campaign.entities['utility:engine'].unit_number,
+            actor_unit=actor.unit_number,surface_index=surface.index,
+            force_index=force.index,session_id=jev_fle_runtime.jev_session_id,
+            state='complete',owned=true,paid=1,external=0,
+            kind='pipe',fluid='steam',pending=nil,cells={{paid=1,external=false,
+                unit_number=9000,position=position}}}
+    ''')
+    role = 'connector:' + receipt + ':1'
+    expected = {role: {'unit': 9000, 'name': 'pipe',
+                       'position': {'x': 1000.5, 'y': 1000.5}}}
+    return lua, bundle, expected
+
+
+def test_query_binds_paid_connector_outside_registered_factory_roles():
+    lua, bundle, expected = paid_connector_runtime()
+    lua.execute(files('jev_factorio').joinpath('lua/coal_economics.lua').read_text())
+    projected = plain(lua.globals().projected)
+    assert projected['query_status'] == 'observed', projected['reason']
+    result = decode(projected, expected_epoch=projected['epoch'],
+                    expected_bundle=bundle, unit_qualification=UNIT_QUALIFICATION,
+                    expected_connectors=expected,
+                    expected_routes={row['id']: row for row in projected['connector_routes']})
+    assert result.mutation_authorized is False
+    assert any(row['role'] in expected for row in projected['registry'])
+
+
+def test_query_rejects_paid_route_rebound_to_another_owned_endpoint():
+    lua, bundle, expected = paid_connector_runtime()
+    original = {'id': 'a' * 64, 'source': 'utility:boiler', 'target': 'utility:engine',
+                'source_unit': lua.eval("campaign.entities['utility:boiler'].unit_number"),
+                'target_unit': lua.eval("campaign.entities['utility:engine'].unit_number"),
+                'kind': 'pipe', 'fluid': 'steam', 'actor_unit': lua.eval('actor.unit_number'),
+                'session_id': lua.eval('jev_fle_runtime.jev_session_id'),
+                'surface_index': 1, 'force_index': 1, 'state': 'complete',
+                'owned': True, 'paid': 1, 'cell_count': 1}
+    lua.execute("local row=campaign.connector_ledger.routes[connector_receipt]; "
+                "row.source='pole:2000'; row.source_unit=campaign.entities['pole:2000'].unit_number")
+    lua.execute(files('jev_factorio').joinpath('lua/coal_economics.lua').read_text())
+    projected = plain(lua.globals().projected)
+    assert projected['query_status'] == 'observed'
+    with pytest.raises(NativeEconomicsUnavailable, match='connector_route_binding_mismatch'):
+        decode(projected, expected_epoch=projected['epoch'], expected_bundle=bundle,
+               unit_qualification=UNIT_QUALIFICATION, expected_connectors=expected,
+               expected_routes={original['id']: original})
+
+
+@pytest.mark.parametrize('mutation', [
+    "campaign.connector_ledger.routes[connector_receipt].state='building'",
+    "campaign.connector_ledger.routes[connector_receipt].state='fault'",
+    "campaign.connector_ledger.routes[connector_receipt].paid=0",
+    "campaign.connector_ledger.routes[connector_receipt].external=1",
+    "campaign.connector_ledger.routes[connector_receipt].actor_unit=2",
+    "campaign.connector_ledger.routes[connector_receipt].cells[1].unit_number=9001",
+    "campaign.connector_ledger.active=connector_receipt",
+    "campaign.connector_ledger.routes[connector_receipt].pending=1",
+])
+def test_query_refuses_unpaid_or_changed_connector_graph(mutation):
+    lua, bundle, _ = paid_connector_runtime()
+    lua.execute(mutation)
+    lua.execute(files('jev_factorio').joinpath('lua/coal_economics.lua').read_text())
+    projected = plain(lua.globals().projected)
+    assert projected['query_status'] == 'unsupported'
+    with pytest.raises(NativeEconomicsUnavailable):
+        checked(projected, bundle)
+
+
+def test_query_refuses_more_than_128_paid_connector_cells():
+    lua, bundle, _ = paid_connector_runtime()
+    lua.execute('''
+        local row=campaign.connector_ledger.routes[connector_receipt]
+        for index=2,129 do
+            local position={x=1000.5+index,y=1000.5}
+            local unit=9000+index
+            local e={valid=true,unit_number=unit,name='pipe',quality={name='normal'},
+                position=position,bounding_box={left_top={x=position.x-.4,y=position.y-.4},
+                    right_bottom={x=position.x+.4,y=position.y+.4}},
+                surface=surface,force=force,prototype=prototypes.entity.pipe,type='pipe'}
+            by_unit[unit]=e;all_entities[#all_entities+1]=e
+            row.cells[index]={paid=1,external=false,unit_number=unit,position=position}
+        end
+        row.paid=129
+    ''')
+    lua.execute(files('jev_factorio').joinpath('lua/coal_economics.lua').read_text())
+    projected = plain(lua.globals().projected)
+    assert projected['query_status'] == 'unsupported'
+    assert projected['reason'] == 'survey_bound'
+    with pytest.raises(NativeEconomicsUnavailable):
+        checked(projected, bundle)
 
 
 @pytest.mark.parametrize('mutation', [
