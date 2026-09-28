@@ -139,6 +139,22 @@ def test_stale_or_unrelated_raw_dependency_never_enters_candidate_evidence():
     assert 'travel:factory_gather' in missing_site['unknowns']
 
 
+def test_tree_named_wood_target_is_valid_gather_start_evidence():
+    state, data = snapshot(), catalog()
+    data.recipes['wooden-chest'] = recipe('wooden-chest', {'wood': 2})
+    state.nearby_resources['wood'] = 3
+    state.factory['fair_resource_targets']['wood'] = {
+        'name': 'tree-01', 'surface_index': 1,
+        'position': {'x': 3, 'y': 0},
+    }
+    plan = FactoryPlanner(data, state, 'rocket_launch')._need('wooden-chest', 1)
+    assert plan.steps[0].action == 'factory_gather'
+    assert plan.steps[0].parameters == {'resource': 'wood', 'quantity': 1}
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    assert row['gather_start_evidence']['fair_target_identity_observed'] is True
+    assert row['raw_prerequisite']['direct_product'] == 'wooden-chest'
+
+
 def test_local_rubric_does_not_require_one_pickup_to_launch_a_rocket():
     state, data, plans = transfers()
     support = scheduling_context(state, data, plans, 'rocket_launch')
