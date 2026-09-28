@@ -166,6 +166,22 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
             "A larger pickup quantity alone is not such a fact. Later crafting "
             "and output still require fresh native verification."
             if current_prerequisite and unlinked_lookahead else "")
+        bill_craft = any(
+            isinstance(row, dict) and row.get('work_scope') == 'lookahead'
+            and row.get('unknowns') == [] and row.get('urgency') == 0
+            and isinstance(row.get('shared_bill_craft'), dict)
+            and row['shared_bill_craft'].get('observed_tick') == tick
+            and row['shared_bill_craft'].get('local_target_item') == target
+            and row['shared_bill_craft'].get('forecast_is_not_paid_stock_or_completed_output') is True
+            for row in evidence.values())
+        bill_craft_hint = (
+            " The lookahead handcraft has a current catalog-bill shortfall and "
+            "receipt-tracked start facts. Compare its bounded contribution with "
+            "the immediate raw prerequisite: an admitted receipt-tracked job "
+            "may overlap a later independent gather, but overlap and output are not "
+            "yet verified. Do not treat lack of a recursive craft path alone as "
+            "evidence that this bill-linked craft is useless."
+            if current_prerequisite and bill_craft else "")
         craft_choice_hint = ""
         if len(selected) == 1 and type(tick) is int and isinstance(target, str) and target:
             plan = selected[0]
@@ -232,7 +248,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                                  "Report confidence in choosing the best next action from this "
                                  "observed frontier, not confidence in completing the ultimate goal. "
                                  "Do not assume other questions' answers are available."
-                                 + choice_priority_hint + craft_choice_hint),
+                                 + choice_priority_hint + bill_craft_hint
+                                 + craft_choice_hint),
                 "criteria": {**{p.id: p.description for p in selected},
                              "observe": "Gather another observation without mutating the factory"},
             }
@@ -293,6 +310,18 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 if (((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('craft_start_evidence')
                     and ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('craft_dependency'))
                 else ""
+            )
+            shared_bill = row.get('shared_bill_craft')
+            bill_craft_hint = (
+                " `shared_bill_craft` ties this ready handcraft to a current "
+                "bounded catalog bill shortfall. It can supply a useful forecast "
+                "intermediate (level 1). Output needs native verification; "
+                "background overlap is only possible after native job admission."
+                if (isinstance(shared_bill, dict)
+                    and shared_bill.get('observed_tick') == tick
+                    and shared_bill.get('local_target_item') == target
+                    and isinstance(row.get('craft_start_evidence'), dict)
+                    and row.get('unknowns') == []) else ""
             )
             place_hint = (
                 " `placement_start_evidence` and `placement_dependency` bind this "
@@ -421,7 +450,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "from one bounded local production action. A current "
                     "`raw_prerequisite` is evidence that gathering supplies an input to "
                     "the named native recipe, not that the later craft already happened."
-                    + craft_hint + place_hint + fuel_hint + transfer_hint + input_hint
+                    + craft_hint + bill_craft_hint + place_hint + fuel_hint
+                    + transfer_hint + input_hint
                     + pickup_hint
                 ),
                 "criteria": ([

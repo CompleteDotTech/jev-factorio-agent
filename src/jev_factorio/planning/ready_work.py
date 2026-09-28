@@ -251,6 +251,34 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
                 plan = worker._need(item, amount)
             except (KeyError, ValueError):
                 continue
+            if (plan and len(plan.steps) == 1
+                    and plan.steps[0].action == 'factory_craft'
+                    and plan.steps[0].item == item and self.focus is not None):
+                step = plan.steps[0]
+                recipe = self.catalog.recipes.get(step.parameters.get('recipe'), {})
+                products = recipe.get('products', [])
+                batches = step.parameters.get('batches')
+                carried = self.snapshot.inventory.get(item, 0)
+                if (type(amount) is int and amount > 0
+                        and type(carried) is int and 0 <= carried < amount
+                        and type(batches) is int and batches > 0
+                        and len(products) == 1 and products[0].get('type') == 'item'
+                        and products[0].get('name') == item
+                        and products[0].get('probability', 1) == 1
+                        and type(products[0].get('amount')) is int
+                        and products[0]['amount'] > 0
+                        and products[0]['amount'] * batches >= amount - carried):
+                    plan = replace(plan, materials={**(plan.materials or {}),
+                        'shared_bill_craft': {
+                            'observed_tick': self.snapshot.tick,
+                            'local_target_item': self.focus[0],
+                            'local_target_amount': self.focus[1],
+                            'craft_item': item,
+                            'bill_inventory_target': amount,
+                            'inventory_now': carried,
+                            'planned_product_units': products[0]['amount'] * batches,
+                            'basis': 'current_catalog_shared_material_bill',
+                        }})
             if plan and plan.steps[0].action in {
                 "factory_gather", "factory_insert", "factory_extract", "factory_craft"
             }:

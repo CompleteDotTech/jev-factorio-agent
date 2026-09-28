@@ -469,6 +469,53 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                     'basis': 'current_recursive_planner_provenance_and_native_recipe',
                     'later_steps_require_fresh_native_preconditions': True,
                 }
+        shared_bill_craft = None
+        bill = (plan.materials or {}).get('shared_bill_craft')
+        local = (plan.materials or {}).get('local_objective')
+        if (scope == 'lookahead' and craft_start is not None
+                and craft_start['recipe_unlocked_and_handcraftable'] is True
+                and isinstance(bill, dict) and isinstance(local, dict)
+                and len(plan.steps) == 1):
+            step = plan.steps[0]
+            parameters = step.parameters or {}
+            target, carried = bill.get('bill_inventory_target'), bill.get('inventory_now')
+            produced = craft_start['expected_products_after_native_verification'].get(step.item)
+            bill_batches = (plan.materials or {}).get('batches')
+            bill_batches = bill_batches if isinstance(bill_batches, dict) else {}
+            if (step.action == 'factory_craft_job'
+                    and isinstance(parameters.get('receipt'), str)
+                    and bool(parameters['receipt'])
+                    and craft_start.get('native_recipe') == parameters.get('recipe')
+                    and all(craft_start.get(key) is True for key in (
+                        'input_costs_match_native_recipe', 'inputs_in_inventory_now',
+                        'player_connected_and_bound', 'crafting_queue_empty',
+                        'craft_job_protocol_ready', 'native_receipt_required_for_completion'))
+                    and bill.get('basis') == 'current_catalog_shared_material_bill'
+                    and bill.get('observed_tick') == snapshot.tick
+                    and bill.get('local_target_item') == local.get('item')
+                    and bill.get('local_target_amount') == local.get('inventory_target')
+                    and bill.get('craft_item') == step.item
+                    and type(bill.get('local_target_amount')) is int
+                    and bill['local_target_amount'] > 0
+                    and bill_batches.get(parameters.get('recipe')) == parameters.get('batches')
+                    and type(target) is int and target > 0
+                    and type(carried) is int and 0 <= carried < target
+                    and snapshot.inventory.get(step.item, 0) == carried
+                    and type(produced) is int and produced > 0
+                    and bill.get('planned_product_units') == produced
+                    and produced >= target - carried):
+                shared_bill_craft = {
+                    'observed_tick': snapshot.tick,
+                    'local_target_item': local['item'],
+                    'craft_item': step.item,
+                    'bounded_bill_inventory_target': target,
+                    'inventory_now': carried,
+                    'unfilled_bill_units': target - carried,
+                    'expected_products_after_native_verification': produced,
+                    'basis': 'current_catalog_shared_material_bill_and_native_recipe',
+                    'forecast_is_not_paid_stock_or_completed_output': True,
+                    'background_overlap_requires_native_admission': True,
+                }
         placement_dependency = None
         provenance = (plan.materials or {}).get('placement_dependency')
         local = (plan.materials or {}).get('local_objective')
@@ -669,6 +716,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'fuel_transfer_start_evidence': fuel_transfer_start,
             'craft_start_evidence': craft_start,
             'craft_dependency': craft_dependency,
+            'shared_bill_craft': shared_bill_craft,
             'placement_start_evidence': placement_start,
             'placement_dependency': placement_dependency,
             'recipe_input_transfer_start_evidence': recipe_input_transfer_start,
