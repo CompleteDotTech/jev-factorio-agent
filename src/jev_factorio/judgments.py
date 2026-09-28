@@ -190,9 +190,15 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
             placement_start = ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get(
                 'placement_start_evidence')
             craft_hint = (
-                " `craft_dependency` traces this current craft to the planner target; "
-                "later production still needs fresh native checks."
-                if ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('craft_dependency')
+                " `craft_start_evidence` shows the current actor, queue, recipe, "
+                "and carried ingredients needed to start this handcraft; "
+                "`craft_dependency` traces its product along the current planner "
+                "recipe path to the local target. Score this bounded intermediate "
+                "product for its evidenced contribution, without requiring it to "
+                "finish the target. The craft and later production still need "
+                "fresh native receipt and precondition checks."
+                if (((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('craft_start_evidence')
+                    and ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('craft_dependency'))
                 else ""
             )
             place_hint = (
@@ -228,7 +234,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "type": "score",
                 "instructions": (
                     f"How directly do the steps in {pointer} advance `{objective}` "
-                    "given `facts` and `execution_contract`? Do not demand a full-game plan "
+                    "given `facts`, current `candidate_evidence`, and `execution_contract`? Do not demand a full-game plan "
                     "from one bounded local production action. A current "
                     "`raw_prerequisite` is evidence that gathering supplies an input to "
                     "the named native recipe, not that the later craft already happened."
@@ -267,6 +273,13 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "when present; do not treat the unverified travel outcome as a missing "
                     "start fact. "
                     "Future action outcomes will be verified after execution, not assumed now."
+                    + (" For a handcraft, use current `craft_start_evidence` to judge "
+                       "the actor, queue, native recipe, and carried ingredients "
+                       "needed to start. The output still requires native receipt "
+                       "verification; its future completion is not a missing "
+                       "start observation."
+                       if ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get(
+                           'craft_start_evidence') else "")
                     + (" For a paid fuel transfer, `fuel_transfer_start_evidence` describes "
                        "the current carried coal, owned burner, and exact receipt. Judge "
                        "start facts from those values; the future transfer outcome is "
