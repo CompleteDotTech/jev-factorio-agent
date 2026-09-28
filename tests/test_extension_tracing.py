@@ -31,6 +31,7 @@ def decorated(monkeypatch):
     env.Position = SimpleNamespace
     monkeypatch.setitem(sys.modules, "fle.env", env)
     native = Mock()
+    native.backend._native_attachment = None
     native.call.return_value = json.dumps(
         {"position": {"x": 1, "y": 2}, "name": "burner-inserter"})
     factory = InputRouteFactory(OutputBufferFactory(CraftJobFactory(native)))
