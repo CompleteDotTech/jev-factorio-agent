@@ -26,6 +26,8 @@ class FairActions:
             self.call("bind")
 
     def command(self, script: str) -> str:
+        from .native_attachment import prepare_install_command
+        script = prepare_install_command(script, getattr(self.backend, '_native_attachment', None))
         command = "/sc " + script
         result = native_io(
             "native_command",

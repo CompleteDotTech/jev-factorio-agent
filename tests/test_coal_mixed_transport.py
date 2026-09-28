@@ -129,7 +129,7 @@ def test_adapter_validates_mixed_attachment_before_mutating_native_configuration
     class Native:
         def __init__(self):
             self.commands=[]; self.calls=[]
-            self.backend=SimpleNamespace(_native_attachment=None)
+            self.backend = SimpleNamespace(_native_attachment=None)
         def command(self, text): self.commands.append(text)
         def call(self, name, *args): self.calls.append((name, args))
     base = Native(); transport = SolidRouteFactory(base, MIXED)
