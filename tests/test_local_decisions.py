@@ -274,6 +274,10 @@ def test_furnace_craft_keeps_current_lab_planner_provenance_without_claiming_lab
         [plan])
     assert context['candidate_evidence'][plan.id]['craft_dependency'] == row['craft_dependency']
     assert 'Prefer this bounded craft over observe' in questions['candidate']['instructions']
+    assert 'current planner-linked intermediate craft' in (
+        questions[plan.id + '/benefit']['criteria'][1])
+    assert 'handcrafts from carried inputs without changing existing entities' in (
+        questions[plan.id + '/disruption']['criteria'][0])
     assert 'later production still need fresh native receipt and precondition checks' in str(questions)
     benefit = questions[plan.id + '/benefit']['instructions']
     observation = questions[plan.id + '/needs_observation']['instructions']
