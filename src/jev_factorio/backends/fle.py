@@ -122,9 +122,12 @@ class FleBackend:
             raise RuntimeError("Session adoption failed; refusing to reset or overwrite identity")
         return session_id
 
-    def start(self, resume: bool = False, adopt_session: bool = False) -> None:
+    def start(self, resume: bool = False, adopt_session: bool = False,
+              setup_timing=None) -> None:
         if adopt_session and not resume:
             raise ValueError("Session adoption requires resume; never initializes a world")
+        if setup_timing:
+            setup_timing.mark_backend('attach_start')
         from factorio_rcon import RCONClient
         from fle.env import FactorioInstance
 
@@ -184,6 +187,8 @@ class FleBackend:
             peaceful=True,
             reset_speed=1,
         )
+        if setup_timing:
+            setup_timing.mark_backend('instance_ready')
         if resume:
             existing_campaign = self._instance.rcon_client.send_command(
                 "/sc rcon.print(jev_fle_runtime ~= nil and jev_fle_runtime.campaign ~= nil)"
@@ -202,9 +207,13 @@ class FleBackend:
                 raise RuntimeError("No installed native campaign to resume")
             elif (existing_campaign or "").strip() != "false":
                 raise RuntimeError("Cannot determine whether the native campaign is installed")
+        if setup_timing:
+            setup_timing.mark_backend('installation_ready')
         from .fair_actions import FairActions
 
         self._fair = FairActions(self)
+        if setup_timing:
+            setup_timing.mark_backend('fair_ready')
 
     @property
     def _tools(self):
