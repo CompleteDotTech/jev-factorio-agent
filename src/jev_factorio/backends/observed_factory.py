@@ -12,10 +12,15 @@ class ObservedFactory(NativeFactory):
     def __init__(self, backend):
         super().__init__(backend)
         self._discovery_epoch = 0
-        self.command(files("jev_factorio").joinpath("lua/observation.lua").read_text())
-        ready = self.command(files("jev_factorio").joinpath("lua/observation_v2.lua").read_text())
-        if ready.strip() != 'JEV_ATOMIC_READY|2':
-            raise RuntimeError('Native coherent observation negotiation failed')
+        if getattr(backend, '_native_attachment', None) is not None:
+            from .native_attachment import require_asset
+            require_asset(backend._native_attachment, 'observation')
+            require_asset(backend._native_attachment, 'observation_v2')
+        else:
+            self.command(files("jev_factorio").joinpath("lua/observation.lua").read_text())
+            ready = self.command(files("jev_factorio").joinpath("lua/observation_v2.lua").read_text())
+            if ready.strip() != 'JEV_ATOMIC_READY|2':
+                raise RuntimeError('Native coherent observation negotiation failed')
         self.coherent_observation_version = 2
 
     def execute(self, action, parameters, trace=None):
