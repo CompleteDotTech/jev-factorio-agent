@@ -219,6 +219,7 @@ def readback(client, *, receipt_path=None):
         profile = native['profile']
         if profile == LEGACY_OBSERVATION_PROFILE:
             if (result['modules']['connector_ownership']
+                    or result['modules']['successors']
                     or native['assets'].get('factory') != PINNED_ASSETS['factory']
                     or native['assets'].get('observation_v2') != LEGACY_OBSERVATION_SHA256
                     or any(value != (LEGACY_OBSERVATION_SHA256 if name == 'observation_v2'

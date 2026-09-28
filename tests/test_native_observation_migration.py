@@ -34,6 +34,10 @@ def test_migration_profile_refuses_any_existing_or_new_connector_installation():
     with pytest.raises(RuntimeError, match='unmodified e759'):
         _manifest(row)
     row['modules']['connector_ownership'] = False
+    row['modules']['successors'] = True
+    with pytest.raises(RuntimeError, match='unmodified e759'):
+        _manifest(row)
+    row['modules']['successors'] = False
     row['native_installation'] = {'profile': LEGACY_OBSERVATION_PROFILE}
     with pytest.raises(RuntimeError, match='unmodified e759'):
         _manifest(row)
@@ -53,6 +57,11 @@ def test_migrated_profile_accepts_only_original_modules_and_reviewed_observer():
     with pytest.raises(RuntimeError, match='not installed'):
         require_asset(row, 'connector_ownership')
     row['native_installation']['assets']['factory'] = '0' * 64
+    with pytest.raises(RuntimeError, match='profile requires reconciliation'):
+        readback(Client())
+    row['native_installation']['assets']['factory'] = PINNED_ASSETS['factory']
+    row['modules']['successors'] = True
+    row['native_installation']['assets']['successors'] = PINNED_ASSETS['successors']
     with pytest.raises(RuntimeError, match='profile requires reconciliation'):
         readback(Client())
 
