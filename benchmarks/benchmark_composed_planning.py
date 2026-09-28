@@ -66,6 +66,11 @@ def distribution(values):
 def benchmark(samples):
     if not 5 <= samples <= 10000:
         raise ValueError('Choose 5..10000 samples')
+    selected_source_sha256 = {
+        path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+        for path in SOURCE_FILES
+    }
+    input_tree_sha256 = benchmark_input_tree_sha256()
     results={}
     for name,science in [('ready_science',20),('ready_science_craft',0)]:
         wall,cpu,builders,visits,signatures=[],[],[],[],set()
@@ -95,12 +100,16 @@ def benchmark(samples):
                        'planner_constructors':distribution(builders),'expansion_visits':distribution(visits),
                        'stable_frontier':len(signatures)==1,
                        'frontier':json.loads(next(iter(signatures))) if len(signatures)==1 else None}
+    if (selected_source_sha256 != {
+        path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+        for path in SOURCE_FILES
+    } or input_tree_sha256 != benchmark_input_tree_sha256()):
+        raise RuntimeError('Benchmark inputs changed while samples were running')
     return {'schema':1,'evidence':'deterministic_fixture','native_claim':False,
             'samples':samples,'clock':'perf_counter_ns','cpu_clock':'process_time_ns',
             'environment':{'python':sys.version.split()[0],'platform':platform.platform()},
-            'selected_source_sha256':{path:hashlib.sha256((ROOT/path).read_bytes()).hexdigest()
-                                      for path in SOURCE_FILES},
-            'benchmark_input_tree_sha256':benchmark_input_tree_sha256(),
+            'selected_source_sha256':selected_source_sha256,
+            'benchmark_input_tree_sha256':input_tree_sha256,
             'measurement_limits':['Current-source scenarios, not paired pre/post source revisions.',
                                   'Input tree hashes package/test Python, benchmark script and pyproject; external dependencies are not hashed.',
                                   'No Factorio engine, provider, network or contention-controlled host.'],

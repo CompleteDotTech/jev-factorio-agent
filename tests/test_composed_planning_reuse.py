@@ -59,6 +59,8 @@ def test_completed_research_changes_composed_frontier_after_checkpoint_reload(tm
     warm, _ = resumed._work_candidates(backend.state)
     assert [p.to_dict() for p in warm] == [p.to_dict() for p in before]
     backend.state.researched.append('study')
+    backend.state.factory['research'] = ''
+    backend.state.factory['research_progress'] = 0
     after, _ = resumed._work_candidates(backend.state)
     assert after[0].steps[0].action == 'factory_explore'
     assert [p.to_dict() for p in after] != [p.to_dict() for p in before]
