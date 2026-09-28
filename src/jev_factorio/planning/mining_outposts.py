@@ -14,12 +14,19 @@ class MiningOutpostPlanner(InputRoutePlanner):
         self._outpost_acquiring = False
 
     def _acquire_outpost(self, item, amount, path):
-        previous = self._outpost_acquiring
-        self._outpost_acquiring = True
+        previous = (self._outpost_acquiring, self._acquiring_route,
+                    getattr(self, '_economic_acquiring', False))
+        self._outpost_acquiring = self._acquiring_route = self._economic_acquiring = True
         try:
-            return super()._need(item, amount, path)
+            # The paid outpost kit is a separate bounded objective. Its drill
+            # can require plates from the producer whose ore need prompted the
+            # outpost; retaining that outer path falsely makes the drill's
+            # legitimate plate prerequisite a production cycle. While paying
+            # for the kit, neither a nested route nor a speculative investment
+            # may replace its current manual/output-buffer-aware prerequisite.
+            return super()._need(item, amount, ())
         finally:
-            self._outpost_acquiring = previous
+            self._outpost_acquiring, self._acquiring_route, self._economic_acquiring = previous
 
     def _need(self, item, amount, path=()):
         if (item not in RESOURCES or self._outpost_acquiring or self.goal != 'rocket_launch'
