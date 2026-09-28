@@ -17,13 +17,17 @@ import re
 import statistics
 
 from .observation import LABELS
-from .performance import CALLS, CHECKPOINT_STATUSES
+from .performance import (CALLS, CHECKPOINT_STATUSES, CHECKPOINT_TIMINGS,
+                          CHECKPOINT_IO_OPERATIONS)
 from .iteration_timing import validate_timing, CLOCKS
 from .telemetry import STAGES, validate_phase
 
 MAX_LINE = 8 * 1024 * 1024
 MAX_RECORDS = 100_000
 PARTS = {'rpc', 'helpers', 'decode', 'unattributed'}
+CHECKPOINT_OPERATIONS = ({'capture_calls', 'serialization_calls', 'measured_calls',
+                         'io_measured_calls', 'phase_fields_present_calls'}
+                        | CHECKPOINT_IO_OPERATIONS)
 
 
 def distribution(values: list[int]) -> dict:
@@ -208,10 +212,18 @@ def analyze(path: Path, *, max_records: int = MAX_RECORDS) -> dict:
                         raise ValueError('Unknown checkpoint counter')
                     for key, value in checkpoints.items():
                         counts['checkpoint:' + key] += nonnegative(value)
-                    for key in ('capture_calls', 'serialization_calls', 'measured_calls'):
-                        value = metrics.get('checkpoint_operations', {}).get(key)
-                        if value is not None:
-                            counts['checkpoint:' + key] += nonnegative(value)
+                    operations = metrics.get('checkpoint_operations', {})
+                    if not isinstance(operations, dict) or set(operations) - CHECKPOINT_OPERATIONS:
+                        raise ValueError('Unknown checkpoint operation counter')
+                    for key, value in operations.items():
+                        counts['checkpoint:' + key] += nonnegative(value)
+                    timings = metrics.get('checkpoint_ns', {})
+                    if not isinstance(timings, dict) or set(timings) - CHECKPOINT_TIMINGS:
+                        raise ValueError('Unknown checkpoint timing')
+                    for key, value in timings.items():
+                        # These are aggregates for this record. Missing fields
+                        # in legacy records are unknown, never zero samples.
+                        samples['per_record_checkpoint:' + key].append(nonnegative(value))
             except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as error:
                 raise ValueError(f'Invalid latency record at line {records}') from error
     if not records:
@@ -236,6 +248,10 @@ def analyze(path: Path, *, max_records: int = MAX_RECORDS) -> dict:
                 'observation_exclusive': 'within_each_single_ordered_observation_only',
                 'phase_inclusive': 'nested_phase_durations_not_additive',
                 'per_record': 'per_record_aggregates_not_individual_call_quantiles',
+                'checkpoint': 'current_iteration_through_checkpoint_before_record; '
+                              'per_record_inclusive_aggregates_not_additive; '
+                              'serialize_ns_includes_capture_and_json_encode; '
+                              'absent_fields_unknown_not_zero',
                 'gap': 'UTC_record_to_next_observation_includes_unmeasured_emission_and_sleep',
                 'process_cpu': 'whole_python_process_including_other_threads_not_native_or_host_cpu'},
             'unavailable': ['opaque_helper_transport_decomposition', 'helper_retry_and_backoff',
