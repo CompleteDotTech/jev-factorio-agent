@@ -71,6 +71,19 @@ def test_bootstrap_native_binding_and_chest_read():
         assert(not pcall(storage.campaign.observation_snapshot_v2,0,51))''')
 
 
+def test_bound_bootstrap_survives_actor_travel_via_exact_site_lookup():
+    lua = runtime()
+    lua.execute('''selected=add_drill(51,10,0);add_chest(52,12,0)
+        storage.campaign.observation_snapshot_v2(0)
+        player.position={x=2000,y=0}
+        storage.campaign.observation_snapshot_v2(0,51,{x=10,y=0})
+        assert(captured.bootstrap.drill.unit_number==51)
+        assert(captured.bootstrap.output_connected and captured.bootstrap.iron_ore_collected==7)
+        assert(not pcall(storage.campaign.observation_snapshot_v2,0,51,{x=11,y=0}))
+        selected.unit_number=99
+        assert(not pcall(storage.campaign.observation_snapshot_v2,0,51,{x=10,y=0}))''')
+
+
 def test_bootstrap_overflow_fails_closed_not_truncated():
     lua = runtime()
     lua.execute('for i=1,129 do add_chest(i,0,0) end;assert(not pcall(storage.campaign.observation_snapshot_v2,0))')

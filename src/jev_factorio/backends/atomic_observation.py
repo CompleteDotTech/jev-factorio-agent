@@ -86,8 +86,15 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
     # A just-built fair bootstrap drill is also identity-bound, when available.
     if prior_drill is None and getattr(backend._drill, 'unit_number', None) is not None:
         prior_drill = _integer(backend._drill.unit_number, 'bootstrap identity', 1)
+    prior_position = None
+    if prior_drill is not None and getattr(backend._drill, 'unit_number', None) == prior_drill:
+        position = getattr(backend._drill, 'position', None)
+        if position is not None:
+            prior_position = {'x': position.x, 'y': position.y}
+            _position(prior_position)
     result = parse_snapshot(native.call('observation_snapshot_v2', native._discovery_epoch,
-                                        prior_drill), backend._observation_profile, schemas=(2,))
+                                        prior_drill, prior_position),
+                            backend._observation_profile, schemas=(2,))
     session = result.get('session_id')
     if not isinstance(session, str) or not session or len(session) > 128:
         raise ValueError('Invalid atomic session identity')
