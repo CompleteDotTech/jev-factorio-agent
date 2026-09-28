@@ -59,6 +59,9 @@ independent authenticity. See [Research logging](docs/RESEARCH_LOGGING.md) for
 schemas, verification, incomplete runs, redaction and durability limits. Use a
 new directory for each invocation; supervisor directory rotation is not yet
 implemented, so do not export a fixed `JEV_RUN_DIR` to a supervised campaign.
+An opt-in [owner step gate](docs/OWNER_STEP_GATE.md) can keep one resumed native
+process alive across a bounded number of individually reviewed steps; it does
+not authorize a live controller without the existing owner and native checks.
 
 ## Layout
 
