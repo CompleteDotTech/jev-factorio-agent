@@ -150,7 +150,9 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "instructions": (
                     f"How directly do the steps in {pointer} advance `{objective}` "
                     "given `facts` and `execution_contract`? Do not demand a full-game plan "
-                    "from one bounded local production action."
+                    "from one bounded local production action. A current "
+                    "`raw_prerequisite` is evidence that gathering supplies an input to "
+                    "the named native recipe, not that the later craft already happened."
                 ),
                 "criteria": ([
                     "No demonstrated contribution to the bounded production objective",

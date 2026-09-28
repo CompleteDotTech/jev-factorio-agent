@@ -11,7 +11,7 @@ from jev_factorio.planning.decision_support import candidate_evidence, distinct_
 from jev_factorio.planning.factory import FactoryPlanner
 from jev_factorio.planning.ready_work import ReadyWorkPlanner
 from jev_factorio.skills import Plan, Step, compile_plans
-from test_factory import FactorySimulation, catalog, machine, snapshot
+from test_factory import FactorySimulation, catalog, machine, recipe, snapshot
 from test_causal_trace import Sink, events
 from test_deadline_scheduling import scenario
 from test_hierarchical import CountingModel
@@ -83,6 +83,41 @@ def test_focus_is_structured_without_mutating_material_bill():
     assert 'local_objective' not in (worker.materials or {})
     serial = FactoryPlanner(data, state, 'rocket_launch')._need('iron-plate', 20)
     assert 'local_objective' not in (serial.materials or {})
+
+
+def test_stone_gather_explains_current_lab_recipe_dependency_without_claiming_output():
+    state, data = snapshot(), catalog()
+    data.recipes['lab'] = recipe('lab', {'iron-plate': 1})
+    worker = ReadyWorkPlanner(data, state, 'rocket_launch')
+    plan = worker._need('lab', 1)
+    assert plan.steps[0].action == 'factory_gather'
+    assert plan.steps[0].parameters['resource'] == 'stone'
+    assert plan.materials['local_objective']['item'] == 'lab'
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    assert row['raw_prerequisite'] == {
+        'observed_tick': state.tick,
+        'direct_recipe': 'stone-furnace',
+        'direct_product': 'stone-furnace',
+        'planner_item_path': ['lab', 'iron-plate', 'stone-furnace', 'stone'],
+        'basis': 'current_planner_dependency_and_native_catalog_recipe',
+        'later_steps_require_fresh_native_preconditions': True,
+    }
+    assert row['delivers_or_crafts'] == []
+    assert row['processed_units_basis'] == 'handling_volume_not_useful_production'
+    assert not row['requires_investment']
+    assert not plan.steps[0].allowed(snapshot(nearby_resources={}))
+
+
+def test_stale_or_unrelated_raw_dependency_never_enters_candidate_evidence():
+    state, data = snapshot(), catalog()
+    plan = FactoryPlanner(data, state, 'iron_smelting')._need('iron-plate', 10)
+    assert candidate_evidence(state, data, [plan])[plan.id]['raw_prerequisite'] is not None
+    stale = replace(plan, materials={**plan.materials, 'raw_prerequisite': {
+        **plan.materials['raw_prerequisite'], 'observed_tick': state.tick - 1}})
+    unrelated = replace(plan, materials={**plan.materials, 'raw_prerequisite': {
+        **plan.materials['raw_prerequisite'], 'direct_product': 'lab'}})
+    assert candidate_evidence(state, data, [stale])[stale.id]['raw_prerequisite'] is None
+    assert candidate_evidence(state, data, [unrelated])[unrelated.id]['raw_prerequisite'] is None
 
 
 def test_local_rubric_does_not_require_one_pickup_to_launch_a_rocket():

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from ..factory_contract import connected
 from ..skills import Plan, Step, compile_plans
@@ -168,12 +168,38 @@ class FactoryPlanner:
             identity = self._fair_resource_identity(item, target)
             if identity is None:
                 return self._explore(item)
-            return self._plan(
+            plan = self._plan(
                 "factory_gather", "inventory", item, target,
                 parameters={"resource": item, "quantity": quantity}, timeout=18000,
                 description=f"Gather {quantity} observed {item}; inventory target {target}",
                 identity=identity,
             )
+            # Keep the concrete dependency that led this recursive planner to
+            # the raw input. The plan still gathers only the observed resource;
+            # this annotation neither grants the later craft nor bypasses its
+            # native inventory and recipe checks.
+            item_path = [entry.removeprefix("item:") for entry in path
+                         if entry.startswith("item:")]
+            parents = item_path[:-1] if item_path[-1:] == [item] else []
+            if parents:
+                parent = parents[-1]
+                try:
+                    recipe = self.catalog.recipe_for(parent)
+                except (KeyError, ValueError):
+                    recipe = None
+                ingredients = recipe.get("ingredients", []) if recipe else []
+                if (recipe and self.catalog.enabled(recipe, self.researched)
+                        and any(entry.get("type") == "item" and entry.get("name") == item
+                                and entry.get("amount", 0) > 0 for entry in ingredients)):
+                    plan = replace(plan, materials={**(plan.materials or {}),
+                        "raw_prerequisite": {
+                            "observed_tick": self.snapshot.tick,
+                            "ingredient": item,
+                            "direct_product": parent,
+                            "recipe": recipe["name"],
+                            "planner_item_path": item_path,
+                        }})
+            return plan
         recipe, prerequisite = self._recipe(item, path)
         if prerequisite:
             return prerequisite

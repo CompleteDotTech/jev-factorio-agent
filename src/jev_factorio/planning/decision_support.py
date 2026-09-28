@@ -183,6 +183,32 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             highest = max((step.threshold for step in plan.steps
                            if step.action == 'mine_coal'), default=0)
             scope = 'immediate' if highest <= 5 else 'lookahead'
+        prerequisite = (plan.materials or {}).get('raw_prerequisite')
+        prerequisite_evidence = None
+        if (isinstance(prerequisite, dict) and prerequisite.get('observed_tick') == snapshot.tick
+                and len(plan.steps) == 1 and plan.steps[0].action == 'factory_gather'):
+            step = plan.steps[0]
+            ingredient = (step.parameters or {}).get('resource')
+            parent = prerequisite.get('direct_product')
+            recipe_name = prerequisite.get('recipe')
+            path = prerequisite.get('planner_item_path')
+            recipe = catalog.recipes.get(recipe_name, {})
+            if (ingredient == prerequisite.get('ingredient')
+                    and isinstance(parent, str) and parent
+                    and isinstance(path, list) and 2 <= len(path) <= 32
+                    and path[-2:] == [parent, ingredient]
+                    and any(product.get('type') == 'item' and product.get('name') == parent
+                            and product.get('amount', 0) > 0 for product in recipe.get('products', []))
+                    and any(entry.get('type') == 'item' and entry.get('name') == ingredient
+                            and entry.get('amount', 0) > 0 for entry in recipe.get('ingredients', []))):
+                prerequisite_evidence = {
+                    'observed_tick': snapshot.tick,
+                    'direct_recipe': recipe_name,
+                    'direct_product': parent,
+                    'planner_item_path': list(path),
+                    'basis': 'current_planner_dependency_and_native_catalog_recipe',
+                    'later_steps_require_fresh_native_preconditions': True,
+                }
         passive = all(s.action in {'factory_wait', 'idle'} for s in plan.steps)
         result[plan.id] = {
             'work_scope': scope,
@@ -193,6 +219,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'actor_ticks_estimate': None if unknown else math.ceil(actor),
             'processed_units': quantities, 'material_costs': costs,
             'delivers_or_crafts': sorted(outputs), 'unknowns': sorted(set(unknown)),
+            'raw_prerequisite': prerequisite_evidence,
             'research_deadline_tick': min((row['deadline_tick'] for row in schedules
                 if row['item'] in outputs and row['deadline_tick'] is not None), default=None),
             'requires_investment': any(s.action in {'factory_place', 'factory_connect',
