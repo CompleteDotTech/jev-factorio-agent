@@ -1,8 +1,8 @@
 """Explicit coal/solid controller composition, with durable whole-bundle ownership.
 
-This is source-only experimental integration. No production CLI/supervisor flag
-is exposed; pinned native qualification and an authorized immutable handoff remain
-separate gates. This module never resets a campaign or changes its cutoff.
+Production opt-in is carried by an immutable treatment file. Pinned native
+qualification and an authorized handoff remain separate gates. This module
+never resets a campaign or changes its cutoff.
 """
 from __future__ import annotations
 
@@ -72,16 +72,18 @@ class CoalSupplyMixin:
         if sink is not None and (not isinstance(getattr(sink, "configuration", None), RunConfiguration)
                                  or sink.configuration.coal_supply is not True
                                  or sink.configuration.coal_kit_policy is not coal_kit_policy
-                                 or coal_economic_admission and getattr(sink.configuration, "coal_economic_admission", False) is not True):
+                                 or sink.configuration.coal_economic_admission is not coal_economic_admission):
             raise ValueError("Research manifest must explicitly bind the coal treatment")
-        if coal_economic_admission and options.get("resume_controller"):
-            raise ValueError("Coal economic admission requires a bound checkpoint schema")
+        if coal_economic_admission and not coal_kit_policy:
+            raise ValueError("Coal economic admission requires coal kit policy")
         if options.get("resume_controller"):
             raw = Path(options["checkpoint"]).read_bytes()
             data = json.loads(raw)
             if (not isinstance(data, dict) or not CHECKPOINT_FIELDS <= data.keys()
                     or data["coal_targets"] != self._coal_targets or not data["coal_epoch"]
                     or data.get("coal_kit_policy", False) is not coal_kit_policy
+                    or data.get("coal_economic_admission", False) is not coal_economic_admission
+                    or data["coal_supply_schema"] != (2 if coal_economic_admission else 1)
                     or coal_kit_policy and "coal_funding" not in data):
                 raise ValueError("Coal treatment cannot adopt or migrate an unbound checkpoint")
             # The inner solid initializer does the full composed memory validation
@@ -106,6 +108,8 @@ class CoalSupplyMixin:
         if not self.memory.coal_targets:
             self.memory.coal_targets = list(self._coal_targets)
             self.memory.coal_kit_policy = self._coal_kit_policy
+            self.memory.coal_economic_admission = self._coal_economic_admission
+            self.memory.coal_supply_schema = 2 if self._coal_economic_admission else 1
         if not self.memory.coal_epoch:
             try:
                 coal.sources(snapshot)
@@ -125,6 +129,7 @@ class CoalSupplyMixin:
             data = snapshot.factory["coal_supply"]
             epoch = {k: data[k] for k in ("actor_index", "surface_index", "force_index")}
             if (self.memory.coal_kit_policy is not self._coal_kit_policy
+                    or self.memory.coal_economic_admission is not self._coal_economic_admission
                     or self.memory.coal_targets != self._coal_targets or data["targets"] != self._coal_targets
                     or self.memory.coal_epoch != epoch or any(not coal.current(row, snapshot) for row in rows.values())):
                 raise ValueError("Coal source binding or ownership changed")
@@ -439,7 +444,9 @@ class CoalSupplyMixin:
     def _record_extras(self):
         return {**super()._record_extras(), "coal_supply": True,
                 "coal_supply_evidence": deepcopy(self._coal_evidence), "coal_supply_fault": self._coal_fault,
-                "coal_kit_policy": self._coal_kit_policy, "coal_kit_evidence": deepcopy(self._coal_kit_evidence)}
+                "coal_kit_policy": self._coal_kit_policy, "coal_kit_evidence": deepcopy(self._coal_kit_evidence),
+                "coal_economic_admission": self._coal_economic_admission,
+                "coal_admission_evidence": deepcopy(self._coal_admission_evidence)}
 
     def _model_facts(self, snapshot):
         facts = super()._model_facts(snapshot)
@@ -463,6 +470,7 @@ def coal_loop_type(base):
     class CoalMemory(base.memory_type):
         coal_supply_schema: int = 1
         coal_kit_policy: bool = False
+        coal_economic_admission: bool = False
         coal_funding: dict | None = None
         coal_targets: list = field(default_factory=list)
         coal_epoch: dict = field(default_factory=dict)
@@ -473,11 +481,16 @@ def coal_loop_type(base):
             if not isinstance(data, dict) or not CHECKPOINT_FIELDS <= data.keys():
                 raise ValueError("Incomplete coal checkpoint extension")
             memory = super()._from_data(data, session_id, target)
-            if not solid.integer(memory.coal_supply_schema, 1, 1):
+            if (not solid.integer(memory.coal_supply_schema, 1, 2)
+                    or type(memory.coal_economic_admission) is not bool
+                    or (memory.coal_supply_schema == 2) is not memory.coal_economic_admission
+                    or memory.coal_economic_admission and 'coal_economic_admission' not in data):
                 raise ValueError("Unsupported coal checkpoint schema")
             coal.validate_targets(memory.coal_targets)
             if type(memory.coal_kit_policy) is not bool:
                 raise ValueError("Invalid immutable coal kit policy")
+            if memory.coal_economic_admission and not memory.coal_kit_policy:
+                raise ValueError("Coal economic checkpoint requires coal kit policy")
             if memory.coal_funding is not None:
                 if (not memory.coal_kit_policy or memory.capital_investment is not None
                         or memory.solid_funding is not None

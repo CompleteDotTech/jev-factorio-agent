@@ -322,6 +322,8 @@ class HierarchicalLoop(AgentLoop):
             if hasattr(self, '_coal_targets'):
                 record['acceptance_configuration']['coal_supply'] = True
                 record['acceptance_configuration']['coal_kit_policy'] = self._coal_kit_policy
+                if getattr(self, '_coal_economic_admission', False):
+                    record['acceptance_configuration']['coal_economic_admission'] = True
         previous = previous_timing(self)
         if previous is not None:
             record["previous_iteration_timing"] = previous

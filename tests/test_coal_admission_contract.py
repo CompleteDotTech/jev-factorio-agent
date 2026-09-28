@@ -79,7 +79,24 @@ def test_controller_direct_opt_in_defers_new_kit_on_v1_and_v2(tmp_path):
         assert not backend.calls
 
 
-def test_existing_paid_funding_continues_when_admission_gate_is_enabled(tmp_path):
+def test_economic_checkpoint_roundtrip_rejects_treatment_downgrade(tmp_path):
+    from test_coal_kit_funding import Backend, controller, offers
+
+    backend = Backend()
+    backend.state = v2()
+    loop = controller(backend, tmp_path, coal_economic_admission=True)
+    offers(loop)
+    saved = backend.checkpoint.read_text()
+    assert '"coal_economic_admission": true' in saved
+    assert '"coal_supply_schema": 2' in saved
+    resumed = controller(backend, tmp_path, resume=True, coal_economic_admission=True)
+    resumed._observe()
+    assert resumed.memory.coal_economic_admission is True
+    with pytest.raises(ValueError, match='unbound checkpoint'):
+        controller(backend, tmp_path, resume=True)
+
+
+def test_existing_paid_funding_rejects_in_place_admission_upgrade(tmp_path):
     from jev_factorio.planning import coal_funding
     from test_coal_kit_funding import Backend, controller, offers
     backend = Backend()
@@ -88,6 +105,9 @@ def test_existing_paid_funding_continues_when_admission_gate_is_enabled(tmp_path
     plan = next(plan for plan in plans if coal_funding.MARKER in (plan.materials or {}))
     loop._commit_solid(plan, snapshot)
     assert loop.memory.coal_funding is not None
+    paid = deepcopy(loop.memory.coal_funding)
     loop._coal_economic_admission = True
-    _, continued = offers(loop)
-    assert any(coal_funding.MARKER in (plan.materials or {}) for plan in continued)
+    loop._observe()
+    assert loop.memory.status == 'uncertain'
+    assert loop.memory.coal_funding == paid
+    assert not backend.calls

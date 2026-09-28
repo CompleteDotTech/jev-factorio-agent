@@ -43,7 +43,7 @@ _CORRELATION_KEYS = {"decision_id", "model_call_id", "plan_id", "action_id"}
 _TREATMENT_FIELDS = {"factory_scheduling", "background_work",
                      "furnace_output_buffers", "furnace_input_belts", "mining_outposts",
                      "campaign_diagnostics", "profile_observations", "consolidated_observations",
-                     "lead_time_supply", "coverage_margin_lookahead", "solid_routes", "solid_science_policy", "coal_supply", "coal_kit_policy"}
+                     "lead_time_supply", "coverage_margin_lookahead", "solid_routes", "solid_science_policy", "coal_supply", "coal_kit_policy", "coal_economic_admission"}
 
 
 class ResearchLogError(RuntimeError):
@@ -109,6 +109,7 @@ class RunConfiguration:
     solid_science_policy: bool = False
     coal_supply: bool = False
     coal_kit_policy: bool = False
+    coal_economic_admission: bool = False
     treatment_sha256: str | None = None
 
 
@@ -298,6 +299,9 @@ def _configuration(configuration: dict) -> None:
             raise ValueError("Invalid run treatment flag")
     if configuration.get("coal_kit_policy", False) and not configuration.get("coal_supply", False):
         raise ResearchLogError("Coal kit policy requires its coal supply treatment")
+    if configuration.get("coal_economic_admission", False) and not (
+            configuration.get("coal_kit_policy", False) and configuration.get("treatment_sha256")):
+        raise ResearchLogError("Coal economic admission requires an immutable coal kit treatment")
     if configuration.get("coal_supply", False) and not configuration.get("solid_routes", False):
         raise ResearchLogError("Coal supply requires its solid route treatment")
     if configuration.get("solid_science_policy", False) and not configuration.get("solid_routes", False):

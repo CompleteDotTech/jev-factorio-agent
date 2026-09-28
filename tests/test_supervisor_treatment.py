@@ -4,7 +4,7 @@ import pytest
 
 from jev_factorio.coal_supply import intents
 from jev_factorio.supervisor import Supervisor, SupervisorConfig
-from jev_factorio.treatment import SCHEMA
+from jev_factorio.treatment import SCHEMA, SCHEMA_V2
 
 
 def make_supervisor(tmp_path, treatment_path):
@@ -35,3 +35,19 @@ def test_supervisor_refuses_changed_immutable_treatment(tmp_path):
         owner.gameplay_command()
     with pytest.raises(ValueError, match='cannot be changed'):
         owner.initialize(record_only=True)
+
+
+def test_supervisor_pins_economic_admission_treatment_version(tmp_path):
+    path = tmp_path / 'treatment.json'
+    content = {'schema': SCHEMA_V2, 'solid_intents': intents(['a', 'b']),
+               'coal_targets': ['a', 'b'], 'solid_science_policy': False,
+               'coal_kit_policy': True, 'coal_economic_admission': True}
+    path.write_text(json.dumps(content))
+    owner = make_supervisor(tmp_path, path)
+    owner.initialize(record_only=True)
+    owner.gameplay_command()
+    content.pop('coal_economic_admission')
+    content['schema'] = SCHEMA
+    path.write_text(json.dumps(content))
+    with pytest.raises(ValueError, match='changed'):
+        owner.gameplay_command()

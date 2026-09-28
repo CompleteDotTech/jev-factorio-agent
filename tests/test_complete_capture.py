@@ -4,11 +4,12 @@ from collections import Counter
 
 import pytest
 
-from jev_factorio.complete_capture import capture, project_record, verify, checked_checkpoint_progress
+from jev_factorio.complete_capture import (capture, project_record, verify,
+                                           checked_checkpoint_progress, checked_economic_binding)
 from jev_factorio.acceptance_io import canonical
 from jev_factorio.coal_supply import intents
-from jev_factorio.integration_evidence import TRIAL_SCHEMA_V2
-from jev_factorio.treatment import SCHEMA, digest
+from jev_factorio.integration_evidence import TRIAL_SCHEMA_V2, analyze_rows
+from jev_factorio.treatment import SCHEMA, SCHEMA_V2, digest
 from jev_factorio.research_log import Redactor
 from integration_evidence_fixtures import evidence
 
@@ -37,6 +38,30 @@ def test_projection_retains_paid_coal_solid_and_model_evidence():
     row['decision']['paid_receipt'] = 'hidden'
     with pytest.raises(ValueError, match='Unknown decision ownership'):
         project_record(row, Redactor({}), Counter())
+
+
+def test_economic_capture_requires_bound_checkpoint_record_and_native_protocol():
+    rows, trial, initial, final = evidence()
+    trial['configuration'].update(coal_supply=True, coal_kit_policy=True,
+                                  coal_economic_admission=True)
+    for checkpoint in (initial, final):
+        checkpoint.update(coal_supply_schema=2, coal_economic_admission=True)
+    for row in rows:
+        row['acceptance_configuration'] = dict(trial['configuration'])
+        row['coal_economic_admission'] = True
+        row['coal_admission_evidence'] = {'eligible': False, 'reason': 'unqualified'}
+        for label in ('state', 'after_state'):
+            row[label]['factory']['coal_supply'] = {'protocol': 2}
+    checked_economic_binding(trial, initial, final, rows)
+    projected = project_record(rows[0], Redactor({}), Counter())
+    assert projected['coal_admission_evidence'] == rows[0]['coal_admission_evidence']
+    rows[0]['state']['factory']['coal_supply']['protocol'] = 1
+    with pytest.raises(ValueError, match='protocol 2'):
+        checked_economic_binding(trial, initial, final, rows)
+    rows[0]['state']['factory']['coal_supply']['protocol'] = 2
+    final['coal_economic_admission'] = False
+    with pytest.raises(ValueError, match='checkpoint'):
+        checked_economic_binding(trial, initial, final, rows)
 
 
 def test_cross_checkpoint_history_and_paid_coal_ownership_cannot_regress():
@@ -142,3 +167,69 @@ def test_complete_capture_roundtrip_retains_coal_and_rejects_tamper(tmp_path):
     (output / 'gameplay.jsonl.gz').write_bytes(b'corrupt')
     with pytest.raises(ValueError, match='checksum'):
         verify(output)
+
+
+def test_complete_capture_v2_admission_roundtrip(tmp_path):
+    rows, trial, initial, final = evidence()
+    # Build the same bounded complete treatment without borrowing an accepted
+    # native result: all native admission witnesses remain explicitly negative.
+    trial['schema'] = TRIAL_SCHEMA_V2
+    trial['coal_targets'] = [trial['solid_intents'][0]['target'], trial['solid_intents'][1]['target']]
+    trial['solid_intents'][:2] = intents(trial['coal_targets'])
+    trial['configuration'].update(coal_supply=True, coal_kit_policy=True,
+                                  coal_economic_admission=True)
+    trial['treatment_sha256'] = digest({'schema': SCHEMA_V2,
+        'solid_intents': trial['solid_intents'], 'coal_targets': trial['coal_targets'],
+        'solid_science_policy': False, 'coal_kit_policy': True,
+        'coal_economic_admission': True})
+    save = tmp_path / 'save.zip'
+    save.write_bytes(b'fixture-save')
+    trial['initial_save_sha256'] = hashlib.sha256(save.read_bytes()).hexdigest()
+    for checkpoint in (initial, final):
+        checkpoint.update(solid_intents=trial['solid_intents'], solid_commitments={},
+                          coal_targets=trial['coal_targets'], coal_kit_policy=True,
+                          coal_supply_schema=2, coal_economic_admission=True,
+                          coal_epoch=dict(checkpoint['solid_epoch']),
+                          coal_commitments={}, coal_funding=None)
+    trial['initial_checkpoint_sha256'] = hashlib.sha256(canonical(initial)).hexdigest()
+    trial['vm_uuid'], trial['production_vm_uuid'] = 'isolated-vm', 'production-vm'
+    for row in rows:
+        row['acceptance_configuration'].update(coal_supply=True, coal_kit_policy=True,
+                                               coal_economic_admission=True)
+        row.update(coal_supply=True, coal_supply_evidence={}, coal_supply_fault=False,
+                   coal_kit_policy=True, coal_kit_evidence={},
+                   coal_economic_admission=True,
+                   coal_admission_evidence={'eligible': False,
+                                            'reason': 'electric_conversion_and_construction_cost_unknown'})
+        for label in ('state', 'after_state'):
+            state = row[label]
+            state['factory']['coal_supply'] = {
+                'protocol': 2, 'session_id': state['session_id'], 'tick': state['tick'],
+                'actor_index': 1, 'surface_index': 1, 'force_index': 1,
+                'targets': trial['coal_targets'], 'committed': False,
+                'sources': {}, 'reason': 'no_supported_bundle',
+                'admission': {'protocol': 1, 'session_id': state['session_id'],
+                              'tick': state['tick'], 'actor_index': 1,
+                              'surface_index': 1, 'force_index': 1,
+                              'qualified': False,
+                              'reason': 'electric_conversion_and_construction_cost_unknown'}}
+    paths = {}
+    for name, value in (('trial', trial), ('initial', initial), ('final', final)):
+        paths[name] = tmp_path / (name + '.json')
+        paths[name].write_bytes(canonical(value))
+    gameplay = tmp_path / 'gameplay.jsonl'
+    gameplay.write_bytes(b''.join(canonical(row) for row in rows))
+    preflight = tmp_path / 'preflight.json'
+    preflight.write_bytes(canonical({'schema': 'jev-factorio.dev-preflight.v1',
+        'checkpoint_sha256': trial['initial_checkpoint_sha256'],
+        'vm_uuid': trial['vm_uuid'], 'production_vm_uuid': trial['production_vm_uuid'],
+        'ready_for_coordinated_validation': False,
+        'issues': ['solid_preflight_not_supported', 'coal_preflight_not_supported']}))
+    output = tmp_path / 'capture'
+    capture(gameplay=gameplay, trial_path=paths['trial'],
+            initial_checkpoint=paths['initial'], final_checkpoint=paths['final'],
+            save=save, preflight_path=preflight, output=output)
+    assert verify(output)['rows'][0]['coal_admission_evidence']['eligible'] is False
+    assert 'coal_economic_native_evidence_invalid' not in analyze_rows(rows, trial, initial, final)['issues']
+    rows[0]['state']['factory']['coal_supply']['protocol'] = 1
+    assert 'coal_economic_native_evidence_invalid' in analyze_rows(rows, trial, initial, final)['issues']
