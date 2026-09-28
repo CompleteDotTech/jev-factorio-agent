@@ -72,6 +72,15 @@ def checked_checkpoint_progress(initial: dict, final: dict) -> None:
     for key, count in initial['failures'].items():
         if final['failures'].get(key, 0) < count:
             raise ValueError('Checkpoint failure history regressed')
+    if ('output_buffers_schema' in initial
+            and final.get('output_buffers_schema') != initial['output_buffers_schema']):
+        raise ValueError('Checkpoint output-buffer ownership extension regressed')
+    for source, old in initial.get('output_commitments', {}).items():
+        new = final.get('output_commitments', {}).get(source)
+        if (not isinstance(new, dict) or new.get('layout') != old['layout']
+                or new.get('source_unit') != old['source_unit']
+                or any(new.get('parts', {}).get(part) != paid for part, paid in old['parts'].items())):
+            raise ValueError('Checkpoint paid output-buffer ownership regressed')
     for target, old in initial['coal_commitments'].items():
         new = final['coal_commitments'].get(target)
         if (not isinstance(new, dict) or new.get('layout') != old['layout']

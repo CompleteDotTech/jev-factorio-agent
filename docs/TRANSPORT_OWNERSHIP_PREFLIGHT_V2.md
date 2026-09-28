@@ -47,9 +47,8 @@ The bounded projection covers:
   and up to four frozen commitments. An unpaid proposal may have no paid parts.
 - Up to two mining outposts, their frozen geometry/flow and exact four-entry
   maximum receipt map, matched to retained outpost commitments.
-- Up to four input routes and five output buffers, matched to input commitments
-  or qualified successor receipts. Ordinary output buffers are currently
-  unqualified as described below.
+- Up to four input routes and five output buffers, matched to input commitments,
+  ordinary output commitments, or qualified successor receipts.
 - Up to 2,048 owned entity roles and 66 parts per route. Units, roles and paid
   receipts cannot alias across transport families. Each paid unit must still be
   the same current entity in the runtime ownership map. Frozen component
@@ -82,23 +81,41 @@ session/actor/surface/force/mod identity throughout the captured rows. Gameplay
 must not precede the probe tick. Both paths still produce `native_acceptance:
 not_accepted`; ordinary acceptance criteria remain separate.
 
-## Ordinary output-buffer ownership follow-on
+## Durable ordinary output-buffer ownership
 
-`OutputBufferMixin` currently has no durable checkpoint ownership extension.
-Successor buffers have retained receipts, but ordinary output buffers do not.
-V2 therefore reports `ordinary_output_ownership_not_retained` when an existing
-ordinary buffer cannot be matched, even if its runtime parts look valid. It
-cannot qualify a restart checkpoint by adopting live paid entities.
+`OutputBufferMixin` now uses the explicit checkpoint extension
+`output_buffers_schema: 1` and `output_commitments`. Each ordinary source retains
+its source unit, layout, and exact paid part roles/units/receipts. The map owns
+only `recipe:iron-plate`, `recipe:copper-plate`, and `recipe:steel-plate` outputs.
+Growth output ownership stays in `successor_receipts`; it is validated alongside
+ordinary owners without duplicating an evolving paid prefix. Units and receipts
+cannot alias between the two owner families. A growth entry in the new ordinary
+map is rejected, even when it copies an existing successor receipt.
 
-A complete campaign naturally creates these buffers. The minimal follow-on is
-a versioned output-buffer memory extension retaining each source unit, layout,
-and exact paid part roles/units/receipts; strict loader validation; and observation
-tracking bound to the matching prepared/pending build action before accepting a
-new paid part. Composed checkpoint readers and v2 expected-output comparison
-must recognize that extension. Legacy migration may enable an empty owner set at
-an idle boundary, but existing paid runtime buffers require reconciled durable
-provenance, not automatic adoption. Until that source and native qualification
-exists, a campaign with ordinary buffers cannot pass this restart preflight.
+Every observed paid addition must match one active pending
+`factory_buffer_build` command, source/layout/part and prepared attempt receipt.
+A lost response can therefore reconcile the same paid entity without another
+payment. All rows validate before installing an updated ordinary owner map, and
+the checkpoint save precedes further mutation. Save failure poisons the
+controller. The dynamic save call preserves the outer solid controller's first
+resume transaction. A rejected buffer observation cannot advance the outer
+successor receipt owner.
+
+Legacy read-only checkpoint inspection retains its original schema and never
+invents owners. Explicitly enabling the extension on a legacy controller is
+allowed only at an idle, reconciled running boundary before backend
+initialization. It begins with no ordinary owners. Existing successor receipts
+remain their existing durable authority; existing ordinary paid parts without
+retained provenance are refused. The original file is not changed by loading.
+The preflight reports `ordinary_output_ownership_not_retained` for any unmatched
+ordinary buffer, even if its live parts appear valid.
+
+V2 matches the new durable ordinary map and the separate successor map to its
+fixed native projection. Capture verification, offline diagnostics and supervisor
+validation retain the extension and reject paid ownership regression. These
+source checks close the missing ordinary ownership field; actual paid engine
+construction, restart qualification and complete acceptance remain separate
+evidence requirements.
 
 ## Validation status
 
