@@ -81,6 +81,34 @@ def checked_checkpoint_progress(initial: dict, final: dict) -> None:
             raise ValueError('Checkpoint paid coal ownership regressed')
 
 
+def checked_campaign_binding(initial: dict, final: dict, rows: list[dict]) -> None:
+    """Bind every retained boundary, even after valid bundle checksums change."""
+    session = initial['session_id']
+    if (final['session_id'] != session
+            or initial['target'] != 'rocket_launch' or final['target'] != initial['target']):
+        raise ValueError('Capture campaign identity mismatch')
+    epoch = initial['solid_epoch']
+    if not epoch or any(checkpoint.get(key) != epoch for checkpoint in (initial, final)
+                        for key in ('solid_epoch', 'coal_epoch')):
+        raise ValueError('Capture actor epoch mismatch')
+    for row in rows:
+        if row.get('session_id') != session or row.get('target') != initial['target']:
+            raise ValueError('Capture record campaign identity mismatch')
+        for label in ('state', 'after_state'):
+            state = row.get(label)
+            if not isinstance(state, dict) or state.get('session_id') != session:
+                raise ValueError('Capture observation campaign identity mismatch')
+            factory = state.get('factory')
+            if not isinstance(factory, dict):
+                raise ValueError('Capture native identity binding missing')
+            for family in ('solid_routes', 'coal_supply'):
+                native = factory.get(family)
+                if (not isinstance(native, dict) or native.get('session_id') != session
+                        or native.get('tick') != state.get('tick')
+                        or any(native.get(key) != value for key, value in epoch.items())):
+                    raise ValueError('Capture native identity binding mismatch')
+
+
 def checked_economic_binding(trial: dict, initial: dict, final: dict, rows: list[dict]) -> None:
     enabled = trial['configuration'].get('coal_economic_admission', False)
     for checkpoint in (initial, final):
@@ -172,8 +200,7 @@ def capture(*, gameplay: Path, trial_path: Path, initial_checkpoint: Path,
         raise ValueError('Preflight differs from complete trial boundary')
     initial, final = checked_checkpoint(initial_raw), checked_checkpoint(final_raw)
     checked_checkpoint_progress(initial, final)
-    if (initial.get('session_id') != final.get('session_id')
-            or initial.get('solid_intents') != trial['solid_intents']
+    if (initial.get('solid_intents') != trial['solid_intents']
             or final.get('solid_intents') != trial['solid_intents']
             or initial.get('coal_targets') != trial['coal_targets']
             or final.get('coal_targets') != trial['coal_targets']
@@ -192,6 +219,7 @@ def capture(*, gameplay: Path, trial_path: Path, initial_checkpoint: Path,
     for row in projected:
         for label in ('state', 'after_state'):
             checked_coal_observation(row[label])
+    checked_campaign_binding(initial, final, projected)
     checked_coal_observation(projected[0]['state'], initial)
     checked_coal_observation(projected[-1]['after_state'], final)
     payload = b''.join(canonical(row) for row in projected)
@@ -275,6 +303,7 @@ def verify(directory: Path) -> dict:
     for row in projected:
         for label in ('state', 'after_state'):
             checked_coal_observation(row[label])
+    checked_campaign_binding(initial, final, projected)
     checked_coal_observation(projected[0]['state'], initial)
     checked_coal_observation(projected[-1]['after_state'], final)
     return {'manifest': manifest, 'trial': trial, 'rows': projected}
