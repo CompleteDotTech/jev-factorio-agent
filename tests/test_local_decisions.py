@@ -568,6 +568,9 @@ def test_established_burner_bulk_gather_separates_current_need_from_refill():
     wrong_quantity['candidate_evidence'][plan.id]['fuel_prerequisite'][
         'planned_gather_units'] = 46
     assert no_hint(wrong_quantity)
+    malformed_start = deepcopy(support)
+    malformed_start['candidate_evidence'][plan.id]['gather_start_evidence'] = 'observed'
+    assert no_hint(malformed_start)
     wrong_plan = replace(plan, steps=(replace(step, parameters={
         **step.parameters, 'quantity': 46}, threshold=46),))
     assert candidate_evidence(state, data, [wrong_plan])[wrong_plan.id][

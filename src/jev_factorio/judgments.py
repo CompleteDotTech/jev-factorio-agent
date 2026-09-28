@@ -139,7 +139,9 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
         primary = local.get('primary_target') if isinstance(local, dict) else None
         target = primary.get('item') if isinstance(primary, dict) else None
         def observed_gather(row):
-            start = row.get('gather_start_evidence') or {}
+            start = row.get('gather_start_evidence')
+            if not isinstance(start, dict):
+                return False
             return (start.get('resource_in_current_observation') is True
                     and start.get('fair_target_identity_observed') is True)
         current_prerequisite = any(
@@ -306,7 +308,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
             fuel = row.get('fuel_prerequisite')
             fuel_step = plan.steps[0] if len(plan.steps) == 1 else None
             fuel_path = fuel.get('planner_item_path') if isinstance(fuel, dict) else None
-            gather_start = row.get('gather_start_evidence') or {}
+            gather_start = row.get('gather_start_evidence')
+            gather_start = gather_start if isinstance(gather_start, dict) else {}
             qualified_established_fuel = (
                 isinstance(fuel, dict) and fuel_step is not None
                 and fuel_step.action == 'factory_gather'
