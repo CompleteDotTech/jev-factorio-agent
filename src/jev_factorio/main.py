@@ -58,6 +58,11 @@ def cli() -> None:
                    help="30-minute progress, host pressure, eligibility and blocked-investment evidence")
     p.add_argument("--setup-timing-file", type=Path,
                    help="Exclusive content-free one-use initialization timing result")
+    p.add_argument("--owner-step-gate-dir", type=Path,
+                   help="Opt-in exclusive private owner grants between verified live steps")
+    p.add_argument("--owner-step-lock-path", type=Path)
+    p.add_argument("--owner-step-lock-fd", type=int)
+    p.add_argument("--owner-step-wait-seconds", type=float, default=120)
     p.add_argument("--profile-observations", action="store_true",
                    help="Content-free observation RPC timing; hierarchical FLE only")
     p.add_argument("--consolidated-observations", action="store_true",
@@ -118,6 +123,18 @@ def cli() -> None:
     if args.setup_timing_file and (args.steps != 1 or args.duration_hours is not None
                                    or args.controller != 'hierarchical'):
         p.error("--setup-timing-file requires one hierarchical step")
+    if args.owner_step_gate_dir is not None:
+        if (args.backend != 'fle' or args.controller != 'hierarchical'
+                or not args.resume or not args.resume_controller
+                or args.duration_hours is not None or args.steps is None
+                or not 2 <= args.steps <= 10 or args.setup_timing_file
+                or args.owner_step_lock_path is None or args.owner_step_lock_fd is None
+                or not os.environ.get('JEV_NATIVE_ATTACHMENT_RECEIPT')
+                or not 0 < args.owner_step_wait_seconds <= 120):
+            p.error("Owner step gate requires resumed hierarchical FLE, 2-10 steps, "
+                    "original inherited lock, attachment receipt, and bounded wait")
+    elif args.owner_step_lock_path is not None or args.owner_step_lock_fd is not None:
+        p.error("Owner lock options require --owner-step-gate-dir")
     if not 0 <= args.confidence_floor <= 1:
         p.error("--confidence-floor must be finite and in [0, 1]")
     if args.backend not in {"mock", "play_api", "fle"}:
@@ -403,11 +420,22 @@ def cli() -> None:
             }, session_id=getattr(memory, "session_id", None))
         if setup_timing:
             setup_timing.mark('initialized')
+        step_gate = None
+        if args.owner_step_gate_dir is not None:
+            from .owner_step_gate import OwnerStepGate
+            step_gate = OwnerStepGate(
+                args.owner_step_gate_dir, Path(args.checkpoint),
+                Path(os.environ['JEV_NATIVE_ATTACHMENT_RECEIPT']),
+                Path(__file__).resolve().parents[2], args.owner_step_lock_path,
+                args.owner_step_lock_fd, wait_seconds=args.owner_step_wait_seconds)
         try:
             if args.duration_hours is not None:
                 loop.run(steps=None, duration_seconds=args.duration_hours * 3600)
             else:
-                loop.run(steps=args.steps if args.steps is not None else 8)
+                if step_gate is None:
+                    loop.run(steps=args.steps if args.steps is not None else 8)
+                else:
+                    loop.run(steps=args.steps, after_step=step_gate)
         except BaseException as error:
             from .recovery_policy import record_exit
             record_exit(loop, error)
