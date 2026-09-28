@@ -228,3 +228,14 @@ def fresh_permission(plan: Plan, step: Step, snapshot: GameSnapshot, catalog: Ca
         return a == b
     except (ValueError, KeyError, TypeError, AttributeError, IndexError):
         return False
+
+
+def ranking_marker(plan: Plan, snapshot: GameSnapshot) -> bool:
+    """Recognize only this decision's canonical, opt-in coal-kit offer."""
+    marker = (plan.materials or {}).get(MARKER)
+    approved = getattr(snapshot, '_coal_kit_annotations', {})
+    return (isinstance(marker, dict) and isinstance(approved, dict)
+            and plan.to_dict() == approved.get(plan.id)
+            and marker.get('schema') == 1 and marker.get('observed_tick') == snapshot.tick
+            and plan.id == marker.get('key') and len(plan.steps) == 1
+            and plan.steps[0].action in {'factory_extract', 'factory_craft'})
