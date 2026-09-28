@@ -159,6 +159,12 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
         }
         for plan in selected:
             pointer = f"`candidate_plans[{json.dumps(plan.id)}]`"
+            craft_hint = (
+                " `craft_dependency` traces this current craft to the planner target; "
+                "later production still needs fresh native checks."
+                if ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('craft_dependency')
+                else ""
+            )
             questions[plan.id + "/benefit"] = {
                 "type": "score",
                 "instructions": (
@@ -167,6 +173,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "from one bounded local production action. A current "
                     "`raw_prerequisite` is evidence that gathering supplies an input to "
                     "the named native recipe, not that the later craft already happened."
+                    + craft_hint
                 ),
                 "criteria": ([
                     "No demonstrated contribution to the bounded production objective",

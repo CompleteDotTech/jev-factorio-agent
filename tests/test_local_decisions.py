@@ -199,6 +199,46 @@ def test_receipt_tracked_handcraft_has_current_start_facts_without_fake_travel()
     assert candidate_evidence(state, data, [changed])[changed.id]['craft_start_evidence'] is None
 
 
+def test_furnace_craft_keeps_current_lab_planner_provenance_without_claiming_lab():
+    state, data = snapshot(inventory={'stone': 5}), catalog()
+    data.recipes['lab'] = recipe('lab', {'iron-plate': 1})
+    state.factory['craft_jobs_protocol'] = 1
+    plan = ReadyWorkPlanner(data, state, 'rocket_launch')._need('lab', 1)
+    assert plan.steps[0].action == 'factory_craft'
+    assert plan.materials['craft_dependency'] == {
+        'observed_tick': state.tick, 'recipe': 'stone-furnace',
+        'product': 'stone-furnace',
+        'planner_item_path': ['lab', 'iron-plate', 'stone-furnace'],
+    }
+    step = plan.steps[0]
+    plan = replace(plan, steps=(replace(step, action='factory_craft_job',
+        effect='craft_job_complete', parameters={**step.parameters, 'receipt': 'lab-test'}),))
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    assert row['craft_dependency'] == {
+        'observed_tick': state.tick,
+        'planner_item_path': ['lab', 'iron-plate', 'stone-furnace'],
+        'current_craft_product': 'stone-furnace',
+        'basis': 'current_recursive_planner_provenance_and_native_recipe',
+        'later_steps_require_fresh_native_preconditions': True,
+    }
+    assert row['craft_start_evidence']['expected_products_after_native_verification'] == {
+        'stone-furnace': 1}
+    assert row['delivers_or_crafts'] == []
+    context, questions, _ = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
+        [plan])
+    assert context['candidate_evidence'][plan.id]['craft_dependency'] == row['craft_dependency']
+    assert 'later production still needs fresh native checks' in str(questions)
+    stale = replace(plan, materials={**plan.materials, 'craft_dependency': {
+        **plan.materials['craft_dependency'], 'observed_tick': state.tick - 1}})
+    assert candidate_evidence(state, data, [stale])[stale.id]['craft_dependency'] is None
+    unrelated = replace(plan, materials={**plan.materials, 'craft_dependency': {
+        **plan.materials['craft_dependency'], 'planner_item_path': ['unrelated', 'stone-furnace']}})
+    assert candidate_evidence(state, data, [unrelated])[unrelated.id]['craft_dependency'] is None
+    data.recipes['stone-furnace']['enabled'] = False
+    assert candidate_evidence(state, data, [plan])[plan.id]['craft_dependency'] is None
+
+
 def test_local_rubric_does_not_require_one_pickup_to_launch_a_rocket():
     state, data, plans = transfers()
     support = scheduling_context(state, data, plans, 'rocket_launch')
