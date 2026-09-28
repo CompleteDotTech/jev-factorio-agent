@@ -3,12 +3,17 @@
 local c,fair,r=storage.campaign,storage.fair,storage.solid_routes
 assert(c and fair and r and r.implementation_revision==4 and r.coal_api and c.observe==r.observer,
     "Coal supply requires the qualified solid runtime")
+local function set_admission_evidence(enabled)
+    assert(type(enabled)=="boolean","Coal admission evidence opt-in must be boolean")
+    storage.coal_supply.admission_evidence=enabled
+end
 if storage.coal_supply then
     assert(r.coal==storage.coal_supply and r.coal.revision==4 and c.prepare_coal_source==r.coal.prepare
         and c.build_coal_source==r.coal.build,"Coal runtime requires reconciliation")
+    c.set_coal_admission_evidence=set_admission_evidence
     return
 end
-local q={revision=4,targets={},rows={},committed=false,serial=0,reason="no_supported_bundle"}
+local q={revision=4,targets={},rows={},committed=false,serial=0,reason="no_supported_bundle",admission_evidence=false}
 storage.coal_supply,r.coal=q,q
 local a=r.coal_api
 local vec={{x=0,y=-1},{x=1,y=0},{x=0,y=1},{x=-1,y=0}}
@@ -487,9 +492,19 @@ q.snapshot=function()
             pending=row.pending and {part=row.pending.part,receipt=row.pending.receipt,phase=row.pending.phase} or {},
             manual_pending=row.manual_pending or {}}
     end
-    return {protocol=1,session_id=storage.jev_session_id,tick=game.tick,actor_index=p.index,surface_index=ch.surface.index,
+    local result={protocol=1,session_id=storage.jev_session_id,tick=game.tick,actor_index=p.index,surface_index=ch.surface.index,
         force_index=ch.force.index,targets=cp(q.targets),committed=q.committed,sources=rows,reason=q.reason}
+    if q.admission_evidence then
+        -- Electric network membership alone cannot attribute generation fuel or
+        -- bound competing loads. Expose this absence explicitly and fail closed.
+        result.protocol=2
+        result.admission={protocol=1,session_id=result.session_id,tick=result.tick,
+            actor_index=result.actor_index,surface_index=result.surface_index,force_index=result.force_index,
+            qualified=false,reason="electric_conversion_and_construction_cost_unknown"}
+    end
+    return result
 end
+c.set_coal_admission_evidence=set_admission_evidence
 c.set_coal_targets=function(targets)
     assert(type(targets)=="table" and #targets>=2 and #targets<=4 and count(targets)==#targets,"Coal needs two to four targets")
     local seen,binding={},{}

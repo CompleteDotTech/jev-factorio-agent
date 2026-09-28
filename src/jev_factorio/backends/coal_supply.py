@@ -14,7 +14,10 @@ from .solid_routes import SolidRouteFactory
 class CoalSupplyFactory:
     """No game startup, CLI opt-in, provider call or automatic runtime migration."""
 
-    def __init__(self, native, targets) -> None:
+    def __init__(self, native, targets, *, coal_economic_admission: bool = False) -> None:
+        if type(coal_economic_admission) is not bool:
+            raise ValueError("Coal economic admission must be an explicit boolean")
+        self.coal_economic_admission = coal_economic_admission
         self.targets = coal.validate_targets(targets)
         current = native
         while current is not None and not isinstance(current, SolidRouteFactory):
@@ -25,6 +28,7 @@ class CoalSupplyFactory:
         self.native = native
         native.command(files("jev_factorio").joinpath("lua/coal_supply.lua").read_text())
         native.call("set_coal_targets", self.targets)
+        native.call("set_coal_admission_evidence", coal_economic_admission)
 
     def __getattr__(self, name):
         return getattr(self.native, name)

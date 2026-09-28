@@ -15,7 +15,7 @@ from pathlib import Path
 from . import coal_supply as coal, solid_routes as solid
 from .backends.coal_supply import CoalSupplyFactory
 from .planning.coal_supply import MARKER, candidates
-from .planning import coal_funding, solid_funding, solid_investment
+from .planning import coal_admission, coal_funding, solid_funding, solid_investment
 from .planning.demand import SupplyLedger
 from .research_log import RunConfiguration, ResearchLogError
 from .skills import Plan
@@ -56,10 +56,13 @@ def _ready_required_science(snapshot, catalog, plans) -> bool:
 
 
 class CoalSupplyMixin:
-    def __init__(self, backend, jev=None, *, coal_targets, coal_kit_policy=False, **options) -> None:
-        if type(coal_kit_policy) is not bool:
+    def __init__(self, backend, jev=None, *, coal_targets, coal_kit_policy=False,
+                 coal_economic_admission=False, **options) -> None:
+        if type(coal_kit_policy) is not bool or type(coal_economic_admission) is not bool:
             raise ValueError("Coal kit policy must be an explicit boolean")
         self._coal_kit_policy = coal_kit_policy
+        self._coal_economic_admission = coal_economic_admission
+        self._coal_admission_evidence = {}
         self._coal_kit_evidence = {}
         self._coal_targets = coal.validate_targets(coal_targets)
         self._coal_fault = False
@@ -68,8 +71,11 @@ class CoalSupplyMixin:
         sink = options.get("research_log")
         if sink is not None and (not isinstance(getattr(sink, "configuration", None), RunConfiguration)
                                  or sink.configuration.coal_supply is not True
-                                 or sink.configuration.coal_kit_policy is not coal_kit_policy):
+                                 or sink.configuration.coal_kit_policy is not coal_kit_policy
+                                 or coal_economic_admission and getattr(sink.configuration, "coal_economic_admission", False) is not True):
             raise ValueError("Research manifest must explicitly bind the coal treatment")
+        if coal_economic_admission and options.get("resume_controller"):
+            raise ValueError("Coal economic admission requires a bound checkpoint schema")
         if options.get("resume_controller"):
             raw = Path(options["checkpoint"]).read_bytes()
             data = json.loads(raw)
@@ -87,8 +93,10 @@ class CoalSupplyMixin:
             while current is not None and not isinstance(current, CoalSupplyFactory):
                 current = getattr(current, "native", None)
             if current is None:
-                backend._factory = CoalSupplyFactory(native, self._coal_targets)
-            elif current.targets != self._coal_targets:
+                backend._factory = CoalSupplyFactory(native, self._coal_targets,
+                    coal_economic_admission=coal_economic_admission)
+            elif (current.targets != self._coal_targets
+                  or current.coal_economic_admission is not coal_economic_admission):
                 raise ValueError("Existing native coal treatment differs")
         elif getattr(backend, "coal_supply_supported", False) is not True:
             raise ValueError("Backend does not support owned coal source observations")
@@ -241,6 +249,13 @@ class CoalSupplyMixin:
         extra = candidates(snapshot, self.memory.active_goal, failures=self.memory.failures)
         if self._coal_kit_policy and not self.memory.coal_commitments:
             try:
+                if self._coal_economic_admission and state is None:
+                    self._coal_admission_evidence = coal_admission.evaluate(snapshot)
+                    if not self._coal_admission_evidence["eligible"]:
+                        self._coal_kit_evidence = self._coal_admission_evidence
+                        plans.extend(p for p in extra if p.id not in {p.id for p in plans}
+                                     and self._step_allowed(p.steps[0], snapshot))
+                        return plans, blocker if not plans else ""
                 offer, self._coal_kit_evidence = coal_funding.candidate(
                     snapshot, self.catalog, **self._coal_funding_options())
                 if offer is not None:

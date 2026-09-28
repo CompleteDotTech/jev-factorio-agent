@@ -132,7 +132,9 @@ def test_adapter_validates_mixed_attachment_before_mutating_native_configuration
     base = Native(); transport = SolidRouteFactory(base, MIXED)
     adapter = CoalSupplyFactory(transport, TARGETS)
     assert adapter.targets == TARGETS
-    assert [name for name, _ in base.calls] == ['set_solid_intents', 'set_coal_targets']
+    assert [name for name, _ in base.calls] == ['set_solid_intents', 'set_coal_targets',
+                                                'set_coal_admission_evidence']
+    assert base.calls[-1] == ('set_coal_admission_evidence', (False,))
 
 
 def test_both_paid_networks_finish_and_resume_without_duplicate_payment(tmp_path):
