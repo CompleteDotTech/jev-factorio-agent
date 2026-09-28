@@ -25,6 +25,7 @@ from .telemetry import STAGES, validate_phase
 MAX_LINE = 8 * 1024 * 1024
 MAX_RECORDS = 100_000
 PARTS = {'rpc', 'helpers', 'decode', 'unattributed'}
+NATIVE_STAGES = {'campaign_snapshot', 'discovery', 'serialize'}
 CHECKPOINT_OPERATIONS = ({'capture_calls', 'serialization_calls', 'measured_calls',
                          'io_measured_calls', 'phase_fields_present_calls'}
                         | CHECKPOINT_IO_OPERATIONS)
@@ -59,7 +60,7 @@ def analyze(path: Path, *, max_records: int = MAX_RECORDS) -> dict:
     counts = defaultdict(int)
     records = legacy = incomplete = 0
     identity = source = source_digest = source_dirty = previous_record_time = None
-    profiles_seen = partitions_seen = 0
+    profiles_seen = partitions_seen = native_profiles_seen = 0
     timed_iterations = incomplete_iterations = timed_gaps = missing_prior = 0
     previous_iteration_index = None
     opener = gzip.open if path.suffix == '.gz' else open
@@ -120,6 +121,21 @@ def analyze(path: Path, *, max_records: int = MAX_RECORDS) -> dict:
                         raise ValueError('Unsupported observation profile')
                     profiles_seen += 1
                     samples['observation_wall'].append(nonnegative(profile['total_ns']))
+                    native = profile.get('native_ns', {})
+                    if not isinstance(native, dict) or set(native) - NATIVE_STAGES:
+                        raise ValueError('Invalid native profiler stages')
+                    if ('native_timing_available' in profile
+                            and (type(profile['native_timing_available']) is not bool
+                                 or profile['native_timing_available'] != bool(native))):
+                        raise ValueError('Invalid native profiler availability')
+                    if native:
+                        native_profiles_seen += 1
+                    for stage, elapsed in native.items():
+                        value = nonnegative(elapsed)
+                        if value > 10**15:
+                            raise ValueError('Native profiler stage exceeds budget')
+                        samples['observation_native_stage:' + stage + ':nested'].append(value)
+                        counts['observation_native_stage:' + stage + ':available'] += 1
                     if 'attribution_schema' not in profile:
                         legacy += 1
                     elif type(profile['attribution_schema']) is not int or profile['attribution_schema'] != 1:
@@ -228,13 +244,19 @@ def analyze(path: Path, *, max_records: int = MAX_RECORDS) -> dict:
                 raise ValueError(f'Invalid latency record at line {records}') from error
     if not records:
         raise ValueError('Empty latency capture')
+    for stage in NATIVE_STAGES:
+        counts['observation_native_stage:' + stage + ':unavailable'] = (
+            profiles_seen - counts['observation_native_stage:' + stage + ':available'])
     return {'schema': 1, 'records': records, 'source_commit': source,
             'source_sha256': source_digest, 'source_dirty': source_dirty,
             'iteration_timing': {'complete_iterations': timed_iterations,
                 'incomplete_iterations': incomplete_iterations, 'complete_following_gaps': timed_gaps,
                 'records_without_prior_timing': missing_prior,
                 'publication': 'one_record_lag; final_tail_not_inferred_or_assigned_zero'},
-            'observation_profiles': profiles_seen, 'legacy_profiles_without_cpu_partition': legacy,
+            'observation_profiles': profiles_seen,
+            'profiles_with_native_profiler_stages': native_profiles_seen,
+            'profiles_without_native_profiler_stages': profiles_seen - native_profiles_seen,
+            'legacy_profiles_without_cpu_partition': legacy,
             'reconciled_partitions': partitions_seen, 'incomplete_partitions': incomplete,
             'distributions': {name: distribution(values) for name, values in sorted(samples.items())},
             'counts': dict(sorted(counts.items())),
@@ -246,6 +268,7 @@ def analyze(path: Path, *, max_records: int = MAX_RECORDS) -> dict:
                 'missing_iteration_indices': 'not_represented_in_input_since_index_1_including_prefix; not_proof_of_runtime_loss',
                 'thread_cpu': 'current_python_thread_not_native_server_cpu',
                 'observation_exclusive': 'within_each_single_ordered_observation_only',
+                'observation_native_stage': 'native_profiler_elapsed_when_available; nested_within_observation_rpc_not_additive_to_wall_or_cpu',
                 'phase_inclusive': 'nested_phase_durations_not_additive',
                 'per_record': 'per_record_aggregates_not_individual_call_quantiles',
                 'checkpoint': 'current_iteration_through_checkpoint_before_record; '
