@@ -22,7 +22,8 @@ class NativeFactory:
         if getattr(backend, '_native_attachment', None) is not None:
             from .native_attachment import require_asset
             require_asset(backend._native_attachment, 'factory')
-            require_asset(backend._native_attachment, 'connector_ownership')
+            if backend._native_attachment['modules']['connector_ownership']:
+                require_asset(backend._native_attachment, 'connector_ownership')
             require_asset(backend._native_attachment, 'launch_readiness')
         else:
             self.command(files("jev_factorio").joinpath("lua/factory.lua").read_text())
@@ -297,6 +298,9 @@ class NativeFactory:
                           parameters["quantity"], parameters["receipt"], action == "factory_extract")
             return f"Transferred {parameters['quantity']} {parameters['item']} ({parameters['receipt']})"
         if action == "factory_connect":
+            attachment = getattr(self.backend, '_native_attachment', None)
+            if attachment is not None and not attachment['modules']['connector_ownership']:
+                raise RuntimeError('Retained native campaign has no paid connector ledger')
             from fle.env import Position
 
             if parameters["kind"] == "pipe":

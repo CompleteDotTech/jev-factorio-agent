@@ -133,7 +133,7 @@ def test_fresh_install_records_exact_assets_and_reattaches_without_external_rece
     row['modules']['connector_ownership'] = True
     row['native_installation'] = {
         'schema': NATIVE_SCHEMA, 'session_id': row['session_id'],
-        'actor_unit': row['actor_unit'],
+        'actor_unit': row['actor_unit'], 'profile': False,
         'assets': {name: hashlib.sha256(root.joinpath(name + '.lua').read_bytes()).hexdigest()
                    for name, enabled in row['modules'].items() if enabled},
     }
