@@ -387,7 +387,27 @@ class FactoryPlanner:
                 needed = max(0, math.ceil(ingredient["amount"] * batches - buffered - in_flight))
                 if needed:
                     prerequisite = self._need(item, needed, path)
-                    return prerequisite or self._transfer(role, item, needed)
+                    if prerequisite:
+                        return prerequisite
+                    plan = self._transfer(role, item, needed)
+                    item_path = [entry.removeprefix('item:') for entry in path
+                                 if entry.startswith('item:')]
+                    if (item_path[-1:] == [recipe['name']]
+                            and type(machine.get('unit_number')) is int
+                            and machine['unit_number'] > 0):
+                        plan = replace(plan, materials={**(plan.materials or {}),
+                            'recipe_input_transfer': {
+                                'observed_tick': self.snapshot.tick,
+                                'planner_item_path': [*item_path, item],
+                                'recipe': recipe['name'],
+                                'ingredient': item,
+                                'source_role': role,
+                                'source_unit': machine['unit_number'],
+                                'planned_batches': batches,
+                                'observed_input': buffered,
+                                'observed_crafting': bool(machine.get('crafting')),
+                            }})
+                    return plan
         return None
 
     def _fluid(self, item, path):

@@ -448,6 +448,80 @@ def test_native_shaped_startup_fuel_transfer_has_current_paid_start_evidence():
     assert missing()
 
 
+def test_native_shaped_recipe_input_transfer_binds_current_recipe_and_owned_furnace():
+    state, data = snapshot(inventory={'copper-ore': 10}, player_position=(0, 0)), catalog()
+    data.recipes['copper-plate'] = recipe('copper-plate', {'copper-ore': 1}, 'smelting')
+    role = 'recipe:copper-plate'
+    state.factory['entities'][role] = machine(unit_number=2546, fuel={'coal': 5},
+                                               input={}, crafting=False)
+    state.factory['production_sites'] = {'sources': {
+        role: {'state': 'owned', 'source_unit': 2546}}}
+    state.factory['input_routes'] = {'protocol': 1, 'session_id': state.session_id,
+                                     'tick': state.tick, 'sources': {}}
+    state.factory['output_buffers'] = {'protocol': 1, 'session_id': state.session_id,
+                                       'tick': state.tick, 'sources': {}}
+    planner = InputRoutePlanner(data, state, 'rocket_launch')
+    planner._set_focus('lab', 1)
+    plan = planner._production(data.recipes['copper-plate'], role, 10,
+                               ('item:lab', 'item:copper-plate'))
+    step = plan.steps[0]
+    assert step.action == 'factory_insert'
+    assert step.parameters == {'role': role, 'item': 'copper-ore', 'quantity': 10,
+                               'receipt': f'{state.tick}:factory_insert:{role}:copper-ore'}
+    assert plan.materials['recipe_input_transfer'] == {
+        'observed_tick': state.tick, 'planner_item_path': ['lab', 'copper-plate', 'copper-ore'],
+        'recipe': 'copper-plate', 'ingredient': 'copper-ore', 'source_role': role,
+        'source_unit': 2546, 'planned_batches': 10, 'observed_input': 0,
+        'observed_crafting': False,
+    }
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    assert row['recipe_input_transfer_start_evidence'] == {
+        'observed_tick': state.tick, 'planner_item_path': ['lab', 'copper-plate', 'copper-ore'],
+        'direct_native_recipe': 'copper-plate', 'owned_source_role': role,
+        'owned_source_unit': 2546, 'ingredient': 'copper-ore',
+        'ingredient_in_machine_now': 0, 'ingredient_in_inventory_now': 10,
+        'burner_fuel_coal_now': 5, 'paid_quantity_to_transfer': 10,
+        'planned_native_receipt_id': step.parameters['receipt'],
+        'basis': 'current_planner_recipe_input_and_owned_native_machine',
+        'native_transfer_and_later_output_require_verification': True,
+    }
+    context, questions, _ = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
+        [plan])
+    assert context['candidate_evidence'][plan.id]['recipe_input_transfer_start_evidence'] == row['recipe_input_transfer_start_evidence']
+    assert 'paid ingredient transfer' in questions[plan.id + '/benefit']['instructions']
+    assert 'transfer and output' in questions[plan.id + '/needs_observation']['instructions']
+
+    def missing(changed_plan=plan):
+        return candidate_evidence(state, data, [changed_plan])[changed_plan.id][
+            'recipe_input_transfer_start_evidence'] is None
+
+    provenance = plan.materials['recipe_input_transfer']
+    assert missing(replace(plan, materials={**plan.materials, 'recipe_input_transfer': {
+        **provenance, 'observed_tick': state.tick - 1}}))
+    assert missing(replace(plan, materials={**plan.materials, 'recipe_input_transfer': {
+        **provenance, 'recipe': 'iron-plate'}}))
+    assert missing(replace(plan, materials={key: value for key, value in plan.materials.items()
+        if key != 'recipe_input_transfer'}))
+    assert missing(replace(plan, steps=(replace(step, parameters={**step.parameters,
+        'role': 'recipe:iron-plate'}),)))
+    assert missing(replace(plan, steps=(replace(step, parameters={**step.parameters,
+        'quantity': 9}),)))
+    assert missing(replace(plan, steps=(replace(step, parameters={**step.parameters,
+        'receipt': 'stale'}),)))
+    state.inventory['copper-ore'] = 9
+    assert missing()
+    state.inventory['copper-ore'] = 10
+    state.factory['entities'][role].pop('input')
+    assert missing()
+    state.factory['entities'][role]['input'] = {}
+    state.factory['production_sites']['sources'][role].pop('source_unit')
+    assert missing()
+    state.factory['production_sites']['sources'][role]['source_unit'] = 2546
+    state.factory['entities'][role].pop('fuel')
+    assert missing()
+
+
 def test_local_rubric_does_not_require_one_pickup_to_launch_a_rocket():
     state, data, plans = transfers()
     support = scheduling_context(state, data, plans, 'rocket_launch')
