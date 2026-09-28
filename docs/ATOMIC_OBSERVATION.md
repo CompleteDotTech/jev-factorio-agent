@@ -32,6 +32,15 @@ must match this same snapshot exactly; a decorator cannot overwrite it with a
 conflicting count. Receipts and all existing capability fields are preserved and
 still pass through the controller's ownership/receipt/action validators.
 
+An isolated base-only Factorio 2.0.77 diagnostic on 2026-09-28 exposed its
+empty-sequence encoding: a bootstrap with no placed drills or chests emits
+`placed_entities: {}`. Python normalizes exactly empty objects at the known
+`bootstrap.placed_entities` and `factory.researched` list boundaries. Nonempty
+objects, malformed lists and missing pinned drills still fail before publication;
+no legacy fallback occurs. A privacy-scrubbed native envelope is replayed offline by
+`tests/test_atomic_native_empty_sequences.py`. This establishes the empty-world
+wire contract, not paid gameplay, performance or complete native acceptance.
+
 The FLE actor-state RPC, standalone fair-control RPC, actor/chest inventory
 helpers, broad FLE entity conversion and water/oil `nearest` helpers are absent
 from the negotiated observation path. This does **not** remove fresh pre-dispatch
@@ -73,6 +82,7 @@ These constraints must be included in matched native workloads and acceptance.
 ```sh
 PYTHONPATH=src PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest \
   tests/test_atomic_observation.py tests/test_atomic_observation_lua.py \
+  tests/test_atomic_native_empty_sequences.py \
   tests/test_campaign_observation.py tests/test_observation_inventory_reuse.py \
   tests/test_fair_actions.py
 PYTHONPATH=src python benchmarks/benchmark_atomic_observation.py --samples 100

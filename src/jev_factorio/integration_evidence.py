@@ -276,7 +276,7 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                    'checkpoint_coal_treatment_mismatch')
         reject(any((field in cp) is not trial['configuration'][flag] for flag, field in extensions.items()),
                'checkpoint_composition_mismatch')
-    for field in ('input_commitments', 'outpost_commitments', 'successor_receipts'):
+    for field in ('output_commitments', 'input_commitments', 'outpost_commitments', 'successor_receipts'):
         reject(not _retains_prefix(initial.get(field, {}), final.get(field, {})),
                'composed_ownership_regressed')
     if trial['schema'] == TRIAL_SCHEMA_V2:
