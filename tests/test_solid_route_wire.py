@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def wire(empty_arrays=False, fuel=False):
     lua = pytest.importorskip('lupa.lua52').LuaRuntime()
     lua.execute((ROOT/'tests/fixtures/solid_routes_runtime.lua').read_text())
+    lua.execute('jev_fle_runtime=storage')
     if fuel:
         lua.execute('''
             source.name="wooden-chest";source.type="container";source.recipe=nil
