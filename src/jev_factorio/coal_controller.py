@@ -181,6 +181,16 @@ class CoalSupplyMixin:
     def _execution_barrier(self, snapshot):
         return self._coal_fault or super()._execution_barrier(snapshot)
 
+    def _coal_admission_allows_start(self, snapshot):
+        # Admission covers the whole optional project, including a fully
+        # carried kit. Existing ownership keeps its reconciliation/continuation
+        # path; inventory availability alone is not economic permission.
+        if (not self._coal_economic_admission or self.memory.coal_commitments
+                or self.memory.coal_funding is not None):
+            return True
+        self._coal_admission_evidence = coal_admission.evaluate(snapshot)
+        return self._coal_admission_evidence.get("eligible") is True
+
     def _step_allowed(self, step, snapshot):
         if (self._execution_barrier(snapshot) or self._coal_job_conflict(step)
                 or not coal.permits(step.action, step.parameters or {}, snapshot)):
@@ -188,6 +198,8 @@ class CoalSupplyMixin:
         try:
             rows = coal.sources(snapshot)
             network = step.action == coal.COMMAND or (step.action == solid.COMMAND and coal.is_network_route(step.parameters, snapshot))
+            if network and not self._coal_admission_allows_start(snapshot):
+                return False
             bill = Counter(coal.remaining_kit(rows, snapshot)) if network or self.memory.coal_commitments else Counter()
             own = (step.parameters or {}).get("route") if step.action == solid.COMMAND else None
             if not network:
@@ -254,13 +266,9 @@ class CoalSupplyMixin:
         extra = candidates(snapshot, self.memory.active_goal, failures=self.memory.failures)
         if self._coal_kit_policy and not self.memory.coal_commitments:
             try:
-                if self._coal_economic_admission and state is None:
-                    self._coal_admission_evidence = coal_admission.evaluate(snapshot)
-                    if not self._coal_admission_evidence["eligible"]:
-                        self._coal_kit_evidence = self._coal_admission_evidence
-                        plans.extend(p for p in extra if p.id not in {p.id for p in plans}
-                                     and self._step_allowed(p.steps[0], snapshot))
-                        return plans, blocker if not plans else ""
+                if not self._coal_admission_allows_start(snapshot):
+                    self._coal_kit_evidence = self._coal_admission_evidence
+                    return plans, blocker if not plans else ""
                 offer, self._coal_kit_evidence = coal_funding.candidate(
                     snapshot, self.catalog, **self._coal_funding_options())
                 if offer is not None:
@@ -292,6 +300,11 @@ class CoalSupplyMixin:
                 "successor_projects": getattr(self.memory, "successor_projects", {})}
 
     def _commit_solid(self, plan, snapshot):
+        step = plan.steps[0]
+        if (coal_funding.MARKER in (plan.materials or {}) or step.action == coal.COMMAND
+                or step.action == solid.COMMAND and coal.is_network_route(step.parameters, snapshot)):
+            if not self._coal_admission_allows_start(snapshot):
+                raise ValueError("Cannot start coal investment without economic admission")
         if coal_funding.MARKER not in (plan.materials or {}):
             if self.memory.coal_funding and ((plan.materials or {}).get("capital_investment")
                     or (plan.materials or {}).get(solid_investment.MARKER, {}).get("stage") == "kit"):
@@ -398,6 +411,13 @@ class CoalSupplyMixin:
         return count
 
     def _investment_step_allowed(self, plan, step, snapshot):
+        if (step.action == coal.COMMAND
+                or step.action == solid.COMMAND and coal.is_network_route(step.parameters, snapshot)):
+            try:
+                if not self._coal_admission_allows_start(snapshot):
+                    return False
+            except (ValueError, KeyError, TypeError, AttributeError):
+                return False
         if coal_funding.MARKER in (plan.materials or {}) or plan.id.startswith("coal-kit:"):
             if (not self._coal_kit_policy or self.memory.coal_funding is None
                     or self._plan_failure_count(plan) >= 2

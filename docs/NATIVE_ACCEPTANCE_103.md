@@ -17,16 +17,31 @@ contains #100's narrow paid straight-corridor foundation and #102's explicit,
 kit-funded science-investment policy; neither establishes native acceptance or a
 complete production logistics network. #101 now has an experimental paid electric
 source/multi-consumer composition, and default-off acquisition of an explicitly
-specified immutable coal kit. Autonomous demand/payback admission, production
-activation/capture and native qualification remain unfinished. Check the current issues and reviewed source rather than
-treating an older packet's status table as today's implementation state. Missing
-engineering is a real blocker, not just a native-evidence formality.
+specified immutable coal kit. The CLI and supervisor support the immutable
+[complete solid/coal treatment](COMPLETE_TREATMENT.md), including checkpoint and
+manifest bindings, and the private v2 capture retains its ownership and native
+observations. Treatment v2 also binds the
+[coal economic admission flag](COAL_ECONOMIC_ADMISSION_V2.md). Its native economic
+witness remains explicitly unqualified: positive autonomous demand/payback
+admission still needs qualified operating-energy and acquisition/construction
+cost evidence and a reviewed policy. These source capabilities do not establish
+native qualification or an activated production campaign.
+
+The read-only development preflight validates composed checkpoints but does not
+inspect native solid/coal paid ownership. It reports those families as unsupported,
+and the complete capture preserves that limitation. Qualifying the actual
+FLE/Factorio session, adding a reviewed native ownership projection, and proving
+paid material flow, recovery and useful science progress remain open gates.
+Neither a capture nor an analyzer consistency pass grants acceptance or deployment
+authority. Check the current issues and reviewed source rather than treating an
+older packet's status table as today's implementation state.
 
 The source-only coal experiment in `COAL_SUPPLY_EXPERIMENT.md` adds explicit
 paid independent electric-source bundles, explicitly bound mixed downstream routes,
-shared kit locks and recovery tests. It does not implement
-a complete production coal/downstream treatment or satisfy the native gates. Its
-pre-carried kit, existing-power and engine-accounting assumptions remain explicit.
+shared kit locks and recovery tests. The complete treatment can bind this
+composition for qualification, but its existing-power and engine-accounting
+assumptions remain explicit. Paid source/transport fixtures and bounded kit
+acquisition do not satisfy the native economic, material-flow or recovery gates.
 
 Before deploying the solid composition, include the first-observation publication
 barrier described in `SOLID_INITIAL_OBSERVATION_TRANSACTION.md` and qualify its

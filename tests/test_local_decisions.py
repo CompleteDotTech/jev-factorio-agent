@@ -10,8 +10,8 @@ from jev_factorio.jev_client import MockJevClient
 from jev_factorio.planning.decision_support import candidate_evidence, distinct_candidates, scheduling_context
 from jev_factorio.planning.factory import FactoryPlanner
 from jev_factorio.planning.ready_work import ReadyWorkPlanner
-from jev_factorio.skills import Plan, Step
-from test_factory import FactorySimulation, catalog, machine, snapshot
+from jev_factorio.skills import Plan, Step, compile_plans
+from test_factory import FactorySimulation, catalog, machine, recipe, snapshot
 from test_causal_trace import Sink, events
 from test_deadline_scheduling import scenario
 from test_hierarchical import CountingModel
@@ -31,6 +31,49 @@ def transfers(state=None, data=None):
                          for role in ('far', 'near')]
 
 
+def test_observed_bootstrap_coal_is_a_local_objective_with_bounded_travel():
+    state, data = snapshot(), catalog()
+    state.inventory['coal'] = 0
+    state.nearby_resources['coal'] = 4
+    state.player_position = (0, 0)
+    state.factory['fair_resource_targets'] = {
+        'coal': {'position': {'x': 3, 'y': 4}}}
+    plans, blocker = compile_plans('stockpile_fuel', state)
+    assert not blocker and [p.id for p in plans] == [
+        'stockpile_fuel:coal:5', 'stockpile_fuel:coal:10']
+    support = scheduling_context(state, data, plans, 'stockpile_fuel')
+    assert support['local_objective']['kind'] == 'stockpile_fuel'
+    assert support['local_objective']['primary_target']['inventory_target'] == 5
+    assert support['candidate_evidence'][plans[0].id]['travel_tiles_lower_bound'] == 5
+    assert support['candidate_evidence'][plans[0].id]['processed_units'] == 5
+    assert support['candidate_evidence'][plans[1].id]['processed_units'] == 10
+    assert not support['candidate_evidence'][plans[0].id]['unknowns']
+    assert support['candidate_evidence'][plans[0].id]['work_scope'] == 'immediate'
+    assert support['candidate_evidence'][plans[1].id]['work_scope'] == 'lookahead'
+    assert support['deterministic_ranking'][0] == plans[0].id
+    context, questions, offered = question_batch({'facts': state.for_jev(), **support}, plans)
+    assert offered == plans
+    assert context['local_objective']['primary_target']['item'] == 'coal'
+    assert 'five-coal construction buffer' in context['local_objective']['instruction']
+    assert 'local_objective' in questions[plans[0].id + '/benefit']['instructions']
+    decision = select_plan(MockJevClient(), {'facts': state.for_jev(),
+                                              'active_goal': 'stockpile_fuel', **support}, plans)
+    assert decision.plan_id == plans[0].id
+
+
+def test_missing_bootstrap_coal_geometry_stays_unknown_and_absent_coal_has_no_plan():
+    state, data = snapshot(), catalog()
+    state.inventory['coal'] = 0
+    state.nearby_resources['coal'] = 4
+    state.factory['fair_resource_targets'] = {}
+    plans, _ = compile_plans('stockpile_fuel', state)
+    evidence = candidate_evidence(state, data, plans)
+    assert evidence[plans[0].id]['travel_tiles_lower_bound'] is None
+    assert 'travel:walk_to_coal' in evidence[plans[0].id]['unknowns']
+    state.nearby_resources.pop('coal')
+    assert compile_plans('stockpile_fuel', state)[0] == []
+
+
 def test_focus_is_structured_without_mutating_material_bill():
     state, data = snapshot(), catalog()
     worker = ReadyWorkPlanner(data, state, 'rocket_launch')
@@ -40,6 +83,76 @@ def test_focus_is_structured_without_mutating_material_bill():
     assert 'local_objective' not in (worker.materials or {})
     serial = FactoryPlanner(data, state, 'rocket_launch')._need('iron-plate', 20)
     assert 'local_objective' not in (serial.materials or {})
+
+
+def test_stone_gather_explains_current_lab_recipe_dependency_without_claiming_output():
+    state, data = snapshot(), catalog()
+    data.recipes['lab'] = recipe('lab', {'iron-plate': 1})
+    worker = ReadyWorkPlanner(data, state, 'rocket_launch')
+    plan = worker._need('lab', 1)
+    assert plan.steps[0].action == 'factory_gather'
+    assert plan.steps[0].parameters['resource'] == 'stone'
+    assert plan.materials['local_objective']['item'] == 'lab'
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    assert row['raw_prerequisite'] == {
+        'observed_tick': state.tick,
+        'direct_recipe': 'stone-furnace',
+        'direct_product': 'stone-furnace',
+        'planner_item_path': ['lab', 'iron-plate', 'stone-furnace', 'stone'],
+        'basis': 'current_planner_dependency_and_native_catalog_recipe',
+        'later_steps_require_fresh_native_preconditions': True,
+    }
+    assert row['gather_start_evidence'] == {
+        'resource_in_current_observation': True,
+        'fair_target_identity_observed': True,
+        'resource_inventory_now': 0,
+        'target_inventory_after_this_step': 5,
+        'travel_is_lower_bound_not_arrival_proof': True,
+    }
+    context, questions, offered = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
+        [plan])
+    assert offered == [plan]
+    assert context['candidate_evidence'][plan.id]['gather_start_evidence'] == row['gather_start_evidence']
+    assert 'best next action' in questions['candidate']['instructions']
+    assert 'ultimate goal' in questions['candidate']['instructions']
+    assert 'observed raw resource' in questions[plan.id + '/needs_observation']['instructions']
+    assert row['delivers_or_crafts'] == []
+    assert row['processed_units_basis'] == 'handling_volume_not_useful_production'
+    assert not row['requires_investment']
+    assert not plan.steps[0].allowed(snapshot(nearby_resources={}))
+
+
+def test_stale_or_unrelated_raw_dependency_never_enters_candidate_evidence():
+    state, data = snapshot(), catalog()
+    plan = FactoryPlanner(data, state, 'iron_smelting')._need('iron-plate', 10)
+    assert candidate_evidence(state, data, [plan])[plan.id]['raw_prerequisite'] is not None
+    stale = replace(plan, materials={**plan.materials, 'raw_prerequisite': {
+        **plan.materials['raw_prerequisite'], 'observed_tick': state.tick - 1}})
+    unrelated = replace(plan, materials={**plan.materials, 'raw_prerequisite': {
+        **plan.materials['raw_prerequisite'], 'direct_product': 'lab'}})
+    assert candidate_evidence(state, data, [stale])[stale.id]['raw_prerequisite'] is None
+    assert candidate_evidence(state, data, [unrelated])[unrelated.id]['raw_prerequisite'] is None
+    state.factory['fair_resource_targets'].pop('stone')
+    missing_site = candidate_evidence(state, data, [plan])[plan.id]
+    assert missing_site['gather_start_evidence']['fair_target_identity_observed'] is False
+    assert 'travel:factory_gather' in missing_site['unknowns']
+
+
+def test_tree_named_wood_target_is_valid_gather_start_evidence():
+    state, data = snapshot(), catalog()
+    data.recipes['wooden-chest'] = recipe('wooden-chest', {'wood': 2})
+    state.nearby_resources['wood'] = 3
+    state.factory['fair_resource_targets']['wood'] = {
+        'name': 'tree-01', 'surface_index': 1,
+        'position': {'x': 3, 'y': 0},
+    }
+    plan = FactoryPlanner(data, state, 'rocket_launch')._need('wooden-chest', 1)
+    assert plan.steps[0].action == 'factory_gather'
+    assert plan.steps[0].parameters == {'resource': 'wood', 'quantity': 1}
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    assert row['gather_start_evidence']['fair_target_identity_observed'] is True
+    assert row['raw_prerequisite']['direct_product'] == 'wooden-chest'
 
 
 def test_local_rubric_does_not_require_one_pickup_to_launch_a_rocket():

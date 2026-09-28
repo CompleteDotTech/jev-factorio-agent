@@ -41,9 +41,10 @@ def test_reconstructed_controllers_reuse_nested_native_adapters(background):
     commands = []
     state = game()
     state.factory["craft_job_inventory"] = {"tick": state.tick, "items": {"coal": 5}}
-    native = SimpleNamespace(command=commands.append, observe=lambda snapshot: snapshot,
-                             backend=SimpleNamespace(_native_attachment=None))
-    backend = SimpleNamespace(_factory=native, enable_factory=native_catalog)
+    native = SimpleNamespace(command=commands.append, observe=lambda snapshot: snapshot)
+    backend = SimpleNamespace(_factory=native, enable_factory=native_catalog,
+                              _native_attachment=None)
+    native.backend = backend
     base = BackgroundWorkLoop if background else HierarchicalLoop
     loop_type = input_loop_type(buffered_loop_type(base))
     options = {"policy": "deterministic", "factory_scheduling": "ready-work"}
@@ -119,6 +120,11 @@ def controller(backend, tmp_path, *, kind=ScenarioLoop, resume=False):
         loop.memory = loop.memory_type(
             backend.state.session_id, "rocket_launch", active_goal="rocket_launch",
             completed_goals={"stockpile_fuel": 0, "bootstrap_mining": 0}, last_tick=300)
+        # This fixture starts after paid output construction; retain that
+        # explicit provenance instead of asking the controller to adopt it.
+        loop.memory.output_commitments = {
+            source: {key: deepcopy(row[key]) for key in ('source_unit', 'layout', 'parts')}
+            for source, row in backend.state.factory['output_buffers']['sources'].items()}
     return loop
 
 

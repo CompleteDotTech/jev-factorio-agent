@@ -95,7 +95,9 @@ class ObservedFactory(NativeFactory):
             drop = self.backend._drill.drop_position
             for role, entity in factory["entities"].items():
                 position = entity["position"]
-                if entity["name"] == "wooden-chest" and math.hypot(position["x"] - drop.x, position["y"] - drop.y) <= .1:
+                if (entity["name"] == "wooden-chest"
+                        and abs(position["x"] - drop.x) < .5
+                        and abs(position["y"] - drop.y) < .5):
                     factory["drill_output_role"] = role
                     break
         if not isinstance(factory.get("entities"), dict) or not isinstance(factory.get("receipts"), (dict, list)):
