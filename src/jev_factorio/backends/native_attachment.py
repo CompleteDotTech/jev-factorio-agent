@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from functools import lru_cache
 from importlib.resources import files
 from pathlib import Path
 
@@ -36,6 +37,9 @@ PINNED_ASSETS = {
     'successors': '7cd7999d3a4fee0faeb157c81487091b05366d919e17f34ae51a3061274d90ae',
 }
 
+LEGACY_OBSERVATION_PROFILE = 'e759-observation-v2-output-tile-v1'
+LEGACY_OBSERVATION_SHA256 = '30cce48ab896579473d625d38daea86dc7c61710092255436974d0111b41b416'
+
 
 PROBE = r'''local rt=jev_fle_runtime
 local c=rt and rt.campaign
@@ -49,6 +53,8 @@ local q=rt and rt.coal_supply
 local o=rt and rt.mining_outposts
 local p=rt and rt.production_sites
 local x=rt and rt.successors
+local n=rt and rt.native_installation
+local nc=n and n.callbacks
 local a=rt and rt.agent_characters and rt.agent_characters[1]
 local player=rt and game.get_player(rt.jev_bound_player_index or 1)
 local function good(x) return type(x)=="function" end
@@ -80,35 +86,154 @@ if o then ok=ok and o.protocol==1 and i and good(c.observe_mining_outposts) end
 if p then ok=ok and p.protocol==1 and i and good(c.observe_production_sites) end
 if x then ok=ok and x.protocol==1 and i and b and p and j and not o
     and c.successors_enabled==true and good(c.observe_successors) end
+if c and c.connector_ledger then ok=ok and c.connector_ledger.protocol==1
+    and type(c.connector_ledger.routes)=="table" and good(c.connector_begin)
+    and good(c.connector_finish) and good(c.connector_page)
+    and good(c.observe_connector_ownership) end
+if n then ok=ok and type(n.assets)=="table" and type(nc)=="table"
+    and nc.fair_tick==(f and f.tick_handler)
+    and nc.observe==(c and c.observe)
+    and nc.transfer==(c and c.transfer)
+    and nc.configure==(c and c.configure)
+    and nc.connector_begin==(c and c.connector_begin)
+    and nc.connector_finish==(c and c.connector_finish)
+    and nc.connector_page==(c and c.connector_page)
+    and nc.connector_observe==(c and c.observe_connector_ownership)
+    and nc.observation_v2==(c and c.observation_snapshot_v2) end
 if c and s then ok=ok and c.observe==s.observer and c.transfer==s.transfer
 elseif c and i then ok=ok and c.observe==i.observer and c.transfer==i.transfer
 elseif c and b then ok=ok and c.observe==b.observer and c.transfer==b.transfer
 elseif c and j then ok=ok and c.observe==j.observe_wrapper and c.transfer==l.transfer
 elseif c then ok=ok and c.observe==l.observer and c.transfer==l.transfer end
 local modules={fair_actions=true,factory=c~=nil,launch_readiness=l~=nil,
-    observation=c~=nil,observation_v2=c~=nil,craft_jobs=j~=nil,
+    observation=c and good(c.observation_snapshot) or false,
+    observation_v2=c and good(c.observation_snapshot_v2) or false,craft_jobs=j~=nil,
     output_buffers=b~=nil,input_routes=i~=nil,production_sites=p~=nil,
     mining_outposts=o~=nil,solid_routes=s~=nil,coal_supply=q~=nil,
-    successors=x~=nil}
+    successors=x~=nil,connector_ownership=c and c.connector_ledger~=nil or false}
 rcon.print(helpers.table_to_json({schema=1,qualified=ok==true,
     session_id=rt and rt.jev_session_id or "",actor_unit=a and a.unit_number or 0,
     modules=modules,solid_intents=s and s.intents or {},coal_targets=q and q.targets or {},
-    coal_admission_evidence=q and q.admission_evidence or false}))'''
+    coal_admission_evidence=q and q.admission_evidence or false,
+    native_installation=n and {schema=n.schema,session_id=n.session_id,
+        actor_unit=n.actor_unit,assets=n.assets,profile=n.profile or false} or false}))'''
 
 
-def readback(client):
+NATIVE_SCHEMA = 'jev.native-installation.v2'
+CALLBACKS_EXPR = (
+    '{fair_tick=f and f.tick_handler or nil, '
+    'observe=c and c.observe or nil,transfer=c and c.transfer or nil, '
+    'configure=c and c.configure or nil, '
+    'connector_begin=c and c.connector_begin or nil, '
+    'connector_finish=c and c.connector_finish or nil, '
+    'connector_page=c and c.connector_page or nil, '
+    'connector_observe=c and c.observe_connector_ownership or nil, '
+    'observation_v2=c and c.observation_snapshot_v2 or nil}'
+)
+
+
+@lru_cache(maxsize=1)
+def _installer_scripts():
+    """Recognize only exact bundled installers; never mark arbitrary RCON Lua."""
+    root = files('jev_factorio').joinpath('lua')
+    names = tuple(PINNED_ASSETS) + ('connector_ownership',)
+    scripts = {}
+    for name in names:
+        source = root.joinpath(name + '.lua')
+        if not source.is_file():
+            continue
+        body = source.read_text()
+        scripts[body] = (name,)
+        scripts['do\n' + body + '\nend'] = (name,)
+    scripts['\n'.join('do\n' + root.joinpath(name + '.lua').read_text() + '\nend'
+                      for name in ('input_routes', 'production_sites'))] = (
+                          'input_routes', 'production_sites')
+    return scripts
+
+
+def prepare_install_command(script: str, attachment=None) -> str:
+    """Append a source receipt in the same Lua command as an installer.
+
+    A failed or partially executed command cannot acquire a complete receipt.
+    Installation is supported only for the enumerated source assets. Each
+    later installer extends the live receipt without changing prior hashes.
+    """
+    names = _installer_scripts().get(script)
+    if names is None:
+        return script
+    if attachment is not None:
+        raise RuntimeError('Native module reinstallation during resume requires reconciliation')
+    hashes = {name: hashlib.sha256(
+        files('jev_factorio').joinpath('lua/' + name + '.lua').read_bytes()
+    ).hexdigest() for name in names}
+    encoded = json.dumps(hashes, sort_keys=True)
+    return script + '\n' + (
+        'local rt=assert(jev_fle_runtime); '
+        'local a=assert(rt.agent_characters and rt.agent_characters[1]); '
+        'assert(a.valid and a.unit_number and type(rt.jev_session_id)=="string"); '
+        'local n=rt.native_installation; '
+        'if not n then n={schema="' + NATIVE_SCHEMA + '",'
+        'session_id=rt.jev_session_id,actor_unit=a.unit_number,assets={}}; '
+        'rt.native_installation=n end; '
+        'assert(n.schema=="' + NATIVE_SCHEMA + '" and '
+        'n.session_id==rt.jev_session_id and n.actor_unit==a.unit_number); '
+        'local incoming=helpers.json_to_table(' + json.dumps(encoded) + '); '
+        'for name,hash in pairs(incoming) do '
+        'assert(n.assets[name]==nil or n.assets[name]==hash, '
+        '"Native asset revision changed"); n.assets[name]=hash end; '
+        'local c=rt.campaign; local f=rt.fair; '
+        'n.callbacks=' + CALLBACKS_EXPR
+    )
+
+
+def readback(client, *, receipt_path=None):
     result = decode_native(client.send_command('/sc ' + PROBE))
     if (not isinstance(result, dict) or set(result) != {
             'schema', 'qualified', 'session_id', 'actor_unit', 'modules',
-            'solid_intents', 'coal_targets', 'coal_admission_evidence'}
+            'solid_intents', 'coal_targets', 'coal_admission_evidence',
+            'native_installation'}
             or result['schema'] != 1 or result['qualified'] is not True
             or not isinstance(result['session_id'], str) or not result['session_id']
             or type(result['actor_unit']) is not int or result['actor_unit'] < 1
             or not isinstance(result['modules'], dict)
-            or set(result['modules']) != set(PINNED_ASSETS)
+            or set(result['modules']) != set(PINNED_ASSETS) | {'connector_ownership'}
             or any(type(flag) is not bool for flag in result['modules'].values())):
         raise RuntimeError('Existing native callback installation requires reconciliation')
-    receipt_path = os.environ.get('JEV_NATIVE_ATTACHMENT_RECEIPT')
+    native = result['native_installation']
+    if native is not False:
+        if (not isinstance(native, dict)
+                or set(native) != {'schema', 'session_id', 'actor_unit', 'assets', 'profile'}
+                or native['schema'] != NATIVE_SCHEMA
+                or native['session_id'] != result['session_id']
+                or native['actor_unit'] != result['actor_unit']
+                or not isinstance(native['assets'], dict)
+                or set(native['assets']) != {
+                    name for name, present in result['modules'].items() if present}
+                or any(type(value) is not str or len(value) != 64
+                       or any(c not in '0123456789abcdef' for c in value)
+                       for value in native['assets'].values())):
+            raise RuntimeError('Native installed-source manifest requires reconciliation')
+        profile = native['profile']
+        if profile == LEGACY_OBSERVATION_PROFILE:
+            if (result['modules']['connector_ownership']
+                    or native['assets'].get('factory') != PINNED_ASSETS['factory']
+                    or native['assets'].get('observation_v2') != LEGACY_OBSERVATION_SHA256
+                    or any(value != (LEGACY_OBSERVATION_SHA256 if name == 'observation_v2'
+                                     else PINNED_ASSETS.get(name))
+                           for name, value in native['assets'].items())):
+                raise RuntimeError('Legacy observation migration profile requires reconciliation')
+        elif profile is not False:
+            raise RuntimeError('Unknown native installation profile requires reconciliation')
+        for name, expected in native['assets'].items():
+            source = files('jev_factorio').joinpath('lua/' + name + '.lua')
+            if profile == LEGACY_OBSERVATION_PROFILE and name != 'observation_v2':
+                continue  # Exact e759 hash is pinned; retained closure is reused.
+            if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
+                raise RuntimeError('Native Lua source differs from installed manifest')
+        return result
+    if result['modules']['connector_ownership']:
+        raise RuntimeError('Unversioned connector ownership requires reconciliation')
+    receipt_path = receipt_path or os.environ.get('JEV_NATIVE_ATTACHMENT_RECEIPT')
     if not receipt_path:
         raise RuntimeError('Existing native installation requires a source-bound attachment receipt')
     path = Path(receipt_path)
@@ -139,9 +264,18 @@ def readback(client):
 def require_asset(attachment, name):
     if attachment is None:
         return False
-    if (name not in PINNED_ASSETS or attachment['modules'].get(name) is not True):
+    if attachment['modules'].get(name) is not True:
         raise RuntimeError('Required native capability was not installed in this session')
     asset = files('jev_factorio').joinpath('lua/' + name + '.lua').read_bytes()
-    if hashlib.sha256(asset).hexdigest() != PINNED_ASSETS[name]:
+    manifest = attachment.get('native_installation')
+    expected = (manifest['assets'].get(name) if isinstance(manifest, dict)
+                else PINNED_ASSETS.get(name))
+    if (isinstance(manifest, dict)
+            and manifest.get('profile') == LEGACY_OBSERVATION_PROFILE
+            and name != 'observation_v2'):
+        if expected != PINNED_ASSETS.get(name):
+            raise RuntimeError('Retained native asset differs from the legacy profile')
+        return True
+    if expected is None or hashlib.sha256(asset).hexdigest() != expected:
         raise RuntimeError('Native Lua source differs from the verified installed revision')
     return True
