@@ -280,6 +280,70 @@ def test_paid_joint_furnace_placement_has_observed_site_and_lab_dependency():
     assert candidate_evidence(state, data, [plan])[plan.id]['placement_start_evidence'] is None
 
 
+def test_new_owned_copper_furnace_requests_bounded_startup_coal_with_current_evidence():
+    state, data = snapshot(inventory={}, player_position=(0, 0)), catalog()
+    data.recipes['copper-plate'] = recipe('copper-plate', {'copper-ore': 1}, 'smelting')
+    role = 'recipe:copper-plate'
+    state.factory['entities'][role] = machine(unit_number=2546, fuel={'coal': 0},
+                                               products_finished=0)
+    state.factory['output_buffers'] = {'protocol': 1, 'session_id': state.session_id,
+                                       'tick': state.tick, 'sources': {}}
+    state.factory['input_routes'] = {'protocol': 1, 'session_id': state.session_id,
+                                     'tick': state.tick, 'sources': {}}
+    planner = InputRoutePlanner(data, state, 'rocket_launch')
+    planner._set_focus('lab', 1)
+    path = ('item:lab', 'item:copper-plate')
+    plan = planner._fuel(role, path)
+    assert plan.steps[0].action == 'factory_gather'
+    assert plan.steps[0].parameters == {'resource': 'coal', 'quantity': 5}
+    assert plan.steps[0].threshold == 5
+    assert plan.materials['fuel_prerequisite']['source_unit'] == 2546
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    assert row['unknowns'] == []
+    assert row['raw_prerequisite'] is None
+    assert row['gather_start_evidence']['resource_in_current_observation'] is True
+    assert row['gather_start_evidence']['fair_target_identity_observed'] is True
+    assert row['fuel_prerequisite'] == {
+        'observed_tick': state.tick, 'planner_item_path': ['lab', 'copper-plate'],
+        'burner_role': role, 'burner_unit': 2546, 'fuel_now': 0,
+        'startup_target': 5, 'current_required_units': 5,
+        'basis': 'current_planner_fuel_need_and_owned_native_burner',
+        'later_fuel_transfer_and_output_require_fresh_native_preconditions': True,
+    }
+    assert row['delivers_or_crafts'] == []
+    context, questions, _ = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
+        [plan])
+    assert context['candidate_evidence'][plan.id]['fuel_prerequisite'] == row['fuel_prerequisite']
+    assert "owned burner's startup need" in questions[plan.id + '/benefit']['instructions']
+
+    stale = replace(plan, materials={**plan.materials, 'fuel_prerequisite': {
+        **plan.materials['fuel_prerequisite'], 'observed_tick': state.tick - 1}})
+    assert candidate_evidence(state, data, [stale])[stale.id]['fuel_prerequisite'] is None
+    missing = replace(plan, materials={key: value for key, value in plan.materials.items()
+                                       if key != 'local_objective'})
+    assert candidate_evidence(state, data, [missing])[missing.id]['fuel_prerequisite'] is None
+    oversized = replace(plan, steps=(replace(plan.steps[0], threshold=50,
+        parameters={'resource': 'coal', 'quantity': 50}),))
+    assert candidate_evidence(state, data, [oversized])[oversized.id]['fuel_prerequisite'] is None
+    state.factory['fair_resource_targets'].pop('coal')
+    absent_site = candidate_evidence(state, data, [plan])[plan.id]
+    assert absent_site['fuel_prerequisite'] is None
+    assert absent_site['gather_start_evidence']['fair_target_identity_observed'] is False
+
+
+def test_established_burner_retains_bulk_service_target():
+    state, data = snapshot(inventory={}), catalog()
+    state.factory['entities']['recipe:iron-plate'] = machine(
+        unit_number=81, fuel={'coal': 0}, products_finished=20)
+    planner = ReadyWorkPlanner(data, state, 'rocket_launch')
+    planner._set_focus('iron-plate', 1)
+    plan = planner._fuel('recipe:iron-plate', ('item:iron-plate',))
+    assert plan.steps[0].action == 'factory_gather'
+    assert plan.steps[0].threshold == 50
+    assert plan.materials['fuel_prerequisite']['startup'] is False
+
+
 def test_local_rubric_does_not_require_one_pickup_to_launch_a_rocket():
     state, data, plans = transfers()
     support = scheduling_context(state, data, plans, 'rocket_launch')

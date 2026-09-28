@@ -253,6 +253,22 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
         prerequisite = (plan.materials or {}).get('raw_prerequisite')
         prerequisite_evidence = None
         gather_start = None
+        if len(plan.steps) == 1 and plan.steps[0].action == 'factory_gather':
+            step = plan.steps[0]
+            resource = (step.parameters or {}).get('resource')
+            site = snapshot.factory.get('fair_resource_targets', {}).get(resource, {})
+            gather_start = {
+                'resource_in_current_observation': resource in snapshot.nearby_resources,
+                'fair_target_identity_observed': (
+                    isinstance(site, dict) and isinstance(site.get('name'), str)
+                    and bool(site['name'].strip())
+                    and (resource == 'wood' or site['name'] == resource)
+                    and type(site.get('surface_index')) is int and site['surface_index'] > 0
+                    and _position(site.get('position')) is not None),
+                'resource_inventory_now': snapshot.inventory.get(resource, 0),
+                'target_inventory_after_this_step': step.threshold,
+                'travel_is_lower_bound_not_arrival_proof': True,
+            }
         intent = (plan.materials or {}).get('work_intent')
         craft_start = (_craft_start_evidence(snapshot, catalog, plan.steps[0])
                        if len(plan.steps) == 1 and plan.steps[0].action in {
@@ -344,18 +360,58 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                     'basis': 'current_planner_dependency_and_native_catalog_recipe',
                     'later_steps_require_fresh_native_preconditions': True,
                 }
-                site = snapshot.factory.get('fair_resource_targets', {}).get(ingredient, {})
-                gather_start = {
-                    'resource_in_current_observation': ingredient in snapshot.nearby_resources,
-                    'fair_target_identity_observed': (
-                        isinstance(site, dict) and isinstance(site.get('name'), str)
-                        and bool(site['name'].strip())
-                        and (ingredient == 'wood' or site['name'] == ingredient)
-                        and type(site.get('surface_index')) is int and site['surface_index'] > 0
-                        and _position(site.get('position')) is not None),
-                    'resource_inventory_now': snapshot.inventory.get(ingredient, 0),
-                    'target_inventory_after_this_step': step.threshold,
-                    'travel_is_lower_bound_not_arrival_proof': True,
+        fuel_prerequisite = None
+        fuel = (plan.materials or {}).get('fuel_prerequisite')
+        local = (plan.materials or {}).get('local_objective')
+        local_item = local.get('item') if isinstance(local, dict) else None
+        if (isinstance(fuel, dict) and len(plan.steps) == 1
+                and plan.steps[0].action == 'factory_gather'
+                and (plan.steps[0].parameters or {}).get('resource') == 'coal'
+                and gather_start is not None
+                and gather_start['resource_in_current_observation'] is True
+                and gather_start['fair_target_identity_observed'] is True):
+            role = fuel.get('source_role')
+            machine = entities.get(role, {})
+            recipe_name = role.removeprefix('recipe:') if isinstance(role, str) else ''
+            recipe = catalog.recipes.get(recipe_name, {})
+            prototype = catalog.machines.get(machine.get('name'), {})
+            path = fuel.get('planner_item_path')
+            current = machine.get('fuel', {}).get('coal')
+            startup = current == 0 and machine.get('products_finished', 0) == 0
+            expected_target = min(5 if startup else 50, catalog.stack_sizes.get('coal', 50))
+            carried = snapshot.inventory.get('coal', 0)
+            gather_quantity = (min(50, max(0, math.ceil(expected_target - current - carried)))
+                               if _finite(current) and type(carried) is int else 0)
+            if (fuel.get('observed_tick') == snapshot.tick
+                    and isinstance(role, str) and role.startswith('recipe:')
+                    and type(machine.get('unit_number')) is int
+                    and machine['unit_number'] == fuel.get('source_unit')
+                    and _finite(current) and current == fuel.get('observed_fuel')
+                    and type(expected_target) is int and expected_target >= 1
+                    and fuel.get('target_fuel') == expected_target
+                    and fuel.get('startup') is startup
+                    and current < min(5, expected_target)
+                    and type(carried) is int and carried >= 0 and gather_quantity > 0
+                    and (plan.steps[0].parameters or {}).get('quantity') == gather_quantity
+                    and plan.steps[0].threshold == carried + gather_quantity
+                    and prototype.get('burner') is True
+                    and recipe.get('name') == recipe_name and not recipe.get('hidden')
+                    and catalog.enabled(recipe, snapshot.researched or [])
+                    and bool(prototype.get('categories', {}).get(recipe.get('category')))
+                    and isinstance(local_item, str) and bool(local_item)
+                    and isinstance(path, list) and 1 <= len(path) <= 32
+                    and all(isinstance(item, str) and item for item in path)
+                    and path[0] == local_item and path[-1] == recipe_name):
+                fuel_prerequisite = {
+                    'observed_tick': snapshot.tick,
+                    'planner_item_path': list(path),
+                    'burner_role': role,
+                    'burner_unit': machine['unit_number'],
+                    'fuel_now': current,
+                    'startup_target': expected_target if startup else None,
+                    'current_required_units': min(5, expected_target) - current,
+                    'basis': 'current_planner_fuel_need_and_owned_native_burner',
+                    'later_fuel_transfer_and_output_require_fresh_native_preconditions': True,
                 }
         passive = all(s.action in {'factory_wait', 'idle'} for s in plan.steps)
         result[plan.id] = {
@@ -369,6 +425,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'delivers_or_crafts': sorted(outputs), 'unknowns': sorted(set(unknown)),
             'raw_prerequisite': prerequisite_evidence,
             'gather_start_evidence': gather_start,
+            'fuel_prerequisite': fuel_prerequisite,
             'craft_start_evidence': craft_start,
             'craft_dependency': craft_dependency,
             'placement_start_evidence': placement_start,
