@@ -70,6 +70,7 @@ class CoalSupplyFactory:
         from ..coal_supply import commitment, sources
         from ..connector_checkpoint import validate_binding
         from ..memory import CampaignMemory
+        from .native_attachment import MANUAL_CYCLE_PROFILE, require_asset
 
         rows = sources(snapshot)
         runtime = snapshot.factory.get("acceptance_runtime")
@@ -123,12 +124,20 @@ class CoalSupplyFactory:
                           "actor_unit": runtime["actor_unit"],
                           "surface_index": data["surface_index"],
                           "force_index": data["force_index"]}
+        journal_hash = None
+        attachment = getattr(getattr(self.native, 'backend', None), '_native_attachment', None)
+        if isinstance(attachment, dict) and isinstance(attachment.get('native_installation'), dict):
+            manifest = attachment['native_installation']
+            if manifest.get('profile') == MANUAL_CYCLE_PROFILE:
+                require_asset(attachment, 'coal_manual_journal_v1')
+                journal_hash = manifest['assets']['coal_manual_journal_v1']
         source = files("jev_factorio").joinpath("lua/coal_economics.lua").read_text()
         raw_response = self.native.command(source)
         decoded = decode(decode_native(raw_response), expected_epoch=expected_epoch,
                          expected_bundle={key: commitment(row) for key, row in rows.items()},
                          unit_qualification=UNIT_QUALIFICATION,
-                         expected_connectors=connectors, expected_routes=expected_routes)
+                         expected_connectors=connectors, expected_routes=expected_routes,
+                         expected_journal_asset_sha256=journal_hash)
         return {"native": decoded, "raw_response": raw_response,
                 "query_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
                 "response_sha256": hashlib.sha256(raw_response.encode("utf-8")).hexdigest()}

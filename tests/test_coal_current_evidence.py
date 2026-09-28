@@ -1,12 +1,16 @@
 """Prepaid kit evidence is bounded stock, not coal admission."""
 from copy import deepcopy
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
 from jev_factorio import coal_supply
 from jev_factorio.planning.coal_current_evidence import (
-    decoded_gather_work, prepaid_kit, verified_coal_deliveries,
+    bound_manual_cycle_attempts, decoded_gather_work, prepaid_kit, verified_coal_deliveries,
+)
+from jev_factorio.coal_economic_observation import (
+    ManualCycleFacts, ManualDeliveryFacts, ManualGatherFacts,
 )
 from jev_factorio.memory import CampaignMemory
 from jev_factorio.telemetry import make_attempt, utc_now
@@ -201,6 +205,48 @@ def test_gather_decoder_rejects_controller_elapsed_time_substitute():
     journal['walking_ticks'] = journal['finished_tick'] - journal['started_tick']
     with pytest.raises(ValueError, match='invalid work'):
         decoded_gather_work(native, snapshot, memory, journal, attempt_id)
+
+
+def manual_cycle_fixture():
+    native, snapshot, memory, ids = delivered_fixture()
+    receipt = 'gather-complete'
+    plan = {'id': 'journaled-gather', 'steps': [{'action': 'factory_gather',
+            'parameters': {'resource': 'coal', 'quantity': 5, 'receipt': receipt}}]}
+    attempt = make_attempt(snapshot.session_id, 'rocket_launch', plan, 0,
+                           {'started_tick': 8980}, process_id='c' * 32)
+    attempt.update(outcome='verified', finished_tick=8995,
+                   finished_at_utc=utc_now(), latency_seconds=0)
+    memory.attempt_outcomes.append(attempt)
+    manual = ManualCycleFacts('a' * 64,
+        (ManualGatherFacts(receipt, 8982, 8990, 10, 15, 2, 4),),
+        tuple(ManualDeliveryFacts(receipt_id, source.target_role, source.target_unit,
+                                  index + 2, 9000 + index * 10)
+              for index, (receipt_id, source) in enumerate(zip(ids, native.sources))))
+    return replace(native, manual_cycle=manual), snapshot, memory, receipt, ids
+
+
+def test_source_qualified_manual_rows_join_verified_attempts_without_authority():
+    native, snapshot, memory, gather, deliveries = manual_cycle_fixture()
+    result = bound_manual_cycle_attempts(native, snapshot, memory, gather, deliveries)
+    assert result['reported_actor_busy_ticks'] == 6
+    assert result['cycle_complete'] is False
+    assert result['native_payback_proven'] is False
+    assert result['mutation_authorized'] is False
+
+
+@pytest.mark.parametrize('change', [
+    lambda n, s, m, g, d: m.attempt_outcomes[-1].update(outcome='wait_replanned'),
+    lambda n, s, m, g, d: m.attempt_outcomes[-1].update(receipt='rebound'),
+    lambda n, s, m, g, d: m.attempt_outcomes[0].update(expected_unit_number=999),
+    lambda n, s, m, g, d: d.reverse(),
+    lambda n, s, m, g, d: d.__setitem__(0, g),
+    lambda n, s, m, g, d: setattr(s, 'tick', s.tick + 1),
+])
+def test_manual_cycle_attempt_join_rejects_rebound_stale_or_reused_receipts(change):
+    native, snapshot, memory, gather, deliveries = manual_cycle_fixture()
+    change(native, snapshot, memory, gather, deliveries)
+    with pytest.raises(ValueError):
+        bound_manual_cycle_attempts(native, snapshot, memory, gather, deliveries)
 
 
 @pytest.mark.parametrize('change', [

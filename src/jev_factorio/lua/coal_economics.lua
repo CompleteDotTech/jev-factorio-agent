@@ -1,11 +1,13 @@
 -- Fixed read-only native economics projection, never admission or actuation.
 -- No runtime callbacks, storage writes, handlers, grants or connector creation.
-local out={schema="jev.coal-native-economics.v2",base_version=script.active_mods.base,
+local out={schema="jev.coal-native-economics.v3",base_version=script.active_mods.base,
     mods=script.active_mods,query_status="unsupported",reason="unqualified",
     epoch={},registry={},connector_routes={},prototypes={},buffer_witnesses={},poles={},supply_surveys={},electric_members={},
     fluid_members={},fuel_targets={},sources={},
     research_work={status="unavailable",reason="no_current_research",technology="",
-        progress=0,lab={},targets={}}}
+        progress=0,lab={},targets={}},
+    manual_cycle={status="unavailable",reason="journal_not_installed",
+        journal_asset_sha256="",gathers={},deliveries={}}}
 local function need(ok,code) if not ok then error(code,0) end end
 local function finite(x,lo,hi)
     return type(x)=="number" and x==x and x>=lo and x<=hi
@@ -259,6 +261,53 @@ local ok,reason=pcall(function()
         sorted(source.neighbor_drills,"unit");out.sources[#out.sources+1]=source
     end
     need(boiler_selected,"owned_boiler_not_target")
+    -- The opt-in journal is read in this same RPC as burner/research and graph
+    -- facts. Rows remain diagnostic; prior burns cannot prove future demand.
+    local journal=rt.coal_manual_journal_v1
+    if journal then
+        local installation=rt.native_installation
+        need(installation and installation.profile==
+            "e759-observation-v2-water-origin-v4-manual-cycle-v5"
+            and installation.callbacks and installation.callbacks.journal_tick==journal.tick_handler
+            and installation.assets and type(installation.assets.coal_manual_journal_v1)=="string"
+            and journal.protocol==1 and journal.pending==nil
+            and journal.session_id==rt.jev_session_id and journal.actor_index==index
+            and journal.actor_unit==actor.unit_number
+            and journal.surface_index==actor.surface.index and journal.force_index==actor.force.index,
+            "manual_journal_unqualified")
+        local gathers={};sequence(journal.order,64);bounded(journal.rows,64)
+        local row_count=0;for _ in pairs(journal.rows) do row_count=row_count+1 end
+        need(#journal.order==row_count,"manual_journal_bound")
+        local seen={}
+        for _,receipt in ipairs(journal.order) do
+            need(text(receipt) and not seen[receipt],"manual_journal_receipt")
+            seen[receipt]=true
+            local row=journal.rows[receipt]
+            need(row and row.receipt==receipt and row.status=="complete"
+                and row.pending==false and row.overflow==false and row.fault==false
+                and row.session_id==rt.jev_session_id and row.actor_index==index
+                and row.actor_unit==actor.unit_number and row.surface_index==actor.surface.index
+                and row.force_index==actor.force.index and row.resource=="coal",
+                "manual_journal_incomplete")
+            gathers[#gathers+1]={receipt=receipt,started_tick=row.started_tick,
+                finished_tick=row.finished_tick,coal_before=row.coal_before,
+                coal_after=row.coal_after,walking_ticks=row.walking_ticks,
+                mining_ticks=row.mining_ticks}
+        end
+        local deliveries={}
+        sequence(c.receipt_order,128);bounded(c.receipts,128)
+        for _,receipt in ipairs(c.receipt_order) do
+            local row=c.receipts[receipt]
+            if row and row.item=="coal" and row.extracting==false and q.rows[row.role] then
+                deliveries[#deliveries+1]={receipt=receipt,role=row.role,
+                    unit=row.unit_number,coal=row.quantity,tick=row.tick}
+            end
+        end
+        need(#deliveries<=128,"manual_delivery_bound")
+        out.manual_cycle={status="observed",reason="qualified_journal_rows",
+            journal_asset_sha256=installation.assets.coal_manual_journal_v1,
+            gathers=gathers,deliveries=deliveries}
+    end
     -- Current demand facts are projected in the SAME RPC as the owned graph.
     -- This only observes activity; it does not infer a future coal lower bound.
     local tech=actor.force.current_research

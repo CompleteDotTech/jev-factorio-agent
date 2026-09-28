@@ -28,6 +28,8 @@ def example():
         'electric_members': [], 'fluid_members': [], 'fuel_targets': [], 'sources': [],
         'research_work': {'status': 'unavailable', 'reason': 'no_current_research',
                           'technology': '', 'progress': 0, 'lab': {}, 'targets': []},
+        'manual_cycle': {'status': 'unavailable', 'reason': 'journal_not_installed',
+                         'journal_asset_sha256': '', 'gathers': [], 'deliveries': []},
         'coal_fuel_joules': 4_000_000,
         'fluid_prototypes': [{'name': 'steam', 'heat_capacity': 200, 'default_temperature': 15, 'max_temperature': 5000},
                              {'name': 'water', 'heat_capacity': 2000, 'default_temperature': 15, 'max_temperature': 100}],
@@ -438,6 +440,97 @@ def test_selected_research_without_owned_lab_preserves_graph_projection():
         'progress': .1, 'lab': {}, 'targets': {}}
     # This minimal early graph still misses the decoder's pre-existing two
     # electric-member bound; research absence itself does not fail the Lua query.
+
+
+def test_fixed_query_projects_source_bound_manual_rows_with_current_graph():
+    raw, bundle = example()
+    lua = lua_runtime(raw, bundle)
+    from jev_factorio.backends.native_attachment import MANUAL_CYCLE_PROFILE
+    journal_hash = 'a' * 64
+    lua.globals().manual_profile = MANUAL_CYCLE_PROFILE
+    lua.globals().journal_hash = journal_hash
+    lua.execute('''
+        local j={protocol=1,session_id=jev_fle_runtime.jev_session_id,
+            actor_index=1,actor_unit=actor.unit_number,surface_index=1,force_index=1,
+            pending=nil,order={'gather-1'},rows={}}
+        j.tick_handler=function() end
+        j.rows['gather-1']={receipt='gather-1',status='complete',pending=false,
+            overflow=false,fault=false,session_id=j.session_id,actor_index=1,
+            actor_unit=j.actor_unit,surface_index=1,force_index=1,resource='coal',
+            started_tick=9000,finished_tick=9100,coal_before=0,coal_after=5,
+            walking_ticks=20,mining_ticks=30}
+        jev_fle_runtime.coal_manual_journal_v1=j
+        jev_fle_runtime.native_installation={profile=manual_profile,
+            callbacks={journal_tick=j.tick_handler},
+            assets={coal_manual_journal_v1=journal_hash}}
+        campaign.receipt_order={'deliver-1','deliver-2'}
+        campaign.receipts={
+            ['deliver-1']={role='furnace',item='coal',quantity=2,
+                unit_number=campaign.entities.furnace.unit_number,extracting=false,tick=9200},
+            ['deliver-2']={role='utility:boiler',item='coal',quantity=3,
+                unit_number=campaign.entities['utility:boiler'].unit_number,
+                extracting=false,tick=9300}}
+    ''')
+    lua.execute(files('jev_factorio').joinpath('lua/coal_economics.lua').read_text())
+    projected = plain(lua.globals().projected)
+    assert projected['query_status'] == 'observed', projected['reason']
+    facts = decode(projected, expected_epoch=raw['epoch'], expected_bundle=bundle,
+                   unit_qualification=UNIT_QUALIFICATION,
+                   expected_journal_asset_sha256=journal_hash)
+    manual = facts.manual_cycle
+    assert manual.journal_asset_sha256 == journal_hash
+    assert manual.gathers[0].receipt == 'gather-1'
+    assert [(row.role, row.coal) for row in manual.deliveries] == [
+        ('furnace', 2), ('utility:boiler', 3)]
+    assert manual.attempts_bound is False and manual.cycle_complete is False
+    assert facts.native_payback_proven is False and facts.mutation_authorized is False
+    with pytest.raises(NativeEconomicsUnavailable, match='manual_journal_source_mismatch'):
+        decode(projected, expected_epoch=raw['epoch'], expected_bundle=bundle,
+               unit_qualification=UNIT_QUALIFICATION,
+               expected_journal_asset_sha256='b' * 64)
+    projected['manual_cycle']['deliveries'][0]['unit'] = 999
+    with pytest.raises(NativeEconomicsUnavailable, match='manual_delivery_owner_mismatch'):
+        decode(projected, expected_epoch=raw['epoch'], expected_bundle=bundle,
+               unit_qualification=UNIT_QUALIFICATION,
+               expected_journal_asset_sha256=journal_hash)
+
+
+@pytest.mark.parametrize('mutation', [
+    "j.pending={receipt='in-flight'}",
+    "j.rows['gather-1'].fault='lost-tick'",
+    "j.rows['gather-1'].overflow=true",
+    "j.rows['gather-1'].actor_unit=999",
+    "j.rows['gather-1'].status='failed'",
+    "table.insert(j.order,'missing')",
+    "jev_fle_runtime.native_installation.callbacks.journal_tick=function() end",
+    "jev_fle_runtime.native_installation.profile='retained-v4'",
+])
+def test_fixed_manual_query_refuses_pending_fault_rebound_or_unqualified_source(mutation):
+    raw, bundle = example()
+    lua = lua_runtime(raw, bundle)
+    lua.execute('''
+        local j={protocol=1,session_id=jev_fle_runtime.jev_session_id,
+            actor_index=1,actor_unit=actor.unit_number,surface_index=1,force_index=1,
+            pending=nil,order={'gather-1'},rows={}}
+        j.tick_handler=function() end
+        j.rows['gather-1']={receipt='gather-1',status='complete',pending=false,
+            overflow=false,fault=false,session_id=j.session_id,actor_index=1,
+            actor_unit=j.actor_unit,surface_index=1,force_index=1,resource='coal',
+            started_tick=9000,finished_tick=9100,coal_before=0,coal_after=5,
+            walking_ticks=20,mining_ticks=30}
+        jev_fle_runtime.coal_manual_journal_v1=j
+        jev_fle_runtime.native_installation={
+            profile='e759-observation-v2-water-origin-v4-manual-cycle-v5',
+            callbacks={journal_tick=j.tick_handler},
+            assets={coal_manual_journal_v1=string.rep('a',64)}}
+        campaign.receipt_order={};campaign.receipts={}
+    ''')
+    lua.execute('local j=jev_fle_runtime.coal_manual_journal_v1; ' + mutation)
+    lua.execute(files('jev_factorio').joinpath('lua/coal_economics.lua').read_text())
+    projected = plain(lua.globals().projected)
+    assert projected['query_status'] == 'unsupported'
+    assert projected['reason'] in {'manual_journal_unqualified', 'manual_journal_incomplete',
+                                   'manual_journal_bound', 'manual_journal_receipt'}
 
 
 def observed_research_fixture():

@@ -12,7 +12,7 @@ import math
 
 from .planning.coal_economic_proof import Epoch, Power, digest
 
-SCHEMA = 'jev.coal-native-economics.v2'
+SCHEMA = 'jev.coal-native-economics.v3'
 QUERY = 'lua/coal_economics.lua'
 MAX_SAFE = 2**53 - 1
 # This is a content-qualified conversion record, not an arbitrary caller hash.
@@ -46,7 +46,7 @@ POLE_RADII = {'small-electric-pole': 2.5, 'medium-electric-pole': 3.5,
               'big-electric-pole': 2, 'substation': 9}
 ROOT_KEYS = set(('schema base_version mods query_status reason epoch registry connector_routes prototypes poles '
     'supply_surveys electric_members fluid_members fuel_targets sources coal_fuel_joules '
-    'fluid_prototypes pole_prototypes buffer_witnesses research_work').split())
+    'fluid_prototypes pole_prototypes buffer_witnesses research_work manual_cycle').split())
 
 
 class NativeEconomicsUnavailable(ValueError):
@@ -184,6 +184,35 @@ class ResearchWorkFacts:
 
 
 @dataclass(frozen=True)
+class ManualGatherFacts:
+    receipt: str
+    started_tick: int
+    finished_tick: int
+    coal_before: int
+    coal_after: int
+    walking_ticks: int
+    mining_ticks: int
+
+
+@dataclass(frozen=True)
+class ManualDeliveryFacts:
+    receipt: str
+    role: str
+    unit: int
+    coal: int
+    tick: int
+
+
+@dataclass(frozen=True)
+class ManualCycleFacts:
+    journal_asset_sha256: str
+    gathers: tuple[ManualGatherFacts, ...]
+    deliveries: tuple[ManualDeliveryFacts, ...]
+    attempts_bound: bool = False
+    cycle_complete: bool = False
+
+
+@dataclass(frozen=True)
 class NativeEconomics:
     epoch: Epoch
     actor_unit: int
@@ -194,6 +223,7 @@ class NativeEconomics:
     mutation_authorized: bool = False
     native_payback_proven: bool = False
     research_work: ResearchWorkFacts | None = None
+    manual_cycle: ManualCycleFacts | None = None
 
 
 def query_sha256():
@@ -203,11 +233,12 @@ def query_sha256():
 
 def decode(raw: dict, *, expected_epoch: dict, expected_bundle: dict,
            unit_qualification: dict, expected_connectors: dict | None = None,
-           expected_routes: dict | None = None) -> NativeEconomics:
+           expected_routes: dict | None = None,
+           expected_journal_asset_sha256: str | None = None) -> NativeEconomics:
     """Derive bounded facts; no caller flag/hash can establish eligibility."""
     try:
         return _decode(raw, expected_epoch, expected_bundle, unit_qualification,
-                       expected_connectors, expected_routes)
+                       expected_connectors, expected_routes, expected_journal_asset_sha256)
     except NativeEconomicsUnavailable:
         raise
     except (KeyError, TypeError, AttributeError, IndexError, ValueError, OverflowError) as error:
@@ -215,7 +246,7 @@ def decode(raw: dict, *, expected_epoch: dict, expected_bundle: dict,
 
 
 def _decode(raw, expected_epoch, expected_bundle, unit_qualification, expected_connectors,
-            expected_routes):
+            expected_routes, expected_journal_asset_sha256):
     require(isinstance(raw, dict) and raw.get('query_status') == 'observed', 'native_projection_unsupported')
     fields(raw, ' '.join(ROOT_KEYS))
     require(raw['schema'] == SCHEMA and raw['reason'] == 'bounded_native_projection'
@@ -592,5 +623,58 @@ def _decode(raw, expected_epoch, expected_bundle, unit_qualification, expected_c
                                                crafting_progress, row['burning'], inventory(row['input'])))
         require(roles == sorted(expected_furnaces), 'research_target_set_mismatch')
         research_work = ResearchWorkFacts(technology, progress, lab_unit, lab_input, tuple(parsed))
+    manual = raw['manual_cycle']
+    fields(manual, 'status reason journal_asset_sha256 gathers deliveries')
+    manual_cycle = None
+    if manual['status'] == 'unavailable':
+        require(manual['reason'] == 'journal_not_installed'
+                and manual['journal_asset_sha256'] == ''
+                and manual['gathers'] in ([], {}) and manual['deliveries'] in ([], {})
+                and expected_journal_asset_sha256 is None,
+                'invalid_manual_absence')
+    else:
+        require(manual['status'] == 'observed' and manual['reason'] == 'qualified_journal_rows'
+                and isinstance(expected_journal_asset_sha256, str)
+                and len(expected_journal_asset_sha256) == 64
+                and manual['journal_asset_sha256'] == expected_journal_asset_sha256,
+                'manual_journal_source_mismatch')
+        gather_rows = rows(manual['gathers'], 0, 64)
+        delivery_rows = rows(manual['deliveries'], 0, 128)
+        gathers = []
+        seen = set()
+        for row in gather_rows:
+            fields(row, 'receipt started_tick finished_tick coal_before coal_after walking_ticks mining_ticks')
+            receipt = identity(row['receipt'])
+            require(receipt not in seen, 'manual_receipt_alias'); seen.add(receipt)
+            start = integer(row['started_tick'], 0, epoch.tick)
+            finish = integer(row['finished_tick'], start + 1, epoch.tick)
+            before = integer(row['coal_before'], 0, 1_000_000)
+            after = integer(row['coal_after'], before + 1, 1_000_000)
+            walking = integer(row['walking_ticks'], 0, finish - start)
+            mining = integer(row['mining_ticks'], 1, finish - start)
+            require(after - before <= 200 and walking + mining <= finish - start,
+                    'manual_gather_bound')
+            gathers.append(ManualGatherFacts(receipt, start, finish, before, after,
+                                             walking, mining))
+        require(all(left.finished_tick <= right.started_tick
+                    for left, right in zip(gathers, gathers[1:])),
+                'manual_gather_order')
+        deliveries = []
+        seen = set()
+        source_by_role = {source.target_role: source.target_unit for source in facts}
+        for row in delivery_rows:
+            fields(row, 'receipt role unit coal tick')
+            receipt = identity(row['receipt'])
+            require(receipt not in seen, 'manual_receipt_alias'); seen.add(receipt)
+            role = identity(row['role'])
+            unit = integer(row['unit'], 1)
+            require(source_by_role.get(role) == unit, 'manual_delivery_owner_mismatch')
+            deliveries.append(ManualDeliveryFacts(receipt, role, unit,
+                                                   integer(row['coal'], 1, 200),
+                                                   integer(row['tick'], 0, epoch.tick)))
+        require(all(left.tick <= right.tick for left, right in zip(deliveries, deliveries[1:])),
+                'manual_delivery_order')
+        manual_cycle = ManualCycleFacts(expected_journal_asset_sha256,
+                                        tuple(gathers), tuple(deliveries))
     return NativeEconomics(epoch, actor_unit, digest(expected_bundle), digest(raw), power,
-                           tuple(facts), research_work=research_work)
+                           tuple(facts), research_work=research_work, manual_cycle=manual_cycle)

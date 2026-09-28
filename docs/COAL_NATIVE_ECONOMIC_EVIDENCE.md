@@ -105,6 +105,35 @@ The read path still returns `native_payback_proven=false` and
 receipt-bound burn or validated active-rate semantics, and same-RPC first
 payment recheck remain necessary before positive demand can enter admission.
 
+The v3 query adds a diagnostic manual-row projection only under a separately
+source-qualified, additive v5 native profile. The v4 profile continues to
+reject optional connector and journal assets. A one-use owner-locked migration
+can install the exact connector ledger and unchanged v1 journal sources and
+extend the native manifest only from an exact, quiescent v4 installation with
+an explicitly empty connector checkpoint. The migration creates an empty ledger
+and registers the journal callback; it does not create or pay for a route.
+This source change does not execute that migration. The connector asset also
+makes native connector actions available under v5, so separate owner review is
+required before any live opt-in.
+The migration infers that nth-tick slot 1 is unused from the exact installed v4
+source manifest: its known callbacks use slots 5, 15 and 60. Factorio exposes
+no documented getter for the slot-1 handler, so this is not direct runtime
+introspection and cannot protect an unmanifested ad-hoc callback. Failed or
+ambiguous migration responses require read-only manifest reconciliation; they
+never authorize automatic retry or gameplay dispatch. Native owner review and
+runtime readback remain separate requirements before any opt-in installation.
+The query checks the installed source hash, callback identity, journal owner,
+complete bounded gather rows, and current retained coal-transfer receipts in
+the same RPC as the graph, burner and research state. Its decoder binds target
+units and source hash; a separate helper joins selected receipts to verified
+controller attempts. Pending, faulty, reordered, stale or rebound rows fail
+closed. The projection measures **current** burner/research state and recorded
+past actions, not an interval burn delta, a future-demand lower bound, or
+proof that the same mined coal supplied the recorded transfers. It explicitly
+retains `attempts_bound=false`, `cycle_complete=false`,
+`native_payback_proven=false`, and `mutation_authorized=false` until separately
+qualified native evidence and payment integration exist.
+
 Two independent admission/payment integrations remain essential:
 
 The source-only `coal_current_evidence` helpers now bind a fully carried,
