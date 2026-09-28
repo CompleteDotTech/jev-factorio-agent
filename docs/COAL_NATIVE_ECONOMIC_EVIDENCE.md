@@ -91,6 +91,20 @@ empty-array position may accept the empty-map wire representation.
 
 Two independent admission/payment integrations remain essential:
 
+The source-only `coal_current_evidence` helpers now bind a fully carried,
+unreserved whole kit to the unpaid v2 snapshot, catalog, and idle controller
+checkpoint. All checkpoint reservations and unfinished solid corridor bills
+are subtracted; pending transfers, background jobs, and route work refuse the
+claim. The helpers may set
+acquisition actor ticks to zero only for that case; collectible output and
+queued recipes do not count as paid kit stock. They also join each target's
+native coal-transfer receipt (role, unit, quantity and tick) to one verified
+controller attempt. The resulting delivery evidence explicitly reports
+`cycle_complete=false`: current native gathers have no receipt, and attempt
+elapsed ticks include API waits, so neither gathered coal nor avoided actor
+time can be inferred. The helper does not supply current per-target future
+demand. No positive forecast or first payment follows from these records.
+
 - The fixed query admits only complete, wholly paid connector-ledger cells with
   exact native unit, position, owner epoch and endpoint identity. The adapter
   requires a session checkpoint and compares each route against the same-tick
