@@ -116,6 +116,8 @@ def test_stone_gather_explains_current_lab_recipe_dependency_without_claiming_ou
     assert context['candidate_evidence'][plan.id]['gather_start_evidence'] == row['gather_start_evidence']
     assert 'best next action' in questions['candidate']['instructions']
     assert 'ultimate goal' in questions['candidate']['instructions']
+    assert 'specific start fact it could resolve now' in questions['candidate']['instructions']
+    assert 'Keep observe available' in questions['candidate']['instructions']
     assert 'observed raw resource' in questions[plan.id + '/needs_observation']['instructions']
     assert row['delivers_or_crafts'] == []
     assert row['processed_units_basis'] == 'handling_volume_not_useful_production'
