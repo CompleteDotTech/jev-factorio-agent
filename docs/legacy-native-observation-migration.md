@@ -11,7 +11,8 @@ descriptor. Pass the exact original session ID, actor unit, checkpoint target,
 SHA-256 of the private checkpoint and SHA-256 of the original v1 attachment
 receipt to `migrate_legacy_observation_v2`. The function locks the same owner
 file, validates private evidence and the v1 source-bound native callback chain,
-and requires no pending action, attempt or transfer recovery. A blocked
+and requires no active plan, reservation, background job or attempt, pending
+action, foreground attempt, or transfer recovery. A blocked
 checkpoint is allowed; migration never unblocks or edits it. The actor must be
 idle at normal speed immediately before the native command.
 

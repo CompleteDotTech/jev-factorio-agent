@@ -17,6 +17,7 @@ from jev_factorio.backends.native_observation_migration import (
     migrate_legacy_observation_v2,
 )
 from jev_factorio.memory import CampaignMemory
+from jev_factorio.skills import Plan, Step
 from jev_factorio.backends.native_factory import NativeFactory
 
 
@@ -130,7 +131,7 @@ def test_exact_lua_transaction_commits_only_observer_and_manifest_or_rolls_back(
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='owner lock requires POSIX')
-def test_owner_locked_migration_requires_clear_checkpoint_and_never_replays(tmp_path):
+def test_owner_locked_migration_requires_clear_checkpoint_and_never_replays(tmp_path, monkeypatch):
     checkpoint = tmp_path / 'controller.json'
     receipt = tmp_path / 'attachment.json'
     lock = tmp_path / 'single-writer.lock'
@@ -182,6 +183,38 @@ def test_owner_locked_migration_requires_clear_checkpoint_and_never_replays(tmp_
     with pytest.raises(RuntimeError, match='unresolved work'):
         migrate_legacy_observation_v2(client, **kwargs)
     assert client.mutations == 1
+    for field in ('active_plan', 'reservations', 'step_index'):
+        occupied = CampaignMemory('retained-session', 'rocket_launch')
+        occupied.status = 'blocked'
+        if field == 'active_plan':
+            occupied.active_goal = 'rocket_launch'
+            occupied.active_plan = Plan('held-plan', 'rocket_launch', 'unfinished',
+                                        (Step('idle', 'output'),)).to_dict()
+        elif field == 'reservations':
+            occupied.reservations = {'held-plan': {'iron-plate': 1}}
+        else:
+            occupied.step_index = 1
+        occupied_raw = json.dumps(asdict(occupied)).encode()
+        checkpoint.write_bytes(occupied_raw)
+        kwargs['expected_checkpoint_sha256'] = hashlib.sha256(occupied_raw).hexdigest()
+        with pytest.raises(RuntimeError, match='unresolved work'):
+            migrate_legacy_observation_v2(client, **kwargs)
+        assert client.mutations == 1
+        assert checkpoint.read_bytes() == occupied_raw
+    # A background craft can outlive the foreground plan. Both pieces of its
+    # write-ahead identity independently block the native migration command.
+    import jev_factorio.backends.native_observation_migration as migration
+    for field in ('background_job', 'background_attempt'):
+        with monkeypatch.context() as patch:
+            background = SimpleNamespace(**asdict(held),
+                                         background_job=None, background_attempt=None)
+            setattr(background, field, {'receipt': 'unresolved'})
+            patch.setattr(migration, 'load_checkpoint', lambda *_: background)
+            checkpoint.write_bytes(raw)
+            kwargs['expected_checkpoint_sha256'] = hashlib.sha256(raw).hexdigest()
+            with pytest.raises(RuntimeError, match='unresolved work'):
+                migrate_legacy_observation_v2(client, **kwargs)
+            assert client.mutations == 1 and checkpoint.read_bytes() == raw
     checkpoint.write_bytes(raw)
     kwargs['expected_checkpoint_sha256'] = '0' * 64
     with pytest.raises(RuntimeError, match='hash changed'):

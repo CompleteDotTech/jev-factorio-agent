@@ -104,8 +104,12 @@ def migrate_legacy_observation_v2(client, *, checkpoint_path: Path,
                 or _digest(receipt) != expected_receipt_sha256):
             raise RuntimeError('Migration evidence hash changed')
         memory = load_checkpoint(checkpoint_path, expected_session_id, expected_target)
-        if (memory.status not in {'running', 'blocked'} or memory.pending is not None
-                or memory.attempt is not None or memory.transfer_recovery is not None):
+        if (memory.status not in {'running', 'blocked'}
+                or memory.active_plan is not None or memory.step_index != 0
+                or memory.pending is not None or memory.attempt is not None
+                or memory.transfer_recovery is not None or memory.reservations
+                or getattr(memory, 'background_job', None) is not None
+                or getattr(memory, 'background_attempt', None) is not None):
             raise RuntimeError('Controller has unresolved work; migration refused')
         attachment = readback(client, receipt_path=receipt_path)
         if (attachment['session_id'] != expected_session_id
