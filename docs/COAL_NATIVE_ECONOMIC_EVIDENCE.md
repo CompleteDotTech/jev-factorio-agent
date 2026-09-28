@@ -105,6 +105,27 @@ elapsed ticks include API waits, so neither gathered coal nor avoided actor
 time can be inferred. The helper does not supply current per-target future
 demand. No positive forecast or first payment follows from these records.
 
+`decoded_gather_work` defines a still diagnostic v1 journal contract:
+one complete coal gather with the same session, actor, surface, force, native
+receipt, and verified controller attempt. It checks a bounded native coal
+inventory delta and separately reported walking/mining tick counts. It rejects
+elapsed attempt time, partial or pending work, overflow, fault, changed owner,
+and counts greater than the native interval. A receipt-bearing `factory_gather`
+requires a separately installed, source-qualified `coal_manual_journal_v1.lua`,
+which uses an independent `on_nth_tick(1)` callback so the pinned fair `on_tick`
+chain stays intact. Ordinary gathers do not install it. The action refuses
+journaled work before mining unless the exact optional asset is already present
+in a qualified native attachment. The retained v4 live profile does not admit
+the optional asset; an explicit, separately reviewed migration is required.
+An error or ambiguous RPC
+leaves the native pending receipt to reconcile, and an invalid completion is
+retained as failed. The existing live treatment has no such producer. Parsing
+a caller-supplied row cannot establish its origin or a complete manual cycle;
+the decoder leaves producer qualification, cycle completion, and mutation
+authorization false. A fixed source-qualified query, restart reconciliation,
+native callback qualification, and complete manual deliveries are still
+required before counts can enter payback.
+
 - The fixed query admits only complete, wholly paid connector-ledger cells with
   exact native unit, position, owner epoch and endpoint identity. The adapter
   requires a session checkpoint and compares each route against the same-tick

@@ -58,7 +58,15 @@ def validate_command(action: str, parameters: dict) -> None:
         return
     if action not in COMMAND_FIELDS or not isinstance(parameters, dict):
         raise ValueError("Unknown factory command")
-    if set(parameters) != COMMAND_FIELDS[action]:
+    fields = set(parameters)
+    if action == 'factory_gather' and fields == {'resource', 'quantity', 'receipt'}:
+        if (parameters['resource'] != 'coal'
+                or not isinstance(parameters['receipt'], str)
+                or not 1 <= len(parameters['receipt']) <= 128
+                or not parameters['receipt'].isascii()
+                or not all(33 <= ord(char) <= 126 for char in parameters['receipt'])):
+            raise ValueError('Journaled gather requires a bounded coal receipt')
+    elif fields != COMMAND_FIELDS[action]:
         raise ValueError("Factory command fields do not match its contract")
     for key, value in parameters.items():
         if key == "radius":
