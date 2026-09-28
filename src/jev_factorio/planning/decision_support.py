@@ -254,7 +254,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                     and isinstance(path, list) and 1 <= len(path) <= 32
                     and all(isinstance(item, str) and item for item in path)
                     and path[-1] == step.item
-                    and (target is None or path[0] == target)):
+                    and isinstance(target, str) and bool(target)
+                    and path[0] == target):
                 craft_dependency = {
                     'observed_tick': snapshot.tick,
                     'planner_item_path': list(path),
