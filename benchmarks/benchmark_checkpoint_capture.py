@@ -27,6 +27,7 @@ def run(samples: int = 100) -> dict:
         raise ValueError('Samples must be between 10 and 10000')
     counts = Counter()
     wall, cpu = [], []
+    capture_times, encode_times, inclusive_times = [], [], []
     original_capture, original_dumps, original_sync = checkpoint.asdict, checkpoint.json.dumps, checkpoint.os.fsync
 
     def capture(value):
@@ -59,6 +60,9 @@ def run(samples: int = 100) -> dict:
                 counts[metrics['status']] += 1
                 if metrics['status'] == 'written':
                     counts['bytes_written'] += metrics['bytes']
+                    capture_times.append(metrics['capture_ns'])
+                    encode_times.append(metrics['json_encode_ns'])
+                    inclusive_times.append(metrics['serialize_ns'])
                 for key in ('file_sync_calls', 'directory_sync_calls',
                             'parent_directory_sync_calls', 'verification_read_calls',
                             'verification_read_bytes'):
@@ -69,6 +73,9 @@ def run(samples: int = 100) -> dict:
     return {'schema': 1, 'evidence_kind': 'linux_checkpoint_fixture_not_native_game',
             'python': platform.python_version(), 'samples': samples,
             'counts': dict(counts), 'wall': distribution(wall), 'process_cpu': distribution(cpu),
+            'phase_wall_ns_per_written_checkpoint': {
+                'capture': distribution(capture_times), 'json_encode': distribution(encode_times),
+                'legacy_inclusive_capture_and_json': distribution(inclusive_times)},
             'final_checkpoint_sha256': final_digest, 'fsync_enabled': True,
             'workload': '100 history entries; changed last_tick every ten calls; isolated file'}
 

@@ -15,7 +15,8 @@ from pathlib import Path
 
 CALLS = {'observation', 'model_response', 'candidate_set_created', 'checkpoint_written',
          'trace_capture', 'trace_emit', 'action_returned', 'verification'}
-CHECKPOINT_TIMINGS = {'serialize_ns', 'file_sync_ns', 'directory_sync_ns', 'total_ns', 'compare_ns',
+CHECKPOINT_TIMINGS = {'serialize_ns', 'capture_ns', 'json_encode_ns',
+                      'file_sync_ns', 'directory_sync_ns', 'total_ns', 'compare_ns',
                       'installation_check_ns'}
 CHECKPOINT_IO_OPERATIONS = {'file_sync_calls', 'directory_sync_calls', 'parent_directory_sync_calls',
                             'verification_read_calls', 'verification_read_bytes'}
@@ -54,6 +55,10 @@ class PerformanceCounters:
         for key in CHECKPOINT_TIMINGS:
             if key in metrics:
                 self.checkpoint_ns[key] += metrics[key]
+        if {'capture_ns', 'json_encode_ns'} <= metrics.keys():
+            # Presence marks current-schema metric coverage, including exact
+            # repeats that correctly perform neither capture nor encoding.
+            self.checkpoint_operations['phase_fields_present_calls'] += 1
         if 'capture_calls' in metrics and 'serialization_calls' in metrics:
             self.checkpoint_operations['measured_calls'] += 1
             for key in ('capture_calls', 'serialization_calls'):
@@ -134,7 +139,8 @@ def summarize(path: Path) -> dict:
                         merge(summary['cpu_calls'], name, value['count'], value['total_ns'], value['max_ns'])
                 for category, permitted in (('checkpoints', CHECKPOINT_STATUSES | {'bytes_written'}),
                                            ('checkpoint_ns', CHECKPOINT_TIMINGS),
-                                           ('checkpoint_operations', {'capture_calls', 'serialization_calls', 'measured_calls', 'io_measured_calls'} | CHECKPOINT_IO_OPERATIONS)):
+                                           ('checkpoint_operations', {'capture_calls', 'serialization_calls', 'measured_calls', 'io_measured_calls',
+                                                                      'phase_fields_present_calls'} | CHECKPOINT_IO_OPERATIONS)):
                     for key, value in metrics.get(category, {}).items():
                         if key not in permitted or type(value) is not int or value < 0:
                             raise ValueError('Invalid checkpoint metric')
