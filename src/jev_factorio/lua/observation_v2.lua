@@ -124,19 +124,20 @@ local function bootstrap(player, expected_unit)
             fuel=contents(assert(selected.get_fuel_inventory(),"Missing burner fuel inventory"))}
         -- The actor-radius scan finds the drill, not necessarily its output.
         -- Query that one endpoint separately; never enlarge the broad scan.
-        -- Radius .15 covers the existing +/- .1 center tolerance. Two results
-        -- detect ambiguity; only one same-force, same-surface chest is accepted.
+        -- The drop point can be offset from the chest's tile center. A .75
+        -- query covers its tile; the per-axis check below binds that tile.
+        -- Two results detect ambiguity before any output is attributed.
         local outputs=player.surface.find_entities_filtered{
             name="wooden-chest",force=player.force,position=result.drill.drop_position,
-            radius=.15,limit=2}
+            radius=.75,limit=2}
         assert(#outputs<=1,"Ambiguous bootstrap output")
         for _, entity in ipairs(outputs) do
             assert(entity.valid and entity.name=="wooden-chest"
                 and entity.surface.index==player.surface.index and entity.force.index==player.force.index,
                 "Invalid bootstrap output identity")
             assert(integer(entity.unit_number,1,9007199254740991),"Missing bootstrap output identity")
-            if math.abs(entity.position.x-selected.drop_position.x)<=.1
-                and math.abs(entity.position.y-selected.drop_position.y)<=.1 then
+            if math.abs(entity.position.x-selected.drop_position.x)<.5
+                and math.abs(entity.position.y-selected.drop_position.y)<.5 then
                 if not units[entity.unit_number] then
                     assert(#names<128,"Bootstrap observation budget exceeded")
                     units[entity.unit_number]=true
