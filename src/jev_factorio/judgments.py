@@ -132,6 +132,83 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
         if "deterministic_ranking" in context:
             context["deterministic_ranking"] = [key for key in state["deterministic_ranking"]
                                                 if key in context["candidate_plans"]]
+        evidence = context.get('candidate_evidence') or {}
+        facts = state.get('facts')
+        tick = facts.get('tick') if isinstance(facts, dict) else None
+        local = state.get('local_objective')
+        primary = local.get('primary_target') if isinstance(local, dict) else None
+        target = primary.get('item') if isinstance(primary, dict) else None
+        def observed_gather(row):
+            start = row.get('gather_start_evidence') or {}
+            return (start.get('resource_in_current_observation') is True
+                    and start.get('fair_target_identity_observed') is True)
+        current_prerequisite = any(
+            isinstance(target, str) and target
+            and row.get('work_scope') == 'immediate' and observed_gather(row)
+            and isinstance(row.get('raw_prerequisite'), dict)
+            and row['raw_prerequisite'].get('observed_tick') == tick
+            and isinstance(row['raw_prerequisite'].get('planner_item_path'), list)
+            and row['raw_prerequisite']['planner_item_path'][:1] == [target]
+            for row in evidence.values())
+        unlinked_lookahead = any(
+            row.get('work_scope') == 'lookahead' and observed_gather(row)
+            and row.get('raw_prerequisite') is None
+            and row.get('fuel_prerequisite') is None
+            and row.get('urgency') == 0
+            for row in evidence.values())
+        choice_priority_hint = (
+            " When current observed start facts support both an immediate raw "
+            "prerequisite with a current planner recipe path and an unlinked "
+            "lookahead bulk gather with no observed urgency, favor the immediate "
+            "prerequisite unless another current fact justifies the lookahead work. "
+            "A larger pickup quantity alone is not such a fact. Later crafting "
+            "and output still require fresh native verification."
+            if current_prerequisite and unlinked_lookahead else "")
+        craft_choice_hint = ""
+        if len(selected) == 1 and type(tick) is int and isinstance(target, str) and target:
+            plan = selected[0]
+            row = evidence.get(plan.id)
+            if isinstance(row, dict) and len(plan.steps) == 1:
+                step = plan.steps[0]
+                start = row.get('craft_start_evidence')
+                dependency = row.get('craft_dependency')
+                path = dependency.get('planner_item_path') if isinstance(dependency, dict) else None
+                expected = (start.get('expected_products_after_native_verification')
+                            if isinstance(start, dict) else None)
+                if (step.action == 'factory_craft_job'
+                        and isinstance(step.item, str) and step.item
+                        and isinstance(step.parameters, dict)
+                        and isinstance(step.parameters.get('receipt'), str)
+                        and bool(step.parameters['receipt'])
+                        and row.get('work_scope') == 'immediate'
+                        and row.get('unknowns') == []
+                        and isinstance(start, dict)
+                        and start.get('observed_tick') == tick
+                        and start.get('native_recipe') == step.parameters.get('recipe')
+                        and all(start.get(key) is True for key in (
+                            'input_costs_match_native_recipe', 'inputs_in_inventory_now',
+                            'recipe_unlocked_and_handcraftable', 'player_connected_and_bound',
+                            'crafting_queue_empty', 'craft_job_protocol_ready',
+                            'native_receipt_required_for_completion'))
+                        and isinstance(expected, dict)
+                        and type(expected.get(step.item)) is int
+                        and expected[step.item] > 0
+                        and isinstance(dependency, dict)
+                        and dependency.get('observed_tick') == tick
+                        and dependency.get('current_craft_product') == step.item
+                        and dependency.get('basis') == (
+                            'current_recursive_planner_provenance_and_native_recipe')
+                        and isinstance(path, list) and len(path) >= 2
+                        and path[0] == target and path[-1] == step.item):
+                    craft_choice_hint = (
+                        " The sole offered handcraft has current native recipe, "
+                        "carried-input, actor, queue, and receipt-protocol start facts "
+                        "plus a current planner path to the local target. Prefer this "
+                        "bounded craft over observe unless another current fact "
+                        "identifies a specific missing or contradictory start condition. "
+                        "Do not require certainty that the eventual target will finish; "
+                        "this craft and later output still require native receipt and "
+                        "fresh postcondition checks.")
         questions = {
             "candidate": {
                 "type": "choice",
@@ -143,36 +220,126 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                                  "travel distance is not proof of arrival. Uncertain later "
                                  "crafting, research, or travel outcome is checked after this "
                                  "bounded step and does not by itself require another observation. "
+                                 "Compare observe by the specific start fact it could resolve now: "
+                                 "when the current gather has an observed resource and fair target "
+                                 "and no start fact is missing, repeating the same observation alone "
+                                 "does not establish a future travel or crafting outcome. Keep observe "
+                                 "available for a genuinely missing or disputed start fact. "
                                  "For a handcraft, `craft_start_evidence` describes current inputs "
                                  "and actor readiness; expected output still needs native verification. "
                                  "Report confidence in choosing the best next action from this "
                                  "observed frontier, not confidence in completing the ultimate goal. "
-                                 "Do not assume other questions' answers are available."),
+                                 "Do not assume other questions' answers are available."
+                                 + choice_priority_hint + craft_choice_hint),
                 "criteria": {**{p.id: p.description for p in selected},
                              "observe": "Gather another observation without mutating the factory"},
             }
         }
         for plan in selected:
             pointer = f"`candidate_plans[{json.dumps(plan.id)}]`"
+            row = evidence.get(plan.id)
+            row = row if isinstance(row, dict) else {}
+            placement_start = row.get('placement_start_evidence')
+            placement_dependency = row.get('placement_dependency')
+            placement_step = plan.steps[0] if len(plan.steps) == 1 else None
+            placement_path = (placement_dependency.get('planner_item_path')
+                              if isinstance(placement_dependency, dict) else None)
+            qualified_placement = (
+                isinstance(placement_start, dict)
+                and isinstance(placement_dependency, dict)
+                and placement_step is not None
+                and placement_step.action == 'factory_place'
+                and isinstance(placement_step.parameters, dict)
+                and placement_step.parameters.get('name') == 'stone-furnace'
+                and isinstance(placement_step.parameters.get('role'), str)
+                and placement_step.parameters['role'].startswith('recipe:')
+                and isinstance(placement_step.parameters.get('anchor'), str)
+                and bool(placement_step.parameters['anchor'])
+                and placement_step.costs == {'stone-furnace': 1}
+                and row.get('work_scope') == 'immediate'
+                and row.get('unknowns') == []
+                and type(tick) is int
+                and placement_start.get('observed_tick') == tick
+                and placement_dependency.get('observed_tick') == tick
+                and placement_start.get('site_state') == 'proposed'
+                and all(placement_start.get(key) is True for key in (
+                    'native_offer_checked_current_site_clearance',
+                    'paid_furnace_in_inventory_now', 'no_source_owned_at_role_now',
+                    'player_connected_and_bound_now', 'crafting_queue_empty_now',
+                    'native_preflight_rechecks_offer_and_actor'))
+                and placement_start.get('site_anchor') ==
+                    placement_step.parameters.get('anchor')
+                and placement_start.get('source_role') ==
+                    placement_step.parameters.get('role')
+                and placement_dependency.get('machine_for_recipe') ==
+                    placement_step.parameters.get('role')
+                and placement_dependency.get('basis') ==
+                    'current_recursive_planner_and_validated_native_site'
+                and isinstance(target, str) and bool(target)
+                and isinstance(placement_path, list) and len(placement_path) >= 2
+                and placement_path[0] == target
+                and placement_path[-1] ==
+                    placement_step.parameters['role'].removeprefix('recipe:'))
             craft_hint = (
-                " `craft_dependency` traces this current craft to the planner target; "
-                "later production still needs fresh native checks."
-                if ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('craft_dependency')
+                " `craft_start_evidence` shows the current actor, queue, recipe, "
+                "and carried ingredients needed to start this handcraft; "
+                "`craft_dependency` traces its product along the current planner "
+                "recipe path to the local target. Score this bounded intermediate "
+                "product for its evidenced contribution, without requiring it to "
+                "finish the target. The craft and later production still need "
+                "fresh native receipt and precondition checks."
+                if (((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('craft_start_evidence')
+                    and ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('craft_dependency'))
                 else ""
+            )
+            place_hint = (
+                " `placement_start_evidence` and `placement_dependency` bind this "
+                "paid furnace to a currently offered, unoccupied source role on "
+                "the local planner path. Placing it provides evidenced bounded "
+                "capacity (score level 1); it does not yet demonstrate downstream "
+                "production-blocker removal (level 2). Another current contrary "
+                "fact can lower the score. Native placement receipt, fuel, input, "
+                "transport and output remain unverified and need fresh checks."
+                if qualified_placement
+                else ""
+            )
+            fuel_hint = (
+                " `fuel_prerequisite` ties this bounded coal pickup to the current "
+                "owned burner's startup need; later transfer and production remain unverified."
+                if ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('fuel_prerequisite')
+                else ""
+            )
+            transfer_start = ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get(
+                'fuel_transfer_start_evidence')
+            transfer_hint = (
+                " `fuel_transfer_start_evidence` ties the paid coal transfer to the current "
+                "owned burner, carried quantity, planner path, and native receipt. The transfer "
+                "and later production still require native verification."
+                if transfer_start else ""
+            )
+            recipe_input_start = ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get(
+                'recipe_input_transfer_start_evidence')
+            input_hint = (
+                " `recipe_input_transfer_start_evidence` ties this paid ingredient transfer "
+                "to the current planner path, native recipe, owned machine, carried input, "
+                "and planned receipt ID. It does not prove transfer or output; native "
+                "verification remains required."
+                if recipe_input_start else ""
             )
             questions[plan.id + "/benefit"] = {
                 "type": "score",
                 "instructions": (
                     f"How directly do the steps in {pointer} advance `{objective}` "
-                    "given `facts` and `execution_contract`? Do not demand a full-game plan "
+                    "given `facts`, current `candidate_evidence`, and `execution_contract`? Do not demand a full-game plan "
                     "from one bounded local production action. A current "
                     "`raw_prerequisite` is evidence that gathering supplies an input to "
                     "the named native recipe, not that the later craft already happened."
-                    + craft_hint
+                    + craft_hint + place_hint + fuel_hint + transfer_hint + input_hint
                 ),
                 "criteria": ([
                     "No demonstrated contribution to the bounded production objective",
-                    "Supplies useful inputs or evidenced capacity for the bounded task",
+                    "Supplies useful inputs, a current planner-linked intermediate craft, "
+                    "or evidenced capacity for the bounded task",
                     "Directly removes an observed production blocker or prevents due starvation",
                 ] if objective == "local_objective" else [
                     "The steps do not improve the active goal's required state",
@@ -187,7 +354,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "in `facts`, under `execution_contract`?"
                 ),
                 "criteria": [
-                    "Only moves, gathers resources, waits, or fuels an existing machine",
+                    "Only moves, gathers resources, waits, fuels an existing machine, "
+                    "or handcrafts from carried inputs without changing existing entities",
                     "Places new machinery without removing any existing entity",
                     "Stops, removes, or rebuilds existing factory infrastructure",
                 ],
@@ -203,6 +371,30 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "when present; do not treat the unverified travel outcome as a missing "
                     "start fact. "
                     "Future action outcomes will be verified after execution, not assumed now."
+                    + (" For a handcraft, use current `craft_start_evidence` to judge "
+                       "the actor, queue, native recipe, and carried ingredients "
+                       "needed to start. The output still requires native receipt "
+                       "verification; its future completion is not a missing "
+                       "start observation."
+                       if ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get(
+                           'craft_start_evidence') else "")
+                    + (" For a paid fuel transfer, `fuel_transfer_start_evidence` describes "
+                       "the current carried coal, owned burner, and exact receipt. Judge "
+                       "start facts from those values; the future transfer outcome is "
+                       "verified by the native receipt."
+                       if transfer_start else "")
+                    + (" For a paid recipe-input transfer, "
+                       "`recipe_input_transfer_start_evidence` describes current "
+                       "carried input, owned machine, recipe, and planned receipt ID. "
+                       "Judge only missing start facts; the transfer and output "
+                       "still need native verification."
+                       if recipe_input_start else "")
+                    + (" For a placement, `placement_start_evidence` combines a current "
+                       "surveyed site offer with observed actor/queue facts. Judge missing "
+                       "start facts from those "
+                       "values; an unverified walking path or future build receipt is not a "
+                       "missing start observation."
+                       if placement_start else "")
                 ),
             }
         size = len(json.dumps({"state": context, "questions": questions},

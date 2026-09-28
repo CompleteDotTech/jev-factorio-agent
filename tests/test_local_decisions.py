@@ -9,6 +9,7 @@ from jev_factorio.judgments import question_batch, select_plan
 from jev_factorio.jev_client import MockJevClient
 from jev_factorio.planning.decision_support import candidate_evidence, distinct_candidates, scheduling_context
 from jev_factorio.planning.factory import FactoryPlanner
+from jev_factorio.planning.input_routes import InputRoutePlanner
 from jev_factorio.planning.ready_work import ReadyWorkPlanner
 from jev_factorio.skills import Plan, Step, compile_plans
 from test_factory import FactorySimulation, catalog, machine, recipe, snapshot
@@ -116,11 +117,56 @@ def test_stone_gather_explains_current_lab_recipe_dependency_without_claiming_ou
     assert context['candidate_evidence'][plan.id]['gather_start_evidence'] == row['gather_start_evidence']
     assert 'best next action' in questions['candidate']['instructions']
     assert 'ultimate goal' in questions['candidate']['instructions']
+    assert 'specific start fact it could resolve now' in questions['candidate']['instructions']
+    assert 'Keep observe available' in questions['candidate']['instructions']
     assert 'observed raw resource' in questions[plan.id + '/needs_observation']['instructions']
     assert row['delivers_or_crafts'] == []
     assert row['processed_units_basis'] == 'handling_volume_not_useful_production'
     assert not row['requires_investment']
     assert not plan.steps[0].allowed(snapshot(nearby_resources={}))
+
+
+def test_choice_prefers_current_recipe_prerequisite_over_unlinked_lookahead_only_when_observed():
+    state, data = snapshot(), catalog()
+    data.recipes['lab'] = recipe('lab', {'iron-plate': 1})
+    worker = ReadyWorkPlanner(data, state, 'rocket_launch')
+    worker._set_focus('lab', 1)
+    stone = worker._need('lab', 1)
+    worker.speculative = True
+    iron = worker._need('iron-ore', 36)
+    assert stone.steps[0].parameters['resource'] == 'stone'
+    assert iron.steps[0].parameters['resource'] == 'iron-ore'
+    support = scheduling_context(state, data, [stone, iron], 'rocket_launch')
+    immediate = support['candidate_evidence'][stone.id]
+    lookahead = support['candidate_evidence'][iron.id]
+    assert immediate['work_scope'] == 'immediate'
+    assert immediate['raw_prerequisite']['planner_item_path'][0] == 'lab'
+    assert lookahead['work_scope'] == 'lookahead' and lookahead['raw_prerequisite'] is None
+    assert lookahead['urgency'] == 0
+
+    def choice_instruction(rows, plans=(stone, iron)):
+        _, questions, _ = question_batch({'facts': state.for_jev(), **rows}, list(plans))
+        return questions['candidate']['instructions']
+
+    assert 'larger pickup quantity alone' in choice_instruction(support)
+    assert 'Later crafting and output still require fresh native verification' in choice_instruction(support)
+    single = scheduling_context(state, data, [stone], 'rocket_launch')
+    assert 'larger pickup quantity alone' not in choice_instruction(single, (stone,))
+
+    stale = deepcopy(support)
+    stale['candidate_evidence'][stone.id]['raw_prerequisite']['observed_tick'] -= 1
+    assert 'larger pickup quantity alone' not in choice_instruction(stale)
+    unknown = deepcopy(support)
+    unknown['candidate_evidence'][stone.id]['gather_start_evidence'][
+        'fair_target_identity_observed'] = False
+    assert 'larger pickup quantity alone' not in choice_instruction(unknown)
+    due = deepcopy(support)
+    due['candidate_evidence'][iron.id]['urgency'] = 1
+    assert 'larger pickup quantity alone' not in choice_instruction(due)
+    linked = deepcopy(support)
+    linked['candidate_evidence'][iron.id]['raw_prerequisite'] = {
+        'observed_tick': state.tick, 'planner_item_path': ['lab', 'iron-ore']}
+    assert 'larger pickup quantity alone' not in choice_instruction(linked)
 
 
 def test_stale_or_unrelated_raw_dependency_never_enters_candidate_evidence():
@@ -229,10 +275,37 @@ def test_furnace_craft_keeps_current_lab_planner_provenance_without_claiming_lab
         {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
         [plan])
     assert context['candidate_evidence'][plan.id]['craft_dependency'] == row['craft_dependency']
-    assert 'later production still needs fresh native checks' in str(questions)
+    assert 'Prefer this bounded craft over observe' in questions['candidate']['instructions']
+    assert 'current planner-linked intermediate craft' in (
+        questions[plan.id + '/benefit']['criteria'][1])
+    assert 'handcrafts from carried inputs without changing existing entities' in (
+        questions[plan.id + '/disruption']['criteria'][0])
+    assert 'later production still need fresh native receipt and precondition checks' in str(questions)
+    benefit = questions[plan.id + '/benefit']['instructions']
+    observation = questions[plan.id + '/needs_observation']['instructions']
+    assert 'bounded intermediate product' in benefit
+    assert 'current `candidate_evidence`' in benefit
+    assert 'output still requires native receipt verification' in observation
+    assert 'future completion is not a missing start observation' in observation
     stale = replace(plan, materials={**plan.materials, 'craft_dependency': {
         **plan.materials['craft_dependency'], 'observed_tick': state.tick - 1}})
     assert candidate_evidence(state, data, [stale])[stale.id]['craft_dependency'] is None
+    stale_context, stale_questions, _ = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [stale], 'rocket_launch')},
+        [stale])
+    assert stale_context['candidate_evidence'][stale.id]['craft_dependency'] is None
+    assert 'Prefer this bounded craft over observe' not in stale_questions['candidate']['instructions']
+    assert 'bounded intermediate product' not in stale_questions[stale.id + '/benefit']['instructions']
+    stale_start = replace(plan, materials={**plan.materials,
+        'work_intent': {'observed_tick': state.tick - 1}})
+    stale_start_context, stale_start_questions, _ = question_batch(
+        {'facts': state.for_jev(),
+         **scheduling_context(state, data, [stale_start], 'rocket_launch')},
+        [stale_start])
+    assert stale_start_context['candidate_evidence'][stale_start.id]['craft_start_evidence'] is None
+    assert 'Prefer this bounded craft over observe' not in stale_start_questions['candidate']['instructions']
+    assert 'future completion is not a missing start observation' not in (
+        stale_start_questions[stale_start.id + '/needs_observation']['instructions'])
     unrelated = replace(plan, materials={**plan.materials, 'craft_dependency': {
         **plan.materials['craft_dependency'], 'planner_item_path': ['unrelated', 'stone-furnace']}})
     assert candidate_evidence(state, data, [unrelated])[unrelated.id]['craft_dependency'] is None
@@ -243,6 +316,334 @@ def test_furnace_craft_keeps_current_lab_planner_provenance_without_claiming_lab
     assert candidate_evidence(state, data, [empty_target])[empty_target.id]['craft_dependency'] is None
     data.recipes['stone-furnace']['enabled'] = False
     assert candidate_evidence(state, data, [plan])[plan.id]['craft_dependency'] is None
+
+
+@pytest.mark.parametrize('change', [
+    ('start', 'inputs_in_inventory_now', False),
+    ('start', 'crafting_queue_empty', False),
+    ('start', 'player_connected_and_bound', False),
+    ('start', 'recipe_unlocked_and_handcraftable', False),
+    ('start', 'native_recipe', 'wrong-recipe'),
+    ('start', 'observed_tick', -1),
+    ('start', 'native_receipt_required_for_completion', False),
+    ('dependency', 'observed_tick', -1),
+    ('dependency', 'planner_item_path', ['unrelated', 'stone-furnace']),
+    ('row', 'unknowns', ['missing native actor']),
+])
+def test_handcraft_choice_hint_requires_current_complete_start_and_path(change):
+    state, data = snapshot(inventory={'stone': 5}), catalog()
+    data.recipes['lab'] = recipe('lab', {'iron-plate': 1})
+    state.factory['craft_jobs_protocol'] = 1
+    planner = ReadyWorkPlanner(data, state, 'rocket_launch')
+    planner._set_focus('lab', 1)
+    plan = planner._need('lab', 1)
+    step = plan.steps[0]
+    plan = replace(plan, steps=(replace(step, action='factory_craft_job',
+        effect='craft_job_complete', parameters={**step.parameters, 'receipt': 'lab-test'}),))
+    context = {'facts': state.for_jev(),
+               **scheduling_context(state, data, [plan], 'rocket_launch')}
+    _, questions, _ = question_batch(context, [plan])
+    assert 'Prefer this bounded craft over observe' in questions['candidate']['instructions']
+    altered = deepcopy(context)
+    section, key, value = change
+    row = altered['candidate_evidence'][plan.id]
+    nested = {'start': 'craft_start_evidence',
+              'dependency': 'craft_dependency', 'row': None}[section]
+    (row[nested] if nested else row)[key] = value
+    _, questions, _ = question_batch(altered, [plan])
+    assert 'Prefer this bounded craft over observe' not in questions['candidate']['instructions']
+
+
+def test_paid_joint_furnace_placement_has_observed_site_and_lab_dependency():
+    state, data = snapshot(inventory={'stone-furnace': 1}, player_position=(0, 0)), catalog()
+    data.recipes['copper-plate'] = recipe('copper-plate', {'copper-ore': 1}, 'smelting')
+    role, anchor = 'recipe:copper-plate', 'cell-site:copper-ore:-42:-109:0:2'
+    state.factory['production_sites'] = {
+        'protocol': 1, 'session_id': state.session_id, 'tick': state.tick,
+        'sources': {role: {
+            'state': 'proposed', 'reason': 'joint_layout_available', 'anchor': anchor,
+            'position': {'x': -42, 'y': -109}, 'belt_count': 5,
+            'bill': {'stone-furnace': 1, 'burner-mining-drill': 1,
+                     'burner-inserter': 2, 'wooden-chest': 1, 'transport-belt': 5},
+        }},
+    }
+    planner = InputRoutePlanner(data, state, 'rocket_launch')
+    planner._set_focus('lab', 1)
+    plan = planner._machine(role, 'stone-furnace', ('item:lab', 'item:copper-plate'))
+    assert plan.steps[0].allowed(state)
+    assert plan.materials['local_objective']['item'] == 'lab'
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    assert row['unknowns'] == []
+    assert row['travel_tiles_lower_bound'] == round((42**2 + 109**2) ** .5, 3)
+    assert row['placement_start_evidence']['site_position'] == {'x': -42, 'y': -109}
+    assert row['placement_start_evidence']['paid_furnace_in_inventory_now'] is True
+    assert row['placement_start_evidence']['native_offer_checked_current_site_clearance'] is True
+    assert row['placement_start_evidence']['player_connected_and_bound_now'] is True
+    assert row['placement_start_evidence']['crafting_queue_empty_now'] is True
+    assert row['placement_dependency'] == {
+        'observed_tick': state.tick, 'planner_item_path': ['lab', 'copper-plate'],
+        'machine_for_recipe': role,
+        'basis': 'current_recursive_planner_and_validated_native_site',
+        'later_flow_and_output_require_fresh_native_preconditions': True,
+    }
+    assert row['delivers_or_crafts'] == []
+    context, questions, _ = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
+        [plan])
+    assert context['candidate_evidence'][plan.id]['placement_dependency'] == row['placement_dependency']
+    benefit = questions[plan.id + '/benefit']['instructions']
+    assert 'evidenced bounded capacity (score level 1)' in benefit
+    assert 'production-blocker removal (level 2)' in benefit
+    assert 'transport and output remain unverified' in benefit
+    assert 'unverified walking path or future build receipt' in str(questions)
+    for section, key, value in (
+            ('placement_start_evidence', 'observed_tick', state.tick - 1),
+            ('placement_start_evidence', 'paid_furnace_in_inventory_now', False),
+            ('placement_start_evidence', 'no_source_owned_at_role_now', False),
+            ('placement_start_evidence', 'native_offer_checked_current_site_clearance', False),
+            ('placement_start_evidence', 'site_anchor', 'wrong-site'),
+            ('placement_dependency', 'planner_item_path', ['unrelated', 'copper-plate']),
+            ('placement_dependency', 'machine_for_recipe', 'recipe:iron-plate')):
+        altered = deepcopy(context)
+        altered['candidate_evidence'][plan.id][section][key] = value
+        _, bad_questions, _ = question_batch(altered, [plan])
+        assert 'evidenced bounded capacity (score level 1)' not in (
+            bad_questions[plan.id + '/benefit']['instructions'])
+    missing = replace(plan, materials={key: value for key, value in plan.materials.items()
+                                       if key != 'local_objective'})
+    assert candidate_evidence(state, data, [missing])[missing.id]['placement_dependency'] is None
+    state.inventory['stone-furnace'] = 0
+    unfunded = candidate_evidence(state, data, [plan])[plan.id]
+    assert unfunded['placement_start_evidence']['paid_furnace_in_inventory_now'] is False
+    assert unfunded['placement_dependency'] is None
+    assert not plan.steps[0].allowed(state)
+    state.inventory['stone-furnace'] = 1
+    state.factory['crafting_queue'] = 1
+    busy = candidate_evidence(state, data, [plan])[plan.id]
+    assert busy['placement_start_evidence']['crafting_queue_empty_now'] is False
+    assert busy['placement_dependency'] is None
+    state.factory['crafting_queue'] = 0
+    state.factory['player_bound'] = False
+    unbound = candidate_evidence(state, data, [plan])[plan.id]
+    assert unbound['placement_start_evidence']['player_connected_and_bound_now'] is False
+    assert unbound['placement_dependency'] is None
+    state.factory['player_bound'] = True
+    state.factory['entities'][role] = machine(position={'x': -42, 'y': -109})
+    occupied = candidate_evidence(state, data, [plan])[plan.id]
+    assert occupied['placement_start_evidence']['no_source_owned_at_role_now'] is False
+    assert occupied['placement_dependency'] is None
+    assert not plan.steps[0].allowed(state)
+    state.factory['entities'].pop(role)
+    state.factory['production_sites']['tick'] -= 1
+    stale = candidate_evidence(state, data, [plan])[plan.id]
+    assert stale['placement_start_evidence'] is None and stale['placement_dependency'] is None
+    assert 'travel:factory_place' in stale['unknowns']
+    assert not plan.steps[0].allowed(state)
+    state.factory['production_sites']['tick'] = state.tick
+    data.recipes['copper-plate']['enabled'] = False
+    assert candidate_evidence(state, data, [plan])[plan.id]['placement_dependency'] is None
+    data.recipes['copper-plate']['enabled'] = True
+    state.factory['production_sites']['sources'][role]['reason'] = 'survey_not_due'
+    assert candidate_evidence(state, data, [plan])[plan.id]['placement_start_evidence'] is None
+
+
+def test_new_owned_copper_furnace_requests_bounded_startup_coal_with_current_evidence():
+    state, data = snapshot(inventory={}, player_position=(0, 0)), catalog()
+    data.recipes['copper-plate'] = recipe('copper-plate', {'copper-ore': 1}, 'smelting')
+    role = 'recipe:copper-plate'
+    state.factory['entities'][role] = machine(unit_number=2546, fuel={},
+                                               products_finished=0)
+    state.factory['output_buffers'] = {'protocol': 1, 'session_id': state.session_id,
+                                       'tick': state.tick, 'sources': {}}
+    state.factory['input_routes'] = {'protocol': 1, 'session_id': state.session_id,
+                                     'tick': state.tick, 'sources': {}}
+    planner = InputRoutePlanner(data, state, 'rocket_launch')
+    planner._set_focus('lab', 1)
+    path = ('item:lab', 'item:copper-plate')
+    plan = planner._fuel(role, path)
+    assert plan.steps[0].action == 'factory_gather'
+    assert plan.steps[0].parameters == {'resource': 'coal', 'quantity': 5}
+    assert plan.steps[0].threshold == 5
+    assert plan.materials['fuel_prerequisite']['source_unit'] == 2546
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    assert row['unknowns'] == []
+    assert row['raw_prerequisite'] is None
+    assert row['gather_start_evidence']['resource_in_current_observation'] is True
+    assert row['gather_start_evidence']['fair_target_identity_observed'] is True
+    assert row['fuel_prerequisite'] == {
+        'observed_tick': state.tick, 'planner_item_path': ['lab', 'copper-plate'],
+        'burner_role': role, 'burner_unit': 2546, 'fuel_now': 0,
+        'startup_target': 5, 'current_required_units': 5,
+        'basis': 'current_planner_fuel_need_and_owned_native_burner',
+        'later_fuel_transfer_and_output_require_fresh_native_preconditions': True,
+    }
+    assert row['delivers_or_crafts'] == []
+    context, questions, _ = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
+        [plan])
+    assert context['candidate_evidence'][plan.id]['fuel_prerequisite'] == row['fuel_prerequisite']
+    assert "owned burner's startup need" in questions[plan.id + '/benefit']['instructions']
+
+    stale = replace(plan, materials={**plan.materials, 'fuel_prerequisite': {
+        **plan.materials['fuel_prerequisite'], 'observed_tick': state.tick - 1}})
+    assert candidate_evidence(state, data, [stale])[stale.id]['fuel_prerequisite'] is None
+    missing = replace(plan, materials={key: value for key, value in plan.materials.items()
+                                       if key != 'local_objective'})
+    assert candidate_evidence(state, data, [missing])[missing.id]['fuel_prerequisite'] is None
+    oversized = replace(plan, steps=(replace(plan.steps[0], threshold=50,
+        parameters={'resource': 'coal', 'quantity': 50}),))
+    assert candidate_evidence(state, data, [oversized])[oversized.id]['fuel_prerequisite'] is None
+    state.factory['entities'][role].pop('fuel')
+    assert candidate_evidence(state, data, [plan])[plan.id]['fuel_prerequisite'] is None
+    state.factory['entities'][role]['fuel'] = {}
+    state.factory['fair_resource_targets'].pop('coal')
+    absent_site = candidate_evidence(state, data, [plan])[plan.id]
+    assert absent_site['fuel_prerequisite'] is None
+    assert absent_site['gather_start_evidence']['fair_target_identity_observed'] is False
+
+
+def test_established_burner_retains_bulk_service_target():
+    state, data = snapshot(inventory={}), catalog()
+    state.factory['entities']['recipe:iron-plate'] = machine(
+        unit_number=81, fuel={'coal': 0}, products_finished=20)
+    planner = ReadyWorkPlanner(data, state, 'rocket_launch')
+    planner._set_focus('iron-plate', 1)
+    plan = planner._fuel('recipe:iron-plate', ('item:iron-plate',))
+    assert plan.steps[0].action == 'factory_gather'
+    assert plan.steps[0].threshold == 50
+    assert plan.materials['fuel_prerequisite']['startup'] is False
+
+
+def test_native_shaped_startup_fuel_transfer_has_current_paid_start_evidence():
+    state, data = snapshot(inventory={'coal': 5}, player_position=(0, 0)), catalog()
+    data.recipes['copper-plate'] = recipe('copper-plate', {'copper-ore': 1}, 'smelting')
+    role = 'recipe:copper-plate'
+    state.factory['entities'][role] = machine(unit_number=2546, fuel={},
+                                               products_finished=0)
+    state.factory['player_connected'] = True
+    state.factory['player_bound'] = True
+    planner = InputRoutePlanner(data, state, 'rocket_launch')
+    planner._set_focus('lab', 1)
+    plan = planner._fuel(role, ('item:lab', 'item:copper-plate'))
+    step = plan.steps[0]
+    assert step.action == 'factory_insert'
+    assert step.parameters == {'role': role, 'item': 'coal', 'quantity': 5,
+                               'receipt': f'{state.tick}:factory_insert:{role}:coal'}
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    assert row['fuel_prerequisite'] is None
+    assert row['fuel_transfer_start_evidence'] == {
+        'observed_tick': state.tick, 'planner_item_path': ['lab', 'copper-plate'],
+        'burner_role': role, 'burner_unit': 2546, 'fuel_now': 0,
+        'coal_in_inventory_now': 5, 'coal_to_transfer': 5,
+        'native_receipt': step.parameters['receipt'],
+        'basis': 'current_planner_need_owned_burner_and_paid_inventory',
+        'native_transfer_and_later_output_require_verification': True,
+    }
+    context, questions, _ = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
+        [plan])
+    assert context['candidate_evidence'][plan.id]['fuel_transfer_start_evidence'] == row['fuel_transfer_start_evidence']
+    assert 'paid coal transfer' in questions[plan.id + '/benefit']['instructions']
+    assert 'future transfer outcome' in questions[plan.id + '/needs_observation']['instructions']
+
+    def missing(changed_plan=plan):
+        return candidate_evidence(state, data, [changed_plan])[changed_plan.id][
+            'fuel_transfer_start_evidence'] is None
+
+    stale = replace(plan, materials={**plan.materials, 'fuel_prerequisite': {
+        **plan.materials['fuel_prerequisite'], 'observed_tick': state.tick - 1}})
+    assert missing(stale)
+    wrong_role = replace(plan, steps=(replace(step, parameters={**step.parameters,
+        'role': 'recipe:iron-plate'}),))
+    assert missing(wrong_role)
+    wrong_quantity = replace(plan, steps=(replace(step, parameters={**step.parameters,
+        'quantity': 6}),))
+    assert missing(wrong_quantity)
+    wrong_receipt = replace(plan, steps=(replace(step, parameters={**step.parameters,
+        'receipt': 'stale'}),))
+    assert missing(wrong_receipt)
+    state.inventory['coal'] = 4
+    assert missing()
+    state.inventory['coal'] = 5
+    state.factory['entities'][role].pop('fuel')
+    assert missing()
+    state.factory['entities'][role]['fuel'] = {}
+    state.factory['player_bound'] = False
+    assert missing()
+
+
+def test_native_shaped_recipe_input_transfer_binds_current_recipe_and_owned_furnace():
+    state, data = snapshot(inventory={'copper-ore': 10}, player_position=(0, 0)), catalog()
+    data.recipes['copper-plate'] = recipe('copper-plate', {'copper-ore': 1}, 'smelting')
+    role = 'recipe:copper-plate'
+    state.factory['entities'][role] = machine(unit_number=2546, fuel={'coal': 5},
+                                               input={}, crafting=False)
+    state.factory['production_sites'] = {'sources': {
+        role: {'state': 'owned', 'source_unit': 2546}}}
+    state.factory['input_routes'] = {'protocol': 1, 'session_id': state.session_id,
+                                     'tick': state.tick, 'sources': {}}
+    state.factory['output_buffers'] = {'protocol': 1, 'session_id': state.session_id,
+                                       'tick': state.tick, 'sources': {}}
+    planner = InputRoutePlanner(data, state, 'rocket_launch')
+    planner._set_focus('lab', 1)
+    plan = planner._production(data.recipes['copper-plate'], role, 10,
+                               ('item:lab', 'item:copper-plate'))
+    step = plan.steps[0]
+    assert step.action == 'factory_insert'
+    assert step.parameters == {'role': role, 'item': 'copper-ore', 'quantity': 10,
+                               'receipt': f'{state.tick}:factory_insert:{role}:copper-ore'}
+    assert plan.materials['recipe_input_transfer'] == {
+        'observed_tick': state.tick, 'planner_item_path': ['lab', 'copper-plate', 'copper-ore'],
+        'recipe': 'copper-plate', 'ingredient': 'copper-ore', 'source_role': role,
+        'source_unit': 2546, 'planned_batches': 10, 'observed_input': 0,
+        'observed_crafting': False,
+    }
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    assert row['recipe_input_transfer_start_evidence'] == {
+        'observed_tick': state.tick, 'planner_item_path': ['lab', 'copper-plate', 'copper-ore'],
+        'direct_native_recipe': 'copper-plate', 'owned_source_role': role,
+        'owned_source_unit': 2546, 'ingredient': 'copper-ore',
+        'ingredient_in_machine_now': 0, 'ingredient_in_inventory_now': 10,
+        'burner_fuel_coal_now': 5, 'paid_quantity_to_transfer': 10,
+        'planned_native_receipt_id': step.parameters['receipt'],
+        'basis': 'current_planner_recipe_input_and_owned_native_machine',
+        'native_transfer_and_later_output_require_verification': True,
+    }
+    context, questions, _ = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
+        [plan])
+    assert context['candidate_evidence'][plan.id]['recipe_input_transfer_start_evidence'] == row['recipe_input_transfer_start_evidence']
+    assert 'paid ingredient transfer' in questions[plan.id + '/benefit']['instructions']
+    assert 'transfer and output' in questions[plan.id + '/needs_observation']['instructions']
+
+    def missing(changed_plan=plan):
+        return candidate_evidence(state, data, [changed_plan])[changed_plan.id][
+            'recipe_input_transfer_start_evidence'] is None
+
+    provenance = plan.materials['recipe_input_transfer']
+    assert missing(replace(plan, materials={**plan.materials, 'recipe_input_transfer': {
+        **provenance, 'observed_tick': state.tick - 1}}))
+    assert missing(replace(plan, materials={**plan.materials, 'recipe_input_transfer': {
+        **provenance, 'recipe': 'iron-plate'}}))
+    assert missing(replace(plan, materials={key: value for key, value in plan.materials.items()
+        if key != 'recipe_input_transfer'}))
+    assert missing(replace(plan, steps=(replace(step, parameters={**step.parameters,
+        'role': 'recipe:iron-plate'}),)))
+    assert missing(replace(plan, steps=(replace(step, parameters={**step.parameters,
+        'quantity': 9}),)))
+    assert missing(replace(plan, steps=(replace(step, parameters={**step.parameters,
+        'receipt': 'stale'}),)))
+    state.inventory['copper-ore'] = 9
+    assert missing()
+    state.inventory['copper-ore'] = 10
+    state.factory['entities'][role].pop('input')
+    assert missing()
+    state.factory['entities'][role]['input'] = {}
+    state.factory['production_sites']['sources'][role].pop('source_unit')
+    assert missing()
+    state.factory['production_sites']['sources'][role]['source_unit'] = 2546
+    state.factory['entities'][role].pop('fuel')
+    assert missing()
 
 
 def test_local_rubric_does_not_require_one_pickup_to_launch_a_rocket():

@@ -7,6 +7,7 @@ passing the offline tests.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import time
 from copy import deepcopy
@@ -78,6 +79,18 @@ class HierarchicalLoop(AgentLoop):
             raise ValueError("Resuming requires an existing controller checkpoint")
         if self.checkpoint and self.checkpoint.exists() and not resume_controller:
             raise ValueError("Checkpoint exists; explicitly resume or use a new path")
+        self._connector_checkpoint_preflight_sha = None
+        attachment = getattr(backend, '_native_attachment', None)
+        if (resume_controller and isinstance(attachment, dict)
+                and attachment.get('modules', {}).get('connector_ownership') is True):
+            # Validate the existing controller bytes before enable_factory can
+            # expose any native connector capability. Never migrate an old
+            # checkpoint by observing a same-force native ledger.
+            raw = self.checkpoint.read_bytes()
+            preflight = self.memory_type.from_bytes(raw, attachment['session_id'], target)
+            if preflight.connector_ownership is None:
+                raise ValueError('Old checkpoint cannot adopt connector ledger')
+            self._connector_checkpoint_preflight_sha = hashlib.sha256(raw).hexdigest()
         self.max_request_bytes = max_request_bytes
         self.max_pending_polls = max_pending_polls
         self.max_stalled_decisions = max_stalled_decisions
@@ -154,6 +167,9 @@ class HierarchicalLoop(AgentLoop):
 
     def _initial_memory(self, snapshot: GameSnapshot):
         """Restore once at the first fresh observation, before any actor work."""
+        if self._connector_checkpoint_preflight_sha is not None:
+            if hashlib.sha256(self.checkpoint.read_bytes()).hexdigest() != self._connector_checkpoint_preflight_sha:
+                raise ValueError('Connector checkpoint changed after preflight')
         return (self.memory_type.load(self.checkpoint, snapshot.session_id, self.target)
                 if self.resume_controller else self.memory_type(snapshot.session_id, self.target))
 
@@ -178,6 +194,10 @@ class HierarchicalLoop(AgentLoop):
         if self.memory.session_id != snapshot.session_id or snapshot.tick < self.memory.last_tick:
             raise ValueError("Session changed or observation tick regressed; refusing to act")
         self.memory.last_tick = snapshot.tick
+        if snapshot.world_kind == 'fle' or self.memory.connector_ownership is not None:
+            from .connector_checkpoint import reconcile
+            native = getattr(self.backend, '_factory', None)
+            reconcile(self.memory, snapshot, native, resume=self.resume_controller)
         from .capital_controller import observe as observe_capital
         observe_capital(self, snapshot)
         evidence = (self._capacity_history.observe(snapshot, self.catalog)
@@ -357,6 +377,13 @@ class HierarchicalLoop(AgentLoop):
         return {}
 
     def _step_allowed(self, step, snapshot: GameSnapshot) -> bool:
+        if (step.action == 'factory_connect' and snapshot.world_kind == 'fle'
+                and self.memory.connector_ownership is None):
+            return False
+        if step.action == 'factory_connect' and self.memory.connector_ownership is not None:
+            from .planning.connection_identity import connection_key
+            if connection_key(step.parameters or {}) in self.memory.connector_ownership['routes']:
+                return False  # One native receipt may never be billed again.
         parameters = step.parameters or {}
         role = parameters.get("role", "")
         if (self.factory_scheduling == "ready-work" and self.catalog is not None
@@ -368,7 +395,9 @@ class HierarchicalLoop(AgentLoop):
         return step.allowed(snapshot)
 
     def _execution_barrier(self, snapshot: GameSnapshot) -> bool:
-        return self._capital_fault
+        return (self._capital_fault or
+                self.memory.status == 'uncertain' and
+                self.memory.reason == 'Connector route needs exact reconciliation')
 
     def _absent_ambiguous_placement(self, plan: Plan, step, snapshot: GameSnapshot) -> bool:
         """Prove that retrying an ambiguous placement cannot duplicate a building."""
@@ -393,6 +422,12 @@ class HierarchicalLoop(AgentLoop):
         """Prove an ambiguous connection placed no connector before permitting a replan."""
         pending = self.memory.pending or {}
         if pending.get("dispatch") != "ambiguous" or step.action != "factory_connect":
+            return False
+        # A native route receipt, including a zero-payment active route, is a
+        # retained transaction and cannot be dismissed by aggregate counts.
+        from .planning.connection_identity import connection_key
+        binding = self.memory.connector_ownership
+        if binding is not None and connection_key(step.parameters or {}) in binding['routes']:
             return False
         parameters = step.parameters or {}
         source, target, kind = (
@@ -653,6 +688,16 @@ class HierarchicalLoop(AgentLoop):
         plan = Plan.from_dict(self.memory.active_plan)
         step = plan.steps[self.memory.step_index]
         pending = self.memory.pending
+        if step.action == 'factory_connect' and snapshot.world_kind == 'fle':
+            from .connector_checkpoint import pending_owned
+            if not pending_owned(self.memory, step):
+                from .planning.connection_identity import connection_key
+                binding = self.memory.connector_ownership
+                row = (binding or {}).get('routes', {}).get(connection_key(step.parameters or {}))
+                if row is not None:
+                    self.memory.status, self.memory.reason = (
+                        'uncertain', 'Connector route needs exact reconciliation')
+                    return self._record(snapshot, 'observe', self.memory.reason)
         if self.memory.transfer_recovery is not None:
             from .transfer_recovery import check_recovery
             evidence = check_recovery(self.memory, snapshot)
@@ -671,6 +716,9 @@ class HierarchicalLoop(AgentLoop):
             verified = self._trace.verify(step, snapshot, plan_id=plan.id,
                                           index=self.memory.step_index, pending=pending,
                                           phase="pending_poll", attempt_id=self.memory.attempt["id"])
+        if step.action == 'factory_connect' and snapshot.world_kind == 'fle':
+            from .connector_checkpoint import pending_owned
+            verified = verified and pending_owned(self.memory, step)
         if verified:
             self._finish_attempt(snapshot)
             self.memory.status, self.memory.reason = "running", ""
@@ -1127,6 +1175,12 @@ class HierarchicalLoop(AgentLoop):
         if self._execution_barrier(after):
             return self._record(snapshot, step.action,
                                 str(outcome) + "; pending retained for reconciliation", after)
+        if step.action == 'factory_connect' and after.world_kind == 'fle':
+            from .connector_checkpoint import pending_owned
+            if not pending_owned(self.memory, step):
+                self.memory.status, self.memory.reason = (
+                    'uncertain', 'Connector route needs exact reconciliation')
+                return self._record(snapshot, step.action, self.memory.reason, after)
         with phase("verification", self._diagnostic_trace):
             verified = self._trace.verify(step, after, plan_id=plan.id, index=index,
                                           pending=self.memory.pending, phase="post_dispatch",

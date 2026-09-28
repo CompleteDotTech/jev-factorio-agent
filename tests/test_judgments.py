@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 
 import pytest
 
@@ -84,9 +85,11 @@ def test_low_confidence_or_missing_evidence_abstains():
 def test_request_count_and_byte_budget_are_bounded():
     plans = [Plan(str(i), "fuel", "gather", (Step("mine_coal", "inventory", "coal", 5),))
              for i in range(300)]
-    _, questions, offered = question_batch({}, plans)
-    assert len(offered) == 16
-    assert len(questions["candidate"]["criteria"]) == 17
+    context, questions, offered = question_batch({}, plans)
+    assert 1 <= len(offered) <= 16
+    assert len(questions["candidate"]["criteria"]) == len(offered) + 1
+    assert len(json.dumps({"state": context, "questions": questions},
+                          ensure_ascii=False, allow_nan=False).encode("utf-8")) <= 32000
     with pytest.raises(ValueError, match="byte budget"):
         question_batch({"facts": "x" * 50000}, plans)
     with pytest.raises(ValueError):

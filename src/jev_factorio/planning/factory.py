@@ -284,13 +284,31 @@ class FactoryPlanner:
         )
 
     def _fuel(self, role, path):
-        current = self.entities[role].get("fuel", {}).get("coal", 0)
-        target = min(50, self.catalog.stack_sizes.get("coal", 50))
+        machine = self.entities[role]
+        current = machine.get("fuel", {}).get("coal", 0)
+        # A new burner needs a five-coal startup, not an immediate stack-sized
+        # mining trip. Established producers retain the existing bulk service.
+        startup = current == 0 and machine.get('products_finished', 0) == 0
+        target = min(5 if startup else 50, self.catalog.stack_sizes.get("coal", 50))
         if current >= min(5, target):
             return None
         needed = target - current
         prerequisite = self._need("coal", needed, path)
-        return prerequisite or self._transfer(role, "coal", needed)
+        plan = prerequisite or self._transfer(role, "coal", needed)
+        item_path = [entry.removeprefix('item:') for entry in path
+                     if entry.startswith('item:')]
+        if (role.startswith('recipe:') and item_path[-1:] == [role.removeprefix('recipe:')]
+                and type(machine.get('unit_number')) is int and machine['unit_number'] > 0):
+            plan = replace(plan, materials={**(plan.materials or {}), 'fuel_prerequisite': {
+                'observed_tick': self.snapshot.tick,
+                'source_role': role,
+                'source_unit': machine['unit_number'],
+                'observed_fuel': current,
+                'target_fuel': target,
+                'planner_item_path': item_path,
+                'startup': startup,
+            }})
+        return plan
 
     def _power(self, path):
         path = self._visit("infrastructure:power", path)
@@ -369,7 +387,27 @@ class FactoryPlanner:
                 needed = max(0, math.ceil(ingredient["amount"] * batches - buffered - in_flight))
                 if needed:
                     prerequisite = self._need(item, needed, path)
-                    return prerequisite or self._transfer(role, item, needed)
+                    if prerequisite:
+                        return prerequisite
+                    plan = self._transfer(role, item, needed)
+                    item_path = [entry.removeprefix('item:') for entry in path
+                                 if entry.startswith('item:')]
+                    if (item_path[-1:] == [recipe['name']]
+                            and type(machine.get('unit_number')) is int
+                            and machine['unit_number'] > 0):
+                        plan = replace(plan, materials={**(plan.materials or {}),
+                            'recipe_input_transfer': {
+                                'observed_tick': self.snapshot.tick,
+                                'planner_item_path': [*item_path, item],
+                                'recipe': recipe['name'],
+                                'ingredient': item,
+                                'source_role': role,
+                                'source_unit': machine['unit_number'],
+                                'planned_batches': batches,
+                                'observed_input': buffered,
+                                'observed_crafting': bool(machine.get('crafting')),
+                            }})
+                    return plan
         return None
 
     def _fluid(self, item, path):

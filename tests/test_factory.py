@@ -98,7 +98,7 @@ def test_smelting_never_inserts_ore_without_fuel():
     state.inventory["coal"] = 50
     step = plan(state)
     assert step.action == "factory_insert" and step.parameters["item"] == "coal"
-    assert step.costs == {"coal": 50}
+    assert step.costs == {"coal": 5}
 
 
 def test_raw_gather_commits_one_observed_fair_target_with_a_unique_postcondition():
@@ -318,7 +318,8 @@ def test_native_pipe_connection_uses_native_fluid_handler_points(monkeypatch):
     factory = object.__new__(NativeFactory)
     factory.backend = SimpleNamespace(
         _tools=SimpleNamespace(),
-        _fair=SimpleNamespace(connect=lambda *arguments: connections.append(arguments)),
+        _fair=SimpleNamespace(connect=lambda *arguments, **keywords:
+                              connections.append((arguments, keywords))),
     )
     monkeypatch.setattr(factory, "entity", lambda role: pytest.fail("FLE port geometry used"))
     def native_points(role, fluid, *, output):
@@ -336,10 +337,13 @@ def test_native_pipe_connection_uses_native_fluid_handler_points(monkeypatch):
     })
 
     assert outcome.startswith("Constructed pipe connection")
-    assert connections == [(
+    assert connections == [((
         fle.Position(x=-36.5, y=-27.5), fle.Position(x=-28.5, y=-27.5),
         prototype, "water",
-    )]
+    ), {"identity": {
+        "source": "utility:water", "target": "utility:boiler",
+        "kind": "pipe", "fluid": "water",
+    }})]
 
 
 def test_native_observation_admits_only_a_fair_native_wood_target(monkeypatch):
