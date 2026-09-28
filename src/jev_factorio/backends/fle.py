@@ -51,6 +51,7 @@ class FleBackend:
         self.consolidated_observations = False
         self.last_observation_profile = None
         self._observation_profile = None
+        self._native_attachment = None
 
     def enable_factory(self) -> Catalog:
         from .native_factory import NativeFactory
@@ -183,6 +184,24 @@ class FleBackend:
             peaceful=True,
             reset_speed=1,
         )
+        if resume:
+            existing_campaign = self._instance.rcon_client.send_command(
+                "/sc rcon.print(jev_fle_runtime ~= nil and jev_fle_runtime.campaign ~= nil)"
+            )
+            if (existing_campaign or "").strip() == "true":
+                from .native_attachment import readback
+                self._native_attachment = readback(self._instance.rcon_client)
+            elif (existing_campaign or "").strip() == "false":
+                partial = self._instance.rcon_client.send_command(
+                    "/sc rcon.print(jev_fle_runtime ~= nil and "
+                    "(jev_fle_runtime.native_installation ~= nil or "
+                    "jev_fle_runtime.fair ~= nil))"
+                )
+                if (partial or "").strip() == "true":
+                    raise RuntimeError("Partial native installation requires reconciliation")
+                raise RuntimeError("No installed native campaign to resume")
+            elif (existing_campaign or "").strip() != "false":
+                raise RuntimeError("Cannot determine whether the native campaign is installed")
         from .fair_actions import FairActions
 
         self._fair = FairActions(self)

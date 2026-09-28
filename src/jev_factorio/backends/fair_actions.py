@@ -18,10 +18,16 @@ class NativePathNotFound(RuntimeError):
 class FairActions:
     def __init__(self, backend: Any) -> None:
         self.backend = backend
-        self.command(files("jev_factorio").joinpath("lua/fair_actions.lua").read_text())
-        self.call("bind")
+        if getattr(backend, '_native_attachment', None) is not None:
+            from .native_attachment import require_asset
+            require_asset(backend._native_attachment, 'fair_actions')
+        else:
+            self.command(files("jev_factorio").joinpath("lua/fair_actions.lua").read_text())
+            self.call("bind")
 
     def command(self, script: str) -> str:
+        from .native_attachment import prepare_install_command
+        script = prepare_install_command(script, getattr(self.backend, '_native_attachment', None))
         command = "/sc " + script
         result = native_io(
             "native_command",
