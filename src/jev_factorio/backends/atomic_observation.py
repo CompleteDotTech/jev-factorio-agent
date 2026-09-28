@@ -15,7 +15,7 @@ from ..state import GameSnapshot
 RAW_ITEMS = frozenset({'wood', 'coal', 'iron-ore', 'copper-ore', 'stone'})
 BOUNDS = {'anchor_radius': 256, 'anchor_limit': 129,
           'bootstrap_radius': 1000, 'bootstrap_limit': 129,
-          'bootstrap_output_radius': .15, 'bootstrap_output_limit': 2}
+          'bootstrap_output_radius': .75, 'bootstrap_output_limit': 2}
 
 
 def _map(value: Any, label: str, limit: int = 4096) -> dict:
