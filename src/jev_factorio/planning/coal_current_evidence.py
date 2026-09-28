@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import Counter
 
 from .. import coal_supply, solid_routes
-from ..coal_economic_observation import NativeEconomics
+from ..coal_economic_observation import ManualCycleFacts, NativeEconomics
 from ..memory import CampaignMemory
 from ..telemetry import validate_attempt
 from . import coal_funding, solid_funding
@@ -216,3 +216,80 @@ def decoded_gather_work(native: NativeEconomics, snapshot, memory: CampaignMemor
             'reported_actor_busy_ticks': walking + mining,
             'native_producer_qualified': False,
             'cycle_complete': False, 'mutation_authorized': False}
+
+
+def bound_manual_cycle_attempts(native: NativeEconomics, snapshot, memory: CampaignMemory,
+                                gather_receipt: str, delivery_receipts: list[str]) -> dict:
+    """Join selected v5 native rows to verified checkpoint attempts, diagnostically.
+
+    Matching inventory deltas and deliveries cannot prove that the same coal
+    units supplied those consumers, nor that future manual cycles are needed.
+    """
+    manual = getattr(native, 'manual_cycle', None)
+    if (type(native) is not NativeEconomics or type(manual) is not ManualCycleFacts
+            or native.mutation_authorized is not False
+            or native.native_payback_proven is not False
+            or manual.attempts_bound is not False or manual.cycle_complete is not False
+            or not isinstance(memory, CampaignMemory)
+            or memory.session_id != snapshot.session_id
+            or native.epoch.session_id != snapshot.session_id
+            or native.epoch.tick != snapshot.tick
+            or not isinstance(gather_receipt, str)
+            or not 1 <= len(gather_receipt) <= 128
+            or not isinstance(delivery_receipts, list)
+            or len(delivery_receipts) != len(native.sources)
+            or any(not isinstance(receipt, str) or not 1 <= len(receipt) <= 128
+                   for receipt in delivery_receipts)
+            or len(set(delivery_receipts)) != len(delivery_receipts)
+            or not isinstance(memory.attempt_outcomes, list)
+            or len(memory.attempt_outcomes) > 64):
+        raise ValueError('Manual cycle owner or receipt set is unbound')
+    gather = [row for row in manual.gathers if row.receipt == gather_receipt]
+    if len(gather) != 1:
+        raise ValueError('Manual gather receipt is unavailable')
+    selected = []
+    for source, receipt in zip(native.sources, delivery_receipts):
+        matches = [row for row in manual.deliveries if row.receipt == receipt]
+        if (len(matches) != 1 or matches[0].role != source.target_role
+                or matches[0].unit != source.target_unit
+                or matches[0].tick < gather[0].finished_tick):
+            raise ValueError('Manual delivery receipt differs from current source')
+        selected.append(matches[0])
+    if [row.tick for row in selected] != sorted(row.tick for row in selected):
+        raise ValueError('Manual delivery receipts are unordered')
+    receipts = [gather_receipt, *delivery_receipts]
+    if len(set(receipts)) != len(receipts):
+        raise ValueError('Manual receipt is reused')
+    attempts = []
+    for receipt, row, action in [(gather_receipt, gather[0], 'factory_gather'),
+                                 *((receipt, item, 'factory_insert')
+                                   for receipt, item in zip(delivery_receipts, selected))]:
+        matches = [attempt for attempt in memory.attempt_outcomes
+                   if isinstance(attempt, dict) and attempt.get('receipt') == receipt]
+        if len(matches) != 1:
+            raise ValueError('Manual receipt lacks one controller attempt')
+        attempt = matches[0]
+        validate_attempt(attempt, finished=True)
+        if (attempt['action'] != action or attempt['outcome'] != 'verified'
+                or (action == 'factory_gather'
+                    and (attempt['started_tick'] > row.started_tick
+                         or attempt['finished_tick'] < row.finished_tick))
+                or (action == 'factory_insert'
+                    and (attempt['expected_unit_number'] != row.unit
+                         or not attempt['started_tick'] <= row.tick <= attempt['finished_tick']))):
+            raise ValueError('Manual native receipt differs from verified attempt')
+        attempts.append(attempt['id'])
+    if len(set(attempts)) != len(attempts):
+        raise ValueError('Manual controller attempt is reused')
+    basis = {'schema': 'jev.coal-manual-cycle-attempts.v1',
+             'session_id': snapshot.session_id, 'tick': snapshot.tick,
+             'native_raw_sha256': native.raw_sha256,
+             'journal_asset_sha256': manual.journal_asset_sha256,
+             'bundle_sha256': native.bundle_sha256,
+             'gather_receipt': gather_receipt,
+             'delivery_receipts': delivery_receipts,
+             'attempt_ids': attempts}
+    return {'basis': basis, 'receipt_sha256': digest(basis),
+            'reported_actor_busy_ticks': gather[0].walking_ticks + gather[0].mining_ticks,
+            'cycle_complete': False, 'native_payback_proven': False,
+            'mutation_authorized': False}

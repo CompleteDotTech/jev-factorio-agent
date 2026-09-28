@@ -46,6 +46,17 @@ EXPANDED_OBSERVATION_ASSET = 'observation_v2_anchor_v3.lua'
 WATER_ORIGIN_OBSERVATION_PROFILE = 'e759-observation-v2-water-origin-v4'
 WATER_ORIGIN_OBSERVATION_SHA256 = '3e989a8a6686a964f457a5c9820dc7ad68f1e25dcbd8a8ca3d02218271be6989'
 WATER_ORIGIN_OBSERVATION_ASSET = 'observation_v2_water_origin_v4.lua'
+MANUAL_CYCLE_PROFILE = 'e759-observation-v2-water-origin-v4-manual-cycle-v5'
+
+
+def manual_journal_sha256():
+    return hashlib.sha256(files('jev_factorio').joinpath(
+        'lua/coal_manual_journal_v1.lua').read_bytes()).hexdigest()
+
+
+def connector_ownership_sha256():
+    return hashlib.sha256(files('jev_factorio').joinpath(
+        'lua/connector_ownership.lua').read_bytes()).hexdigest()
 
 
 def _asset_source(name, profile=False):
@@ -258,12 +269,28 @@ def readback(client, *, receipt_path=None):
                                      else PINNED_ASSETS.get(name))
                            for name, value in native['assets'].items())):
                 raise RuntimeError('Observation migration profile requires reconciliation')
+        elif profile == MANUAL_CYCLE_PROFILE:
+            if (result['modules']['connector_ownership'] is not True
+                    or result['modules']['successors']
+                    or result['modules']['coal_manual_journal_v1'] is not True
+                    or native['assets'].get('factory') != PINNED_ASSETS['factory']
+                    or native['assets'].get('observation_v2') != WATER_ORIGIN_OBSERVATION_SHA256
+                    or native['assets'].get('connector_ownership') != connector_ownership_sha256()
+                    or native['assets'].get('coal_manual_journal_v1') != manual_journal_sha256()
+                    or any(value != (WATER_ORIGIN_OBSERVATION_SHA256 if name == 'observation_v2'
+                                     else connector_ownership_sha256() if name == 'connector_ownership'
+                                     else manual_journal_sha256() if name == 'coal_manual_journal_v1'
+                                     else PINNED_ASSETS.get(name))
+                           for name, value in native['assets'].items())):
+                raise RuntimeError('Manual-cycle migration profile requires reconciliation')
         elif profile is not False:
             raise RuntimeError('Unknown native installation profile requires reconciliation')
         for name, expected in native['assets'].items():
             source = _asset_source(name, profile)
             if profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE,
-                           WATER_ORIGIN_OBSERVATION_PROFILE} and name != 'observation_v2':
+                           WATER_ORIGIN_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE} \
+                    and name not in {'observation_v2', 'connector_ownership',
+                                     'coal_manual_journal_v1'}:
                 continue  # Exact e759 hash is pinned; retained closure is reused.
             if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
                 raise RuntimeError('Native Lua source differs from installed manifest')
@@ -310,8 +337,9 @@ def require_asset(attachment, name):
                 else PINNED_ASSETS.get(name))
     if (isinstance(manifest, dict)
             and profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE,
-                            WATER_ORIGIN_OBSERVATION_PROFILE}
-            and name != 'observation_v2'):
+                            WATER_ORIGIN_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE}
+            and name not in {'observation_v2', 'connector_ownership',
+                             'coal_manual_journal_v1'}):
         if expected != PINNED_ASSETS.get(name):
             raise RuntimeError('Retained native asset differs from the legacy profile')
         return True

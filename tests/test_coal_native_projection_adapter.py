@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from jev_factorio.backends.coal_supply import CoalSupplyFactory
+from jev_factorio.backends.native_attachment import manual_journal_sha256, readback
+from jev_factorio.backends.native_manual_cycle_migration import _manifest
 from jev_factorio.coal_economic_observation import NativeEconomicsUnavailable
 from jev_factorio.memory import CampaignMemory
 from jev_factorio.planning.connection_identity import connection_key
@@ -22,7 +24,7 @@ def connector_binding(session):
         'external': 0, 'owned': True, 'pending': None,
         'cells': [{'index': 1, 'position': {'x': .5, 'y': 1.5},
                    'unit_number': 22, 'paid': True, 'external': False}]}}}
-def fixture(monkeypatch):
+def fixture(monkeypatch, *, v5=False):
     raw = {'epoch': {'session_id': 'synthetic-projection', 'tick': 10000,
                      'actor_index': 1, 'actor_unit': 321, 'surface_index': 2,
                      'force_index': 3}}
@@ -38,7 +40,17 @@ def fixture(monkeypatch):
     adapter = CoalSupplyFactory.__new__(CoalSupplyFactory)
     adapter.coal_economic_admission = True
     adapter.targets = sorted(bundle)
-    adapter.native = SimpleNamespace(command=command)
+    backend = SimpleNamespace(_native_attachment=None)
+    if v5:
+        from test_native_manual_cycle_migration import installed_v4
+        from jev_factorio.backends.native_attachment import PROBE
+        row = installed_v4()
+        row['native_installation'] = _manifest(row)
+        row['modules']['connector_ownership'] = True
+        row['modules']['coal_manual_journal_v1'] = True
+        backend._native_attachment = readback(SimpleNamespace(
+            send_command=lambda query: json.dumps(row) if query == '/sc ' + PROBE else None))
+    adapter.native = SimpleNamespace(command=command, backend=backend)
     snapshot = SimpleNamespace(session_id=raw['epoch']['session_id'], tick=raw['epoch']['tick'],
         factory={'acceptance_runtime': {'session_id': raw['epoch']['session_id'],
                                         'actor_unit': raw['epoch']['actor_unit']},
@@ -57,12 +69,14 @@ def fixture(monkeypatch):
     monkeypatch.setattr('jev_factorio.coal_supply.commitment', lambda row: row)
     received_connectors = {}
     def decode_native_graph(value, *, expected_epoch, expected_bundle, unit_qualification,
-                            expected_connectors, expected_routes):
+                            expected_connectors, expected_routes,
+                            expected_journal_asset_sha256):
         if value['epoch'] != expected_epoch or expected_bundle != bundle:
             raise NativeEconomicsUnavailable('native_epoch_or_bundle_mismatch')
         received_connectors.update(expected_connectors)
         assert set(expected_routes) == set(snapshot.memory.connector_ownership['routes'])
         assert unit_qualification['base_version'] == '2.0.77'
+        assert expected_journal_asset_sha256 == (manual_journal_sha256() if v5 else None)
         return SimpleNamespace(epoch=SimpleNamespace(tick=value['epoch']['tick']),
                                actor_unit=value['epoch']['actor_unit'],
                                mutation_authorized=False, native_payback_proven=False)
@@ -81,6 +95,21 @@ def test_fresh_native_query_decodes_bound_unpaid_graph(monkeypatch):
     assert list(received.values()) == [{'unit': 22, 'name': 'pipe',
                                        'position': {'x': .5, 'y': 1.5}}]
     assert len(result['query_sha256']) == len(result['response_sha256']) == 64
+
+
+def test_qualified_v5_connector_and_journal_reach_read_only_projection(monkeypatch):
+    adapter, snapshot, _, calls, _ = fixture(monkeypatch, v5=True)
+    result = adapter.economic_projection(snapshot, snapshot.memory)
+    assert len(calls) == 1
+    assert result['native'].mutation_authorized is False
+
+
+def test_changed_v5_journal_source_refuses_query(monkeypatch):
+    adapter, snapshot, _, calls, _ = fixture(monkeypatch, v5=True)
+    adapter.native.backend._native_attachment['native_installation']['assets']['coal_manual_journal_v1'] = '0' * 64
+    with pytest.raises(RuntimeError, match='verified installed revision'):
+        adapter.economic_projection(snapshot, snapshot.memory)
+    assert calls == []
 
 
 @pytest.mark.parametrize('change', [
