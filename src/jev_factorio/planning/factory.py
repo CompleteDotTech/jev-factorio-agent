@@ -284,13 +284,31 @@ class FactoryPlanner:
         )
 
     def _fuel(self, role, path):
-        current = self.entities[role].get("fuel", {}).get("coal", 0)
-        target = min(50, self.catalog.stack_sizes.get("coal", 50))
+        machine = self.entities[role]
+        current = machine.get("fuel", {}).get("coal", 0)
+        # A new burner needs a five-coal startup, not an immediate stack-sized
+        # mining trip. Established producers retain the existing bulk service.
+        startup = current == 0 and machine.get('products_finished', 0) == 0
+        target = min(5 if startup else 50, self.catalog.stack_sizes.get("coal", 50))
         if current >= min(5, target):
             return None
         needed = target - current
         prerequisite = self._need("coal", needed, path)
-        return prerequisite or self._transfer(role, "coal", needed)
+        plan = prerequisite or self._transfer(role, "coal", needed)
+        item_path = [entry.removeprefix('item:') for entry in path
+                     if entry.startswith('item:')]
+        if (role.startswith('recipe:') and item_path[-1:] == [role.removeprefix('recipe:')]
+                and type(machine.get('unit_number')) is int and machine['unit_number'] > 0):
+            plan = replace(plan, materials={**(plan.materials or {}), 'fuel_prerequisite': {
+                'observed_tick': self.snapshot.tick,
+                'source_role': role,
+                'source_unit': machine['unit_number'],
+                'observed_fuel': current,
+                'target_fuel': target,
+                'planner_item_path': item_path,
+                'startup': startup,
+            }})
+        return plan
 
     def _power(self, path):
         path = self._visit("infrastructure:power", path)
