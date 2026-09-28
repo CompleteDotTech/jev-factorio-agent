@@ -187,6 +187,16 @@ def test_observation_rejects_boolean_runtime_surface(monkeypatch):
         factory.observe(state)
 
 
+def test_fallback_observation_attributes_chest_in_drill_drop_tile(monkeypatch):
+    factory, state, payload = observation_fixture(monkeypatch)
+    factory.backend._drill = NS(drop_position=NS(x=2, y=-.296875))
+    payload['factory']['entities'] = {
+        'bootstrap:output': {'name': 'wooden-chest',
+                             'position': {'x': 2, 'y': -.5}}}
+    result = factory.observe(state)
+    assert result.factory['drill_output_role'] == 'bootstrap:output'
+
+
 def test_receipts_and_capability_fields_are_fresh_not_cached(monkeypatch):
     factory, state, payload = observation_fixture(monkeypatch)
     for tick in (10, 11):
