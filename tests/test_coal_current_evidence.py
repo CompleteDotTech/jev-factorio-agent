@@ -5,7 +5,9 @@ from types import SimpleNamespace
 import pytest
 
 from jev_factorio import coal_supply
-from jev_factorio.planning.coal_current_evidence import prepaid_kit, verified_coal_deliveries
+from jev_factorio.planning.coal_current_evidence import (
+    decoded_gather_work, prepaid_kit, verified_coal_deliveries,
+)
 from jev_factorio.memory import CampaignMemory
 from jev_factorio.telemetry import make_attempt, utc_now
 from test_coal_admission_contract import v2
@@ -145,3 +147,79 @@ def test_manual_transfer_receipt_mismatch_fails_closed(change):
     change(native, snapshot, memory, ids)
     with pytest.raises(ValueError):
         verified_coal_deliveries(native, snapshot, memory, ids)
+
+
+def gathered_fixture():
+    native, snapshot, memory, _ = delivered_fixture()
+    receipt = 'coal-gather-native-v1'
+    plan = {'id': 'manual-gather', 'steps': [{'action': 'factory_gather',
+            'parameters': {'resource': 'coal', 'quantity': 5, 'receipt': receipt}}]}
+    attempt = make_attempt(snapshot.session_id, 'rocket_launch', plan, 0,
+                           {'started_tick': 8990}, process_id='b' * 32)
+    attempt.update(outcome='verified', finished_tick=9020,
+                   finished_at_utc=utc_now(), latency_seconds=0)
+    memory.attempt_outcomes.append(attempt)
+    journal = {'schema': 'jev.coal-manual-gather.v1', 'status': 'complete',
+               'session_id': snapshot.session_id,
+               'actor_index': native.epoch.actor_index, 'actor_unit': native.actor_unit,
+               'surface_index': native.epoch.surface_index,
+               'force_index': native.epoch.force_index, 'receipt': receipt,
+               'resource': 'coal',
+               'started_tick': 8992, 'finished_tick': 9018,
+               'coal_before': 10, 'coal_after': 15,
+               'walking_ticks': 8, 'mining_ticks': 9,
+               'pending': False, 'overflow': False, 'fault': False}
+    return native, snapshot, memory, journal, attempt['id']
+
+
+def test_gather_decoder_reports_only_journaled_busy_work_without_admission():
+    native, snapshot, memory, journal, attempt_id = gathered_fixture()
+    result = decoded_gather_work(native, snapshot, memory, journal, attempt_id)
+    assert result['gathered_coal'] == 5
+    assert result['reported_actor_busy_ticks'] == 17
+    assert result['native_producer_qualified'] is False
+    assert result['cycle_complete'] is False and result['mutation_authorized'] is False
+
+
+@pytest.mark.parametrize('field,value', [
+    ('actor_index', 999), ('actor_unit', 999), ('surface_index', 999), ('force_index', 999),
+    ('receipt', 'unrelated'),
+    ('status', 'partial'), ('pending', True), ('overflow', True),
+    ('fault', 'lost_tick'), ('resource', 'iron-ore'),
+    ('coal_after', 10), ('walking_ticks', 20), ('mining_ticks', 27),
+    ('started_tick', 9020), ('finished_tick', 8990),
+])
+def test_gather_decoder_rejects_changed_owner_partial_and_inflated_work(field, value):
+    native, snapshot, memory, journal, attempt_id = gathered_fixture()
+    journal[field] = value
+    with pytest.raises(ValueError):
+        decoded_gather_work(native, snapshot, memory, journal, attempt_id)
+
+
+def test_gather_decoder_rejects_controller_elapsed_time_substitute():
+    native, snapshot, memory, journal, attempt_id = gathered_fixture()
+    journal['walking_ticks'] = journal['finished_tick'] - journal['started_tick']
+    with pytest.raises(ValueError, match='invalid work'):
+        decoded_gather_work(native, snapshot, memory, journal, attempt_id)
+
+
+@pytest.mark.parametrize('change', [
+    lambda m: m.attempt_outcomes[-1].update(outcome='wait_replanned'),
+    lambda m: m.attempt_outcomes[-1].update(receipt=None),
+    lambda m: m.attempt_outcomes[-1].update(action='factory_wait'),
+    lambda m: m.attempt_outcomes.pop(),
+])
+def test_gather_decoder_requires_matching_verified_attempt(change):
+    native, snapshot, memory, journal, attempt_id = gathered_fixture()
+    change(memory)
+    with pytest.raises(ValueError):
+        decoded_gather_work(native, snapshot, memory, journal, attempt_id)
+
+
+def test_gather_decoder_rejects_reused_receipt_in_checkpoint_history():
+    native, snapshot, memory, journal, attempt_id = gathered_fixture()
+    duplicate = deepcopy(memory.attempt_outcomes[-1])
+    duplicate['id'] = 'c' * 32
+    memory.attempt_outcomes.append(duplicate)
+    with pytest.raises(ValueError, match='reused'):
+        decoded_gather_work(native, snapshot, memory, journal, attempt_id)

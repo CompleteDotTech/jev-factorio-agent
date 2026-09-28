@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from dataclasses import asdict
+from importlib.resources import files
 
 import pytest
 
@@ -35,6 +36,19 @@ def test_exact_v3_manifest_and_v4_hash_required():
     row['native_installation']['assets']['observation_v2'] = '0' * 64
     with pytest.raises(RuntimeError, match='Installed v3 assets'):
         _manifest(row)
+
+
+def test_retained_v4_profile_cannot_silently_adopt_optional_coal_journal():
+    row = installed_v3()
+    row['native_installation'] = _manifest(row)
+    row['modules']['coal_manual_journal_v1'] = True
+    row['native_installation']['assets']['coal_manual_journal_v1'] = hashlib.sha256(
+        files('jev_factorio').joinpath('lua/coal_manual_journal_v1.lua').read_bytes()).hexdigest()
+    class Client:
+        def send_command(self, command):
+            return json.dumps(row)
+    with pytest.raises(RuntimeError, match='Observation migration profile'):
+        readback(Client())
 
 
 @pytest.mark.parametrize('field,value', [
