@@ -14,6 +14,7 @@ import statistics
 import sys
 import tempfile
 import time
+import os
 from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
@@ -124,7 +125,104 @@ def benchmark(samples):
             'results':results}
 
 
+def paired_benchmark(samples):
+    """Compare current composition with one discarded, equivalent compilation.
+
+    The control recreates the redundant *work* removed from the old adapter
+    chain, while both arms use the same current, demand-aware scheduler. It is
+    deliberately not a claim about an unmodified historical checkout.
+    """
+    if not 5 <= samples <= 10000:
+        raise ValueError('Choose 5..10000 samples')
+    assert_inputs_unchanged()
+    results = {}
+    for name, science in [('ready_science', 20), ('ready_science_craft', 0)]:
+        measures = {arm: {'wall_ns': [], 'process_cpu_ns': [],
+                          'planner_constructors': [], 'expansion_visits': []}
+                    for arm in ('current', 'redundant_control')}
+        original_init, original_visit = ReadyWorkPlanner.__init__, FactoryPlanner._visit
+        counts = Counter()
+
+        def initialize(self, *args, **kwargs):
+            counts['builders'] += 1
+            return original_init(self, *args, **kwargs)
+
+        def expand(self, *args, **kwargs):
+            counts['visits'] += 1
+            return original_visit(self, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            backend, _ = progress_scenario(science=science)
+            loop = controller(backend, Path(directory), kind=RouteLoop)
+            compile_once = loop._compile_candidates
+
+            def compile_with_discard(snapshot):
+                compile_once(snapshot)  # The historical adapter's discarded work.
+                return compile_once(snapshot)
+
+            # Warm both arms before recording. The fixture is immutable for
+            # measurements; alternate order to reduce monotonic host drift.
+            loop._work_candidates(backend.state)
+            with patch.object(loop, '_compile_candidates', compile_with_discard):
+                loop._work_candidates(backend.state)
+            with patch.object(ReadyWorkPlanner, '__init__', initialize), \
+                    patch.object(FactoryPlanner, '_visit', expand):
+                for index in range(samples):
+                    pair = {}
+                    order = ('current', 'redundant_control') if index % 2 == 0 else (
+                        'redundant_control', 'current')
+                    for arm in order:
+                        counts.clear()
+                        with patch.object(loop, '_compile_candidates',
+                                          compile_with_discard if arm == 'redundant_control'
+                                          else compile_once):
+                            wall_start, cpu_start = time.perf_counter_ns(), time.process_time_ns()
+                            plans, blocker = loop._work_candidates(backend.state)
+                            cpu_elapsed = time.process_time_ns() - cpu_start
+                            wall_elapsed = time.perf_counter_ns() - wall_start
+                        values = measures[arm]
+                        values['wall_ns'].append(wall_elapsed)
+                        values['process_cpu_ns'].append(cpu_elapsed)
+                        values['planner_constructors'].append(counts['builders'])
+                        values['expansion_visits'].append(counts['visits'])
+                        pair[arm] = json.dumps({'plans': [p.to_dict() for p in plans],
+                                                'blocker': blocker}, sort_keys=True)
+                    if pair['current'] != pair['redundant_control']:
+                        raise RuntimeError('Paired arms changed frontier semantics')
+        results[name] = {
+            'arms': {arm: {key: distribution(values) for key, values in metrics.items()}
+                     for arm, metrics in measures.items()},
+            'paired_frontiers_equal': True,
+            'paired_cpu_delta_ns': distribution([
+                redundant - current for redundant, current in zip(
+                    measures['redundant_control']['process_cpu_ns'],
+                    measures['current']['process_cpu_ns'])]),
+            'paired_wall_delta_ns': distribution([
+                redundant - current for redundant, current in zip(
+                    measures['redundant_control']['wall_ns'],
+                    measures['current']['wall_ns'])]),
+        }
+    assert_inputs_unchanged()
+    return {'schema': 1, 'evidence': 'paired_deterministic_fixture', 'native_claim': False,
+            'samples_per_arm': samples, 'clock': 'perf_counter_ns',
+            'cpu_clock': 'process_time_ns',
+            'environment': {'python': sys.version.split()[0], 'platform': platform.platform(),
+                            'logical_cpus': os.cpu_count()},
+            'selected_source_sha256': LOADED_SELECTED_SOURCE_SHA256,
+            'benchmark_input_tree_sha256': LOADED_INPUT_TREE_SHA256,
+            'control': 'one discarded full current-scheduler composition before the same final composition',
+            'measurement_limits': [
+                'Reconstructed redundant-work control, not an unmodified historical revision.',
+                'Both arms use the corrected current scheduler and the same immutable fixture.',
+                'No native game, provider, network, or controlled host contention.',
+                'Timing differences are descriptive; no tiny-time threshold is an acceptance gate.',
+            ], 'results': results}
+
+
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--samples',type=int,default=100)
-    print(json.dumps(benchmark(p.parse_args().samples),indent=2,sort_keys=True,allow_nan=False))
+    p.add_argument('--paired',action='store_true',help='compare equivalent current-scheduler control')
+    args=p.parse_args()
+    print(json.dumps(paired_benchmark(args.samples) if args.paired else benchmark(args.samples),
+                     indent=2,sort_keys=True,allow_nan=False))
