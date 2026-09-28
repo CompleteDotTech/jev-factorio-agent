@@ -26,6 +26,7 @@ def qualified():
     modules = dict.fromkeys(PINNED_ASSETS, True)
     modules['successors'] = False
     modules['connector_ownership'] = False
+    modules['coal_manual_journal_v1'] = False
     return {'schema': 1, 'qualified': True, 'session_id': 'synthetic-session',
             'actor_unit': 17, 'modules': modules, 'solid_intents': [],
             'coal_targets': [], 'coal_admission_evidence': False,

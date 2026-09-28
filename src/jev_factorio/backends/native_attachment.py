@@ -36,6 +36,7 @@ PINNED_ASSETS = {
     'coal_supply': '3ec3b94b03c86cf963328ef9a6f75551ab285968ccfd50d2e2a25c72e89a242e',
     'successors': '7cd7999d3a4fee0faeb157c81487091b05366d919e17f34ae51a3061274d90ae',
 }
+OPTIONAL_ASSETS = {'coal_manual_journal_v1'}
 
 LEGACY_OBSERVATION_PROFILE = 'e759-observation-v2-bound-bootstrap-v2'
 LEGACY_OBSERVATION_SHA256 = 'f51ea4aeb66b5c11366dbfe37cb755f2187152fa634928ac8a911f670d746780'
@@ -69,6 +70,7 @@ local q=rt and rt.coal_supply
 local o=rt and rt.mining_outposts
 local p=rt and rt.production_sites
 local x=rt and rt.successors
+local mj=rt and rt.coal_manual_journal_v1
 local n=rt and rt.native_installation
 local nc=n and n.callbacks
 local a=rt and rt.agent_characters and rt.agent_characters[1]
@@ -102,6 +104,11 @@ if o then ok=ok and o.protocol==1 and i and good(c.observe_mining_outposts) end
 if p then ok=ok and p.protocol==1 and i and good(c.observe_production_sites) end
 if x then ok=ok and x.protocol==1 and i and b and p and j and not o
     and c.successors_enabled==true and good(c.observe_successors) end
+if mj then ok=ok and mj.protocol==1 and mj.session_id==rt.jev_session_id
+    and mj.actor_index==player.index
+    and mj.actor_unit==a.unit_number and mj.surface_index==a.surface.index
+    and mj.force_index==a.force.index and good(mj.tick_handler)
+    and good(mj.begin) and good(mj.finish) and good(mj.observe) end
 if c and c.connector_ledger then ok=ok and c.connector_ledger.protocol==1
     and type(c.connector_ledger.routes)=="table" and good(c.connector_begin)
     and good(c.connector_finish) and good(c.connector_page)
@@ -116,7 +123,8 @@ if n then ok=ok and type(n.assets)=="table" and type(nc)=="table"
     and nc.connector_begin==(c and c.connector_begin)
     and nc.connector_finish==(c and c.connector_finish)
     and nc.connector_page==(c and c.connector_page)
-    and nc.connector_observe==(c and c.observe_connector_ownership) end
+    and nc.connector_observe==(c and c.observe_connector_ownership)
+    and nc.journal_tick==(mj and mj.tick_handler) end
 if c and s then ok=ok and c.observe==s.observer and c.transfer==s.transfer
 elseif c and i then ok=ok and c.observe==i.observer and c.transfer==i.transfer
 elseif c and b then ok=ok and c.observe==b.observer and c.transfer==b.transfer
@@ -127,7 +135,8 @@ local modules={fair_actions=true,factory=c~=nil,launch_readiness=l~=nil,
     observation_v2=c and good(c.observation_snapshot_v2) or false,craft_jobs=j~=nil,
     output_buffers=b~=nil,input_routes=i~=nil,production_sites=p~=nil,
     mining_outposts=o~=nil,solid_routes=s~=nil,coal_supply=q~=nil,
-    successors=x~=nil,connector_ownership=c and c.connector_ledger~=nil or false}
+    successors=x~=nil,connector_ownership=c and c.connector_ledger~=nil or false,
+    coal_manual_journal_v1=mj~=nil}
 rcon.print(helpers.table_to_json({schema=1,qualified=ok==true,
     session_id=rt and rt.jev_session_id or "",actor_unit=a and a.unit_number or 0,
     modules=modules,solid_intents=s and s.intents or {},coal_targets=q and q.targets or {},
@@ -147,7 +156,9 @@ CALLBACKS_EXPR = (
     'connector_begin=c and c.connector_begin or nil, '
     'connector_finish=c and c.connector_finish or nil, '
     'connector_page=c and c.connector_page or nil, '
-    'connector_observe=c and c.observe_connector_ownership or nil}'
+    'connector_observe=c and c.observe_connector_ownership or nil, '
+    'journal_tick=jev_fle_runtime.coal_manual_journal_v1 '
+    'and jev_fle_runtime.coal_manual_journal_v1.tick_handler or nil}'
 )
 
 
@@ -155,7 +166,7 @@ CALLBACKS_EXPR = (
 def _installer_scripts():
     """Recognize only exact bundled installers; never mark arbitrary RCON Lua."""
     root = files('jev_factorio').joinpath('lua')
-    names = tuple(PINNED_ASSETS) + ('connector_ownership',)
+    names = tuple(PINNED_ASSETS) + ('connector_ownership', 'coal_manual_journal_v1')
     scripts = {}
     for name in names:
         source = _asset_source(name)
@@ -214,7 +225,7 @@ def readback(client, *, receipt_path=None):
             or not isinstance(result['session_id'], str) or not result['session_id']
             or type(result['actor_unit']) is not int or result['actor_unit'] < 1
             or not isinstance(result['modules'], dict)
-            or set(result['modules']) != set(PINNED_ASSETS) | {'connector_ownership'}
+            or set(result['modules']) != set(PINNED_ASSETS) | {'connector_ownership'} | OPTIONAL_ASSETS
             or any(type(flag) is not bool for flag in result['modules'].values())):
         raise RuntimeError('Existing native callback installation requires reconciliation')
     native = result['native_installation']

@@ -272,7 +272,22 @@ class NativeFactory:
         if action == "factory_gather":
             resource = parameters["resource"]
             position = self.backend._resources[resource]
+            receipt = parameters.get("receipt")
+            if receipt is not None:
+                attachment = getattr(self.backend, '_native_attachment', None)
+                if attachment is None:
+                    raise RuntimeError('Journaled coal gather requires a qualified native attachment')
+                from .native_attachment import require_asset
+                require_asset(attachment, 'coal_manual_journal_v1')
+                self.command('storage.coal_manual_journal_v1.begin(' + json.dumps(receipt) + ')')
             harvested = self.backend._fair.harvest(resource, position, parameters["quantity"])
+            if receipt is not None:
+                result = decode_native(self.command(
+                    'rcon.print(helpers.table_to_json(storage.coal_manual_journal_v1.finish('
+                    + json.dumps(receipt) + ')))'))
+                if (not isinstance(result, dict) or result.get('status') != 'complete'
+                        or result.get('coal_after', 0) - result.get('coal_before', 0) != harvested):
+                    raise RuntimeError('Native coal gather journal did not complete exactly')
             return f"Harvested {harvested} {resource}"
         if action == "factory_craft":
             self.call("craft", parameters["recipe"], parameters["batches"])

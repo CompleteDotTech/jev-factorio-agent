@@ -140,3 +140,79 @@ def verified_coal_deliveries(native: NativeEconomics, snapshot, memory: Campaign
              'deliveries': selected}
     return {'basis': basis, 'receipts_sha256': digest(basis),
             'cycle_complete': False, 'mutation_authorized': False}
+
+
+def decoded_gather_work(native: NativeEconomics, snapshot, memory: CampaignMemory,
+                        journal: dict, attempt_id: str) -> dict:
+    """Check the proposed v1 native actor-busy journal against one gather attempt.
+
+    This is a *decoder contract*, not an authenticity claim. The v1 journal
+    producer and its source-bound installation are required before its counts
+    may be used in a coal payback or a completed manual-cycle proof. In
+    particular, controller attempt elapsed time is never actor-busy time.
+    """
+    keys = {'schema', 'status', 'session_id', 'actor_index', 'actor_unit', 'surface_index',
+            'force_index', 'receipt', 'resource', 'started_tick',
+            'finished_tick', 'coal_before', 'coal_after', 'walking_ticks',
+            'mining_ticks', 'pending', 'overflow', 'fault'}
+    if (type(native) is not NativeEconomics or not isinstance(memory, CampaignMemory)
+            or memory.session_id != snapshot.session_id
+            or memory.session_id != native.epoch.session_id
+            or snapshot.tick != native.epoch.tick
+            or native.mutation_authorized is not False
+            or not isinstance(journal, dict) or set(journal) != keys
+            or journal['schema'] != 'jev.coal-manual-gather.v1'
+            or journal['status'] != 'complete' or journal['pending'] is not False
+            or journal['overflow'] is not False or journal['fault'] is not False
+            or journal['session_id'] != snapshot.session_id
+            or type(journal['actor_index']) is not int
+            or journal['actor_index'] != native.epoch.actor_index
+            or type(journal['actor_unit']) is not int
+            or journal['actor_unit'] != native.actor_unit
+            or type(journal['surface_index']) is not int
+            or journal['surface_index'] != native.epoch.surface_index
+            or type(journal['force_index']) is not int
+            or journal['force_index'] != native.epoch.force_index
+            or journal['resource'] != 'coal'
+            or not isinstance(attempt_id, str) or not attempt_id
+            or not isinstance(journal['receipt'], str)
+            or not 1 <= len(journal['receipt']) <= 128
+            or not isinstance(memory.attempt_outcomes, list)
+            or len(memory.attempt_outcomes) > 64):
+        raise ValueError('Coal gather journal owner or state is unbound')
+    started, finished = journal['started_tick'], journal['finished_tick']
+    before, after = journal['coal_before'], journal['coal_after']
+    walking, mining = journal['walking_ticks'], journal['mining_ticks']
+    if (type(started) is not int or type(finished) is not int
+            or not 0 <= started < finished <= snapshot.tick
+            or type(before) is not int or type(after) is not int
+            or not 0 <= before < after <= 1_000_000
+            or not 1 <= after - before <= 200
+            or type(walking) is not int or type(mining) is not int
+            or not 0 <= walking <= finished - started
+            or not 1 <= mining <= finished - started
+            or walking + mining > finished - started):
+        raise ValueError('Coal gather journal has invalid work or inventory delta')
+    if any(not isinstance(row, dict) for row in memory.attempt_outcomes):
+        raise ValueError('Coal gather checkpoint attempt history is invalid')
+    if sum(row.get('receipt') == journal['receipt'] for row in memory.attempt_outcomes) != 1:
+        raise ValueError('Coal gather receipt is reused in checkpoint history')
+    matches = [row for row in memory.attempt_outcomes if row.get('id') == attempt_id]
+    if len(matches) != 1:
+        raise ValueError('Coal gather lacks one controller attempt')
+    attempt = matches[0]
+    validate_attempt(attempt, finished=True)
+    if (attempt['action'] != 'factory_gather' or attempt['outcome'] != 'verified'
+            or attempt['receipt'] != journal['receipt']
+            or attempt['started_tick'] > started
+            or attempt['finished_tick'] < finished):
+        raise ValueError('Coal gather attempt does not bind native journal')
+    basis = {'schema': 'jev.coal-gather-work-decoded.v1',
+             'session_id': snapshot.session_id, 'tick': snapshot.tick,
+             'bundle_sha256': native.bundle_sha256,
+             'journal': journal}
+    return {'basis': basis, 'journal_sha256': digest(basis),
+            'gathered_coal': after - before,
+            'reported_actor_busy_ticks': walking + mining,
+            'native_producer_qualified': False,
+            'cycle_complete': False, 'mutation_authorized': False}
