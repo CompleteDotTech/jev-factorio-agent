@@ -273,10 +273,30 @@ def test_furnace_craft_keeps_current_lab_planner_provenance_without_claiming_lab
         {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
         [plan])
     assert context['candidate_evidence'][plan.id]['craft_dependency'] == row['craft_dependency']
-    assert 'later production still needs fresh native checks' in str(questions)
+    assert 'later production still need fresh native receipt and precondition checks' in str(questions)
+    benefit = questions[plan.id + '/benefit']['instructions']
+    observation = questions[plan.id + '/needs_observation']['instructions']
+    assert 'bounded intermediate product' in benefit
+    assert 'current `candidate_evidence`' in benefit
+    assert 'output still requires native receipt verification' in observation
+    assert 'future completion is not a missing start observation' in observation
     stale = replace(plan, materials={**plan.materials, 'craft_dependency': {
         **plan.materials['craft_dependency'], 'observed_tick': state.tick - 1}})
     assert candidate_evidence(state, data, [stale])[stale.id]['craft_dependency'] is None
+    stale_context, stale_questions, _ = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [stale], 'rocket_launch')},
+        [stale])
+    assert stale_context['candidate_evidence'][stale.id]['craft_dependency'] is None
+    assert 'bounded intermediate product' not in stale_questions[stale.id + '/benefit']['instructions']
+    stale_start = replace(plan, materials={**plan.materials,
+        'work_intent': {'observed_tick': state.tick - 1}})
+    stale_start_context, stale_start_questions, _ = question_batch(
+        {'facts': state.for_jev(),
+         **scheduling_context(state, data, [stale_start], 'rocket_launch')},
+        [stale_start])
+    assert stale_start_context['candidate_evidence'][stale_start.id]['craft_start_evidence'] is None
+    assert 'future completion is not a missing start observation' not in (
+        stale_start_questions[stale_start.id + '/needs_observation']['instructions'])
     unrelated = replace(plan, materials={**plan.materials, 'craft_dependency': {
         **plan.materials['craft_dependency'], 'planner_item_path': ['unrelated', 'stone-furnace']}})
     assert candidate_evidence(state, data, [unrelated])[unrelated.id]['craft_dependency'] is None
