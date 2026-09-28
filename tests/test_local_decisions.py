@@ -390,6 +390,64 @@ def test_established_burner_retains_bulk_service_target():
     assert plan.materials['fuel_prerequisite']['startup'] is False
 
 
+def test_native_shaped_startup_fuel_transfer_has_current_paid_start_evidence():
+    state, data = snapshot(inventory={'coal': 5}, player_position=(0, 0)), catalog()
+    data.recipes['copper-plate'] = recipe('copper-plate', {'copper-ore': 1}, 'smelting')
+    role = 'recipe:copper-plate'
+    state.factory['entities'][role] = machine(unit_number=2546, fuel={},
+                                               products_finished=0)
+    state.factory['player_connected'] = True
+    state.factory['player_bound'] = True
+    planner = InputRoutePlanner(data, state, 'rocket_launch')
+    planner._set_focus('lab', 1)
+    plan = planner._fuel(role, ('item:lab', 'item:copper-plate'))
+    step = plan.steps[0]
+    assert step.action == 'factory_insert'
+    assert step.parameters == {'role': role, 'item': 'coal', 'quantity': 5,
+                               'receipt': f'{state.tick}:factory_insert:{role}:coal'}
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    assert row['fuel_prerequisite'] is None
+    assert row['fuel_transfer_start_evidence'] == {
+        'observed_tick': state.tick, 'planner_item_path': ['lab', 'copper-plate'],
+        'burner_role': role, 'burner_unit': 2546, 'fuel_now': 0,
+        'coal_in_inventory_now': 5, 'coal_to_transfer': 5,
+        'native_receipt': step.parameters['receipt'],
+        'basis': 'current_planner_need_owned_burner_and_paid_inventory',
+        'native_transfer_and_later_output_require_verification': True,
+    }
+    context, questions, _ = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
+        [plan])
+    assert context['candidate_evidence'][plan.id]['fuel_transfer_start_evidence'] == row['fuel_transfer_start_evidence']
+    assert 'paid coal transfer' in questions[plan.id + '/benefit']['instructions']
+    assert 'future transfer outcome' in questions[plan.id + '/needs_observation']['instructions']
+
+    def missing(changed_plan=plan):
+        return candidate_evidence(state, data, [changed_plan])[changed_plan.id][
+            'fuel_transfer_start_evidence'] is None
+
+    stale = replace(plan, materials={**plan.materials, 'fuel_prerequisite': {
+        **plan.materials['fuel_prerequisite'], 'observed_tick': state.tick - 1}})
+    assert missing(stale)
+    wrong_role = replace(plan, steps=(replace(step, parameters={**step.parameters,
+        'role': 'recipe:iron-plate'}),))
+    assert missing(wrong_role)
+    wrong_quantity = replace(plan, steps=(replace(step, parameters={**step.parameters,
+        'quantity': 6}),))
+    assert missing(wrong_quantity)
+    wrong_receipt = replace(plan, steps=(replace(step, parameters={**step.parameters,
+        'receipt': 'stale'}),))
+    assert missing(wrong_receipt)
+    state.inventory['coal'] = 4
+    assert missing()
+    state.inventory['coal'] = 5
+    state.factory['entities'][role].pop('fuel')
+    assert missing()
+    state.factory['entities'][role]['fuel'] = {}
+    state.factory['player_bound'] = False
+    assert missing()
+
+
 def test_local_rubric_does_not_require_one_pickup_to_launch_a_rocket():
     state, data, plans = transfers()
     support = scheduling_context(state, data, plans, 'rocket_launch')

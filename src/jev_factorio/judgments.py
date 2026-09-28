@@ -174,6 +174,14 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 if ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('fuel_prerequisite')
                 else ""
             )
+            transfer_start = ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get(
+                'fuel_transfer_start_evidence')
+            transfer_hint = (
+                " `fuel_transfer_start_evidence` ties the paid coal transfer to the current "
+                "owned burner, carried quantity, planner path, and native receipt. The transfer "
+                "and later production still require native verification."
+                if transfer_start else ""
+            )
             questions[plan.id + "/benefit"] = {
                 "type": "score",
                 "instructions": (
@@ -182,7 +190,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "from one bounded local production action. A current "
                     "`raw_prerequisite` is evidence that gathering supplies an input to "
                     "the named native recipe, not that the later craft already happened."
-                    + craft_hint + place_hint + fuel_hint
+                    + craft_hint + place_hint + fuel_hint + transfer_hint
                 ),
                 "criteria": ([
                     "No demonstrated contribution to the bounded production objective",
@@ -217,6 +225,11 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "when present; do not treat the unverified travel outcome as a missing "
                     "start fact. "
                     "Future action outcomes will be verified after execution, not assumed now."
+                    + (" For a paid fuel transfer, `fuel_transfer_start_evidence` describes "
+                       "the current carried coal, owned burner, and exact receipt. Judge "
+                       "start facts from those values; the future transfer outcome is "
+                       "verified by the native receipt."
+                       if transfer_start else "")
                     + (" For a placement, `placement_start_evidence` combines a current "
                        "surveyed site offer with observed actor/queue facts. Judge missing "
                        "start facts from those "
