@@ -11,6 +11,7 @@ from copy import deepcopy
 
 from .scheduling import (RAW_TICKS_PER_ITEM, SAFETY_TICKS, SERVICE_TICKS,
                          TRAVEL_TICKS_PER_TILE, research_schedule)
+from ..production_sites import sources as production_site_sources
 
 
 def _finite(value):
@@ -83,6 +84,35 @@ def _craft_start_evidence(snapshot, catalog, step):
     }
 
 
+def _placement_start_evidence(snapshot, plan):
+    if len(plan.steps) != 1 or plan.steps[0].action != 'factory_place':
+        return None
+    step = plan.steps[0]
+    parameters = step.parameters or {}
+    if not str(parameters.get('anchor', '')).startswith('cell-site:'):
+        return None
+    try:
+        site = production_site_sources(snapshot).get(parameters.get('role'), {})
+    except (ValueError, KeyError, TypeError):
+        return None
+    if (site.get('state') != 'proposed' or site.get('anchor') != parameters.get('anchor')
+            or parameters.get('name') != 'stone-furnace'
+            or step.costs != {'stone-furnace': 1}
+            or _position(site.get('position')) is None):
+        return None
+    return {
+        'observed_tick': snapshot.tick,
+        'source_role': parameters['role'],
+        'site_anchor': parameters['anchor'],
+        'site_position': deepcopy(site['position']),
+        'site_state': 'proposed',
+        'paid_furnace_in_inventory_now': snapshot.inventory.get('stone-furnace', 0) >= 1,
+        'no_source_owned_at_role_now': parameters['role'] not in snapshot.factory.get('entities', {}),
+        'travel_is_lower_bound_not_arrival_proof': True,
+        'later_transport_and_output_require_native_verification': True,
+    }
+
+
 def candidate_evidence(snapshot, catalog, plans) -> dict:
     """Describe the admitted frontier without inventing downstream output."""
     entities = snapshot.factory.get('entities', {})
@@ -97,6 +127,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
     has_solid_offer = any(solid_marker(plan, snapshot) for plan in plans)
     has_coal_offer = any(coal_marker(plan, snapshot) for plan in plans)
     for index, plan in enumerate(plans):
+        placement_start = _placement_start_evidence(snapshot, plan)
         origin = _position(snapshot.player_position)
         travel, actor, unknown, reasons = 0.0, 0.0, [], []
         urgency, outputs, quantities, costs = 0, set(), 0.0, {}
@@ -114,6 +145,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             if step.action == 'factory_gather':
                 evidence = snapshot.factory.get('fair_resource_targets', {}).get(item, {})
                 target = _position(evidence.get('position'))
+            elif step.action == 'factory_place' and placement_start is not None:
+                target = _position(placement_start['site_position'])
             elif role:
                 target = _position(entity.get('position'))
             if passive or step.action in {'factory_craft', 'factory_craft_job',
@@ -244,6 +277,37 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                     'basis': 'current_recursive_planner_provenance_and_native_recipe',
                     'later_steps_require_fresh_native_preconditions': True,
                 }
+        placement_dependency = None
+        provenance = (plan.materials or {}).get('placement_dependency')
+        local = (plan.materials or {}).get('local_objective')
+        target_item = local.get('item') if isinstance(local, dict) else None
+        if placement_start is not None and isinstance(provenance, dict):
+            path = provenance.get('planner_item_path')
+            role = placement_start['source_role']
+            product = role.removeprefix('recipe:')
+            recipe = catalog.recipes.get(product, {})
+            furnace = catalog.machines.get('stone-furnace', {})
+            if (provenance.get('observed_tick') == snapshot.tick
+                    and provenance.get('machine') == 'stone-furnace'
+                    and provenance.get('source_role') == role
+                    and provenance.get('site_anchor') == placement_start['site_anchor']
+                    and isinstance(target_item, str) and bool(target_item)
+                    and isinstance(path, list) and 1 <= len(path) <= 32
+                    and all(isinstance(item, str) and item for item in path)
+                    and path[0] == target_item and path[-1] == product
+                    and recipe.get('name') == product and not recipe.get('hidden')
+                    and catalog.enabled(recipe, snapshot.researched or [])
+                    and bool(furnace.get('categories', {}).get(recipe.get('category')))
+                    and any(row.get('type') == 'item' and row.get('name') == product
+                            and row.get('amount', 0) > 0
+                            for row in recipe.get('products', []))):
+                placement_dependency = {
+                    'observed_tick': snapshot.tick,
+                    'planner_item_path': list(path),
+                    'machine_for_recipe': role,
+                    'basis': 'current_recursive_planner_and_validated_native_site',
+                    'later_flow_and_output_require_fresh_native_preconditions': True,
+                }
         if (isinstance(prerequisite, dict) and prerequisite.get('observed_tick') == snapshot.tick
                 and len(plan.steps) == 1 and plan.steps[0].action == 'factory_gather'):
             step = plan.steps[0]
@@ -295,6 +359,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'gather_start_evidence': gather_start,
             'craft_start_evidence': craft_start,
             'craft_dependency': craft_dependency,
+            'placement_start_evidence': placement_start,
+            'placement_dependency': placement_dependency,
             'research_deadline_tick': min((row['deadline_tick'] for row in schedules
                 if row['item'] in outputs and row['deadline_tick'] is not None), default=None),
             'requires_investment': any(s.action in {'factory_place', 'factory_connect',
