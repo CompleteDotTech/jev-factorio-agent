@@ -234,6 +234,30 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                        and (intent is None or (isinstance(intent, dict)
                             and intent.get('observed_tick') == snapshot.tick))
                        else None)
+        craft_dependency = None
+        provenance = (plan.materials or {}).get('craft_dependency')
+        if (craft_start is not None
+                and craft_start['recipe_unlocked_and_handcraftable'] is True
+                and isinstance(provenance, dict)):
+            path = provenance.get('planner_item_path')
+            local = (plan.materials or {}).get('local_objective')
+            target = local.get('item') if isinstance(local, dict) else None
+            step = plan.steps[0]
+            if (provenance.get('observed_tick') == snapshot.tick
+                    and provenance.get('recipe') == craft_start['native_recipe']
+                    and provenance.get('product') == step.item
+                    and isinstance(path, list) and 1 <= len(path) <= 32
+                    and all(isinstance(item, str) and item for item in path)
+                    and path[-1] == step.item
+                    and isinstance(target, str) and bool(target)
+                    and path[0] == target):
+                craft_dependency = {
+                    'observed_tick': snapshot.tick,
+                    'planner_item_path': list(path),
+                    'current_craft_product': step.item,
+                    'basis': 'current_recursive_planner_provenance_and_native_recipe',
+                    'later_steps_require_fresh_native_preconditions': True,
+                }
         if (isinstance(prerequisite, dict) and prerequisite.get('observed_tick') == snapshot.tick
                 and len(plan.steps) == 1 and plan.steps[0].action == 'factory_gather'):
             step = plan.steps[0]
@@ -289,6 +313,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'raw_prerequisite': prerequisite_evidence,
             'gather_start_evidence': gather_start,
             'craft_start_evidence': craft_start,
+            'craft_dependency': craft_dependency,
             'research_deadline_tick': min((row['deadline_tick'] for row in schedules
                 if row['item'] in outputs and row['deadline_tick'] is not None), default=None),
             'requires_investment': any(s.action in {'factory_place', 'factory_connect',

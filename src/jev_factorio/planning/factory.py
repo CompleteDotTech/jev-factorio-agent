@@ -219,12 +219,23 @@ class FactoryPlanner:
                 prerequisite = self._need(ingredient, count, path)
                 if prerequisite:
                     return prerequisite
-            return self._plan(
+            plan = self._plan(
                 "factory_craft", "inventory", item, have + output * batches,
                 parameters={"recipe": recipe["name"], "batches": batches}, costs=costs,
                 timeout=max(1800, math.ceil(recipe["energy"] * batches * 120)),
                 description=f"Native hand-craft {batches} batches of {recipe['name']}",
             )
+            item_path = [entry.removeprefix("item:") for entry in path
+                         if entry.startswith("item:")]
+            if item_path[-1:] == [item]:
+                plan = replace(plan, materials={**(plan.materials or {}),
+                    "craft_dependency": {
+                        "observed_tick": self.snapshot.tick,
+                        "recipe": recipe["name"],
+                        "product": item,
+                        "planner_item_path": item_path,
+                    }})
+            return plan
         role = "recipe:" + recipe["name"]
         prerequisite = self._production(recipe, role, batches, path)
         if prerequisite:
