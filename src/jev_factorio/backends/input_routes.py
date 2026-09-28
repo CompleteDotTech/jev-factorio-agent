@@ -13,8 +13,13 @@ from ..telemetry import Trace, phase
 class InputRouteFactory:
     def __init__(self, native) -> None:
         self.native = native
-        native.command("\n".join("do\n" + files("jev_factorio").joinpath("lua/" + asset).read_text() + "\nend"
-                                 for asset in ("input_routes.lua", "production_sites.lua")))
+        if getattr(native.backend, '_native_attachment', None) is not None:
+            from .native_attachment import require_asset
+            require_asset(native.backend._native_attachment, 'input_routes')
+            require_asset(native.backend._native_attachment, 'production_sites')
+        else:
+            native.command("\n".join("do\n" + files("jev_factorio").joinpath("lua/" + asset).read_text() + "\nend"
+                                     for asset in ("input_routes.lua", "production_sites.lua")))
 
     def __getattr__(self, name):
         return getattr(self.native, name)
