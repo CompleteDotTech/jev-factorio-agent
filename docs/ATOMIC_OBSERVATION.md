@@ -72,6 +72,12 @@ is unknown; water may use a bounded vanilla water/deepwater tile witness. Anchor
 outside that scope and unsupported tile types remain unknown. They never credit
 material or authorize placement; normal native placement and reach checks remain.
 
+The later, versioned expanded-oil observer keeps water at 256 tiles and searches
+oil at 256, 512 and at most 1,024 tiles, stopping at the first nonempty result.
+Its exact profile, decoder bounds and owner-only retained-session migration are
+documented in [OBSERVATION_ANCHOR_V3.md](OBSERVATION_ANCHOR_V3.md). The earlier
+256-tile installed profile remains recognized and is never silently upgraded.
+
 Global native factory surveys already required for connector/ownership semantics
 are retained. The existing fair raw-resource search is radius-bounded, not newly
 capped by this change. No reduction of all native engine query cost is asserted.

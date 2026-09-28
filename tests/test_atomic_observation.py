@@ -28,7 +28,13 @@ def envelope():
         'bootstrap': {'placed_entities': [], 'drill': False, 'output_connected': False,
                       'iron_ore_collected': 0, 'query_limit': 129},
         'targets': [], 'anchors': [], 'cache': {'hits': 0, 'misses': 5},
-        'bounds': {'anchor_radius': 256, 'anchor_limit': 129,
+        'anchor_diagnostics': {
+            'oil': {'radius': 1024, 'saturated': False},
+            'water': {'radius': 256, 'saturated': False},
+            'selection': 'bounded_witness_not_global_nearest',
+        },
+        'bounds': {'anchor_radius': 1024, 'water_radius': 256,
+                   'oil_query_radii': [256, 512, 1024], 'anchor_limit': 129,
                    'bootstrap_radius': 1000, 'bootstrap_limit': 129,
                    'bootstrap_output_radius': .75, 'bootstrap_output_limit': 2},
     }
@@ -156,6 +162,71 @@ def test_resources_and_anchors_are_fresh_and_never_cached_client_side(monkeypatc
     payload['targets'] = payload['anchors'] = []
     result = backend.observe()
     assert not result.nearby_resources and not backend._resources
+
+
+def test_expanded_oil_anchor_bound_preserves_legacy_and_water_limits(monkeypatch):
+    backend, native, payload, _ = setup(monkeypatch)
+    payload['anchors'] = {'crude-oil': {'name':'crude-oil','surface_index':1,
+                                      'position':{'x':15.5,'y':383.5}}}
+    assert backend.observe().nearby_resources['crude-oil'] > 256
+    payload['anchors'] = {'water': {'name':'water','surface_index':1,
+                                   'position':{'x':3,'y':300}}}
+    with pytest.raises(ValueError, match='outside query bounds'):
+        backend.observe()
+    payload['bounds']['oil_query_radii'] = [256, True, 1024]
+    with pytest.raises(ValueError, match='query bounds'):
+        backend.observe()
+    payload['bounds']['oil_query_radii'] = [256, 512, 1024]
+    payload['anchor_diagnostics']['oil']['radius'] = 256
+    payload['anchors'] = {'crude-oil': {'name':'crude-oil','surface_index':1,
+                                      'position':{'x':15.5,'y':383.5}}}
+    with pytest.raises(ValueError, match='outside query bounds'):
+        backend.observe()
+    payload['anchor_diagnostics']['oil']['radius'] = 1024
+    payload['anchors'] = {'crude-oil': {'name':'crude-oil','surface_index':1,
+                                      'position':{'x':1050,'y':4}}}
+    with pytest.raises(ValueError, match='outside query bounds'):
+        backend.observe()
+
+
+def test_legacy_profile_refuses_expanded_wire_and_accepts_exact_old_bound(monkeypatch):
+    from jev_factorio.backends.native_attachment import LEGACY_OBSERVATION_PROFILE
+    backend, native, payload, _ = setup(monkeypatch)
+    backend._native_attachment = {
+        'native_installation': {'profile': LEGACY_OBSERVATION_PROFILE}}
+    with pytest.raises(ValueError, match='query bounds'):
+        backend.observe()
+    payload['bounds'] = {'anchor_radius': 256, 'anchor_limit': 129,
+                         'bootstrap_radius': 1000, 'bootstrap_limit': 129,
+                         'bootstrap_output_radius': .75, 'bootstrap_output_limit': 2}
+    payload.pop('anchor_diagnostics')
+    assert backend.observe().tick == 10
+    payload['anchors'] = {'crude-oil': {'name':'crude-oil','surface_index':1,
+                                      'position':{'x':15.5,'y':383.5}}}
+    with pytest.raises(ValueError, match='outside query bounds'):
+        backend.observe()
+
+
+def test_fresh_versioned_installation_uses_expanded_wire(monkeypatch):
+    backend, native, payload, _ = setup(monkeypatch)
+    backend._native_attachment = {'native_installation': {'profile': False}}
+    assert backend.observe().tick == 10
+    backend._native_attachment = {'native_installation': False}
+    with pytest.raises(ValueError, match='Unqualified atomic observer profile'):
+        backend.observe()
+
+
+@pytest.mark.parametrize('bad', [
+    {'selection': 'globally_nearest'},
+    {'oil': {'radius': 2048, 'saturated': False}},
+    {'oil': {'radius': 512, 'saturated': 1}},
+    {'water': {'radius': 512, 'saturated': False}},
+])
+def test_expanded_anchor_provenance_must_be_exact(monkeypatch, bad):
+    backend, native, payload, _ = setup(monkeypatch)
+    payload['anchor_diagnostics'].update(bad)
+    with pytest.raises(ValueError, match='anchor diagnostics'):
+        backend.observe()
 
 
 @pytest.mark.parametrize('bad', [True, 0, 130])

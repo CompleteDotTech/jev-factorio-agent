@@ -39,6 +39,15 @@ PINNED_ASSETS = {
 
 LEGACY_OBSERVATION_PROFILE = 'e759-observation-v2-bound-bootstrap-v2'
 LEGACY_OBSERVATION_SHA256 = 'f51ea4aeb66b5c11366dbfe37cb755f2187152fa634928ac8a911f670d746780'
+EXPANDED_OBSERVATION_PROFILE = 'e759-observation-v2-expanded-oil-v3'
+EXPANDED_OBSERVATION_SHA256 = '5cde46b9aea45840c17f820252611defe7b4eb4e82ba3cfe1d0d5d25225a6351'
+EXPANDED_OBSERVATION_ASSET = 'observation_v2_anchor_v3.lua'
+
+
+def _asset_source(name, profile=False):
+    if name == 'observation_v2' and profile != LEGACY_OBSERVATION_PROFILE:
+        return files('jev_factorio').joinpath('lua/' + EXPANDED_OBSERVATION_ASSET)
+    return files('jev_factorio').joinpath('lua/' + name + '.lua')
 
 
 PROBE = r'''local rt=jev_fle_runtime
@@ -142,7 +151,7 @@ def _installer_scripts():
     names = tuple(PINNED_ASSETS) + ('connector_ownership',)
     scripts = {}
     for name in names:
-        source = root.joinpath(name + '.lua')
+        source = _asset_source(name)
         if not source.is_file():
             continue
         body = source.read_text()
@@ -166,9 +175,8 @@ def prepare_install_command(script: str, attachment=None) -> str:
         return script
     if attachment is not None:
         raise RuntimeError('Native module reinstallation during resume requires reconciliation')
-    hashes = {name: hashlib.sha256(
-        files('jev_factorio').joinpath('lua/' + name + '.lua').read_bytes()
-    ).hexdigest() for name in names}
+    hashes = {name: hashlib.sha256(_asset_source(name).read_bytes()).hexdigest()
+              for name in names}
     encoded = json.dumps(hashes, sort_keys=True)
     return script + '\n' + (
         'local rt=assert(jev_fle_runtime); '
@@ -217,20 +225,23 @@ def readback(client, *, receipt_path=None):
                        for value in native['assets'].values())):
             raise RuntimeError('Native installed-source manifest requires reconciliation')
         profile = native['profile']
-        if profile == LEGACY_OBSERVATION_PROFILE:
+        if profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE}:
+            observation_hash = (LEGACY_OBSERVATION_SHA256
+                                if profile == LEGACY_OBSERVATION_PROFILE
+                                else EXPANDED_OBSERVATION_SHA256)
             if (result['modules']['connector_ownership']
                     or result['modules']['successors']
                     or native['assets'].get('factory') != PINNED_ASSETS['factory']
-                    or native['assets'].get('observation_v2') != LEGACY_OBSERVATION_SHA256
-                    or any(value != (LEGACY_OBSERVATION_SHA256 if name == 'observation_v2'
+                    or native['assets'].get('observation_v2') != observation_hash
+                    or any(value != (observation_hash if name == 'observation_v2'
                                      else PINNED_ASSETS.get(name))
                            for name, value in native['assets'].items())):
-                raise RuntimeError('Legacy observation migration profile requires reconciliation')
+                raise RuntimeError('Observation migration profile requires reconciliation')
         elif profile is not False:
             raise RuntimeError('Unknown native installation profile requires reconciliation')
         for name, expected in native['assets'].items():
-            source = files('jev_factorio').joinpath('lua/' + name + '.lua')
-            if profile == LEGACY_OBSERVATION_PROFILE and name != 'observation_v2':
+            source = _asset_source(name, profile)
+            if profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE} and name != 'observation_v2':
                 continue  # Exact e759 hash is pinned; retained closure is reused.
             if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
                 raise RuntimeError('Native Lua source differs from installed manifest')
@@ -270,12 +281,13 @@ def require_asset(attachment, name):
         return False
     if attachment['modules'].get(name) is not True:
         raise RuntimeError('Required native capability was not installed in this session')
-    asset = files('jev_factorio').joinpath('lua/' + name + '.lua').read_bytes()
     manifest = attachment.get('native_installation')
+    profile = manifest.get('profile') if isinstance(manifest, dict) else False
+    asset = _asset_source(name, profile).read_bytes()
     expected = (manifest['assets'].get(name) if isinstance(manifest, dict)
                 else PINNED_ASSETS.get(name))
     if (isinstance(manifest, dict)
-            and manifest.get('profile') == LEGACY_OBSERVATION_PROFILE
+            and profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE}
             and name != 'observation_v2'):
         if expected != PINNED_ASSETS.get(name):
             raise RuntimeError('Retained native asset differs from the legacy profile')

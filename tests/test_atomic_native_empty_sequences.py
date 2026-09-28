@@ -8,6 +8,7 @@ import pytest
 
 from test_atomic_observation import setup
 from jev_factorio.backends.atomic_observation import BOUNDS
+from jev_factorio.backends.native_attachment import LEGACY_OBSERVATION_PROFILE
 
 
 RAW = Path(__file__).parent / 'fixtures' / 'native_empty_bootstrap_2_0_77_sanitized.txt'
@@ -20,6 +21,8 @@ def test_native_empty_bootstrap_wire_preserves_atomic_inventory_and_identity(mon
     raw = RAW.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == RAW_SHA256
     backend, native, payload, calls = setup(monkeypatch, craft=True)
+    backend._native_attachment = {
+        'native_installation': {'profile': LEGACY_OBSERVATION_PROFILE}}
     wire = raw.decode()
     def captured(command):
         calls.append(command)
