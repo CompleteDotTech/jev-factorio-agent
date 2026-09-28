@@ -18,7 +18,7 @@ import re
 import tempfile
 from types import SimpleNamespace
 
-from . import input_routes, mining_outposts, solid_routes
+from . import input_routes, mining_outposts, solid_routes, coal_supply, treatment
 from .acceptance_io import MAX_JSON, MAX_LOG, canonical, load_json, records, sha256, stable_read, write_new
 from .acceptance_boundaries import (final_successor_issues, project_history_issues,
                                     successor_history_issues)
@@ -33,6 +33,7 @@ from .telemetry import validate_phase
 
 SCHEMA = 'jev-factorio.integration-evidence.v1'
 TRIAL_SCHEMA = 'jev-factorio.integration-trial.v1'
+TRIAL_SCHEMA_V2 = 'jev-factorio.integration-trial.v2'
 TRIAL_KEYS = {
     'schema', 'evidence_kind', 'arm', 'comparison_axis', 'experiment_sha256',
     'workload_sha256', 'initial_save_sha256', 'capacity_profile_sha256',
@@ -45,6 +46,7 @@ TRIAL_KEYS = {
 }
 FLAGS = {'background_work', 'furnace_output_buffers', 'furnace_input_belts',
          'mining_outposts', 'ore_side_successors', 'solid_routes', 'solid_science_policy'}
+COAL_FLAGS = {'coal_supply', 'coal_kit_policy'}
 REQUIRED_GATES = [
     'native_coal_mining_bootstrap_and_network_fuel_provenance',
     'downstream_chain_causal_use_review',
@@ -111,8 +113,12 @@ def _retains_prefix(before, after):
 
 
 def validate_trial(trial: dict) -> None:
-    if not isinstance(trial, dict) or set(trial) != TRIAL_KEYS or trial['schema'] != TRIAL_SCHEMA:
+    if not isinstance(trial, dict) or trial.get('schema') not in {TRIAL_SCHEMA, TRIAL_SCHEMA_V2}:
         raise ValueError('Invalid integration trial schema')
+    complete = trial['schema'] == TRIAL_SCHEMA_V2
+    if set(trial) != TRIAL_KEYS | ({'coal_targets', 'treatment_sha256', 'initial_checkpoint_sha256',
+                                   'vm_uuid', 'production_vm_uuid'} if complete else set()):
+        raise ValueError('Invalid integration trial fields')
     if (trial['evidence_kind'] not in {'fixture', 'native_isolated', 'native_campaign'}
             or trial['arm'] not in {'baseline', 'treatment'}
             or trial['comparison_axis'] not in {'algorithm', 'capacity', 'unmatched'}):
@@ -124,10 +130,12 @@ def validate_trial(trial: dict) -> None:
     if not _digest(trial['expected_commit'], 40):
         raise ValueError('Invalid source revision')
     configuration = trial['configuration']
-    if (not isinstance(configuration, dict) or set(configuration) != FLAGS | {'factory_scheduling'}
+    flags = FLAGS | (COAL_FLAGS if complete else set())
+    if (not isinstance(configuration, dict) or set(configuration) != flags | {'factory_scheduling'}
             or configuration['factory_scheduling'] != 'ready-work'
-            or any(type(configuration[k]) is not bool for k in FLAGS)
+            or any(type(configuration[k]) is not bool for k in flags)
             or configuration['solid_routes'] is not True
+            or complete and configuration['coal_supply'] is not True
             or configuration['furnace_input_belts'] and not configuration['furnace_output_buffers']
             or configuration['ore_side_successors'] and (
                 not configuration['background_work'] or not configuration['furnace_input_belts']
@@ -146,6 +154,20 @@ def validate_trial(trial: dict) -> None:
         if not isinstance(value, str) or not 1 <= len(value) <= 256 or any(ord(c) < 32 or ord(c) > 126 for c in value):
             raise ValueError('Explicit predeclared model identity required')
     validate_intents(trial['solid_intents'])
+    if complete:
+        if not _digest(trial['initial_checkpoint_sha256']):
+            raise ValueError('Invalid predeclared checkpoint digest')
+        if any(not isinstance(trial[key], str) or not 0 < len(trial[key]) <= 128
+               for key in ('vm_uuid', 'production_vm_uuid')):
+            raise ValueError('Invalid predeclared VM identity')
+        coal_supply.validate_transport_intents(coal_supply.validate_targets(trial['coal_targets']),
+                                               trial['solid_intents'])
+        binding = {'schema': treatment.SCHEMA, 'solid_intents': trial['solid_intents'],
+                   'coal_targets': trial['coal_targets'],
+                   'solid_science_policy': configuration['solid_science_policy'],
+                   'coal_kit_policy': configuration['coal_kit_policy']}
+        if trial['treatment_sha256'] != treatment.digest(binding):
+            raise ValueError('Integration trial treatment digest mismatch')
     for key in ('declared_at_utc', 'original_cutoff_utc', 'runtime_cutoff_utc'):
         _utc(trial[key])
     bounds = {'minimum_window_seconds': (1800, 86400),
@@ -238,11 +260,23 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                or 'solid_science_policy' not in cp or type(cp.get('solid_science_policy')) is not bool
                or cp['solid_science_policy'] is not trial['configuration']['solid_science_policy'],
                'checkpoint_treatment_mismatch')
+        if trial['schema'] == TRIAL_SCHEMA_V2:
+            reject(cp.get('coal_targets') != trial['coal_targets']
+                   or cp.get('coal_kit_policy') is not trial['configuration']['coal_kit_policy']
+                   or cp.get('coal_supply_schema') != 1
+                   or not isinstance(cp.get('coal_commitments'), dict)
+                   or not isinstance(cp.get('coal_epoch'), dict) or not cp['coal_epoch']
+                   or cp.get('coal_epoch') != cp.get('solid_epoch'),
+                   'checkpoint_coal_treatment_mismatch')
         reject(any((field in cp) is not trial['configuration'][flag] for flag, field in extensions.items()),
                'checkpoint_composition_mismatch')
     for field in ('input_commitments', 'outpost_commitments', 'successor_receipts'):
         reject(not _retains_prefix(initial.get(field, {}), final.get(field, {})),
                'composed_ownership_regressed')
+    if trial['schema'] == TRIAL_SCHEMA_V2:
+        reject(not _retains_prefix(initial.get('coal_commitments', {}),
+                                   final.get('coal_commitments', {})),
+               'coal_ownership_regressed')
     for key, before in initial.get('successor_projects', {}).items():
         after = final.get('successor_projects', {}).get(key)
         reject(not isinstance(after, dict) or any(
@@ -313,7 +347,8 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                or record.get('model_call') is not (decision.get('model_called') if isinstance(decision, dict) else False),
                'decision_model_call_mismatch')
         reject(type(record.get('status')) is not str or record.get('status') not in {'running', 'completed'}
-               or record.get('solid_route_fault') is not False,
+               or record.get('solid_route_fault') is not False
+               or trial['schema'] == TRIAL_SCHEMA_V2 and record.get('coal_supply_fault') is not False,
                'controller_or_route_failure')
         reject(terminal_seen, 'records_after_terminal_completion')
         terminal_seen = record.get('status') == 'completed'
@@ -735,6 +770,9 @@ def analyze(gameplay: Path, trial_path: Path, initial_checkpoint: Path, final_ch
     captured = {'gameplay': stable_read(gameplay, MAX_LOG), 'trial': stable_read(trial_path, MAX_JSON),
                 'initial_checkpoint': stable_read(initial_checkpoint), 'final_checkpoint': stable_read(final_checkpoint)}
     trial = load_json(captured['trial'])
+    if (trial.get('schema') == TRIAL_SCHEMA_V2
+            and sha256(captured['initial_checkpoint']) != trial.get('initial_checkpoint_sha256')):
+        raise ValueError('Predeclared checkpoint differs from analyzed input')
     initial = load_json(captured['initial_checkpoint'])
     final = load_json(captured['final_checkpoint'])
     result = analyze_rows(records(captured['gameplay']), trial, initial, final)
@@ -767,6 +805,11 @@ def compare(baseline: dict, treatment: dict, baseline_trial: dict, treatment_tri
                   'campaign_treatment', 'requested_model', 'resolved_model',
                   'minimum_window_seconds', 'max_observation_gap_seconds',
                   'max_no_science_progress_seconds', 'minimum_timing_samples', 'regression_limits'}
+    if baseline_trial['schema'] != treatment_trial['schema']:
+        issues.add('uncontrolled_trial_schema')
+    if baseline_trial['schema'] == treatment_trial['schema'] == TRIAL_SCHEMA_V2:
+        controlled.update(('coal_targets', 'treatment_sha256', 'initial_checkpoint_sha256',
+                           'vm_uuid', 'production_vm_uuid'))
     controlled |= {'capacity_profile_sha256'} if axis == 'algorithm' else {'expected_commit', 'expected_source_sha256'}
     if any(baseline_trial[k] != treatment_trial[k] for k in controlled):
         issues.add('uncontrolled_pair_difference')

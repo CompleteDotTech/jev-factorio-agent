@@ -319,6 +319,9 @@ class HierarchicalLoop(AgentLoop):
             if getattr(self, "_solid_routes_enabled", False):
                 record["acceptance_configuration"]["solid_routes"] = True
                 record["acceptance_configuration"]["solid_science_policy"] = self._solid_science_policy
+            if hasattr(self, '_coal_targets'):
+                record['acceptance_configuration']['coal_supply'] = True
+                record['acceptance_configuration']['coal_kit_policy'] = self._coal_kit_policy
         previous = previous_timing(self)
         if previous is not None:
             record["previous_iteration_timing"] = previous

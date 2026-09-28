@@ -66,6 +66,7 @@ class SupervisorConfig:
     consolidated_observations: bool = False
     lead_time_supply: bool = False
     coverage_margin_lookahead: bool = False
+    production_treatment: Path | None = None
     max_repair_attempts: int = 3
 
     def validate(self) -> None:
@@ -94,6 +95,11 @@ class SupervisorConfig:
             raise ValueError('Mining outposts require furnace input belts')
         if self.furnace_input_belts and not self.furnace_output_buffers:
             raise ValueError("Furnace input belts require furnace output buffers")
+        if self.production_treatment is not None:
+            from .treatment import load
+            if self.factory_scheduling != 'ready-work':
+                raise ValueError('Production treatment requires ready-work scheduling')
+            load(self.production_treatment)
         if self.run_id is not None:
             identifier(self.run_id)
         for name in ("started_at", "duration_hours", "poll_seconds", "hang_seconds",
@@ -332,6 +338,9 @@ class Supervisor:
             configuration['mining_outposts'] = True
         if self.config.ore_side_successors:
             configuration['ore_side_successors'] = True
+        if self.config.production_treatment is not None:
+            from .treatment import load
+            _, configuration['production_treatment_sha256'] = load(self.config.production_treatment)
         for name in ("campaign_diagnostics", "profile_observations", "consolidated_observations",
                      "lead_time_supply", "coverage_margin_lookahead"):
             if getattr(self.config, name):
@@ -446,6 +455,12 @@ class Supervisor:
                      "lead_time_supply", "coverage_margin_lookahead"):
             if getattr(self.config, name):
                 command.append("--" + name.replace("_", "-"))
+        if self.config.production_treatment is not None:
+            from .treatment import load
+            _, digest = load(self.config.production_treatment)
+            if self.state.get('gameplay_configuration', {}).get('production_treatment_sha256') != digest:
+                raise ValueError('Production treatment changed after supervisor initialization')
+            command.extend(['--production-treatment', str(self.config.production_treatment.resolve())])
         if self.config.research_dir is not None:
             command.extend(["--run-dir", str(
                 self.config.research_dir.resolve() / f"invocation-{uuid4()}"
@@ -1018,6 +1033,7 @@ def cli() -> None:
     parser.add_argument("--furnace-input-belts", action="store_true")
     parser.add_argument("--mining-outposts", action="store_true")
     parser.add_argument("--ore-side-successors", action="store_true")
+    parser.add_argument("--production-treatment", type=Path)
     for name in ("campaign-diagnostics", "profile-observations", "consolidated-observations",
                  "lead-time-supply", "coverage-margin-lookahead"):
         parser.add_argument("--" + name, action="store_true")
