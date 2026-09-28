@@ -18,11 +18,6 @@ from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
 
-from jev_factorio.planning.ready_work import ReadyWorkPlanner
-from jev_factorio.planning.factory import FactoryPlanner
-from test_input_route_integration import RouteLoop, controller
-from test_maintenance_progress import progress_scenario
-
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_FILES = (
     'src/jev_factorio/controller.py',
@@ -57,6 +52,27 @@ def benchmark_input_tree_sha256():
     return digest.hexdigest()
 
 
+LOADED_SELECTED_SOURCE_SHA256 = {
+    path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+    for path in SOURCE_FILES
+}
+LOADED_INPUT_TREE_SHA256 = benchmark_input_tree_sha256()
+
+# Capture provenance before loading the measured planner and fixture modules.
+from jev_factorio.planning.ready_work import ReadyWorkPlanner
+from jev_factorio.planning.factory import FactoryPlanner
+from test_input_route_integration import RouteLoop, controller
+from test_maintenance_progress import progress_scenario
+
+
+def assert_inputs_unchanged():
+    if (LOADED_SELECTED_SOURCE_SHA256 != {
+        path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+        for path in SOURCE_FILES
+    } or LOADED_INPUT_TREE_SHA256 != benchmark_input_tree_sha256()):
+        raise RuntimeError('Benchmark inputs changed after provenance capture')
+
+
 def distribution(values):
     values=sorted(values)
     return {'count':len(values),'median':statistics.median(values),
@@ -66,11 +82,7 @@ def distribution(values):
 def benchmark(samples):
     if not 5 <= samples <= 10000:
         raise ValueError('Choose 5..10000 samples')
-    selected_source_sha256 = {
-        path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
-        for path in SOURCE_FILES
-    }
-    input_tree_sha256 = benchmark_input_tree_sha256()
+    assert_inputs_unchanged()
     results={}
     for name,science in [('ready_science',20),('ready_science_craft',0)]:
         wall,cpu,builders,visits,signatures=[],[],[],[],set()
@@ -100,16 +112,12 @@ def benchmark(samples):
                        'planner_constructors':distribution(builders),'expansion_visits':distribution(visits),
                        'stable_frontier':len(signatures)==1,
                        'frontier':json.loads(next(iter(signatures))) if len(signatures)==1 else None}
-    if (selected_source_sha256 != {
-        path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
-        for path in SOURCE_FILES
-    } or input_tree_sha256 != benchmark_input_tree_sha256()):
-        raise RuntimeError('Benchmark inputs changed while samples were running')
+    assert_inputs_unchanged()
     return {'schema':1,'evidence':'deterministic_fixture','native_claim':False,
             'samples':samples,'clock':'perf_counter_ns','cpu_clock':'process_time_ns',
             'environment':{'python':sys.version.split()[0],'platform':platform.platform()},
-            'selected_source_sha256':selected_source_sha256,
-            'benchmark_input_tree_sha256':input_tree_sha256,
+            'selected_source_sha256':LOADED_SELECTED_SOURCE_SHA256,
+            'benchmark_input_tree_sha256':LOADED_INPUT_TREE_SHA256,
             'measurement_limits':['Current-source scenarios, not paired pre/post source revisions.',
                                   'Input tree hashes package/test Python, benchmark script and pyproject; external dependencies are not hashed.',
                                   'No Factorio engine, provider, network or contention-controlled host.'],
