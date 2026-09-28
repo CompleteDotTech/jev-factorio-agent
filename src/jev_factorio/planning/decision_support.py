@@ -178,6 +178,46 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
         scope = (intent.get('scope') if isinstance(intent, dict)
                  and intent.get('observed_tick') == snapshot.tick else None)
         scope = scope if scope in {'immediate', 'lookahead'} else 'unclassified'
+        prerequisite = (plan.materials or {}).get('raw_prerequisite')
+        prerequisite_evidence = None
+        gather_start = None
+        if (isinstance(prerequisite, dict) and prerequisite.get('observed_tick') == snapshot.tick
+                and len(plan.steps) == 1 and plan.steps[0].action == 'factory_gather'):
+            step = plan.steps[0]
+            ingredient = (step.parameters or {}).get('resource')
+            parent = prerequisite.get('direct_product')
+            recipe_name = prerequisite.get('recipe')
+            path = prerequisite.get('planner_item_path')
+            recipe = catalog.recipes.get(recipe_name, {})
+            if (ingredient == prerequisite.get('ingredient')
+                    and isinstance(parent, str) and parent
+                    and isinstance(path, list) and 2 <= len(path) <= 32
+                    and path[-2:] == [parent, ingredient]
+                    and any(product.get('type') == 'item' and product.get('name') == parent
+                            and product.get('amount', 0) > 0 for product in recipe.get('products', []))
+                    and any(entry.get('type') == 'item' and entry.get('name') == ingredient
+                            and entry.get('amount', 0) > 0 for entry in recipe.get('ingredients', []))):
+                prerequisite_evidence = {
+                    'observed_tick': snapshot.tick,
+                    'direct_recipe': recipe_name,
+                    'direct_product': parent,
+                    'planner_item_path': list(path),
+                    'basis': 'current_planner_dependency_and_native_catalog_recipe',
+                    'later_steps_require_fresh_native_preconditions': True,
+                }
+                site = snapshot.factory.get('fair_resource_targets', {}).get(ingredient, {})
+                gather_start = {
+                    'resource_in_current_observation': ingredient in snapshot.nearby_resources,
+                    'fair_target_identity_observed': (
+                        isinstance(site, dict) and isinstance(site.get('name'), str)
+                        and bool(site['name'].strip())
+                        and (ingredient == 'wood' or site['name'] == ingredient)
+                        and type(site.get('surface_index')) is int and site['surface_index'] > 0
+                        and _position(site.get('position')) is not None),
+                    'resource_inventory_now': snapshot.inventory.get(ingredient, 0),
+                    'target_inventory_after_this_step': step.threshold,
+                    'travel_is_lower_bound_not_arrival_proof': True,
+                }
         if plan.goal == 'stockpile_fuel' and all(
                 step.action in {'walk_to_coal', 'mine_coal'} for step in plan.steps):
             highest = max((step.threshold for step in plan.steps
@@ -193,6 +233,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'actor_ticks_estimate': None if unknown else math.ceil(actor),
             'processed_units': quantities, 'material_costs': costs,
             'delivers_or_crafts': sorted(outputs), 'unknowns': sorted(set(unknown)),
+            'raw_prerequisite': prerequisite_evidence,
+            'gather_start_evidence': gather_start,
             'research_deadline_tick': min((row['deadline_tick'] for row in schedules
                 if row['item'] in outputs and row['deadline_tick'] is not None), default=None),
             'requires_investment': any(s.action in {'factory_place', 'factory_connect',
