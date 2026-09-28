@@ -195,7 +195,9 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                 gather_start = {
                     'resource_in_current_observation': ingredient in snapshot.nearby_resources,
                     'fair_target_identity_observed': (
-                        isinstance(site, dict) and site.get('name') == ingredient
+                        isinstance(site, dict) and isinstance(site.get('name'), str)
+                        and bool(site['name'].strip())
+                        and (ingredient == 'wood' or site['name'] == ingredient)
                         and type(site.get('surface_index')) is int and site['surface_index'] > 0
                         and _position(site.get('position')) is not None),
                     'resource_inventory_now': snapshot.inventory.get(ingredient, 0),
