@@ -13,7 +13,8 @@ from .loop import AgentLoop
 from .research_log import ResearchLog, RunConfiguration, validate_output_paths
 
 
-def make_backend(name: str, resume: bool = False, adopt_session: bool = False):
+def make_backend(name: str, resume: bool = False, adopt_session: bool = False,
+                 setup_timing=None):
     if name == "mock":
         return MockBackend()
     if name == "play_api":
@@ -23,7 +24,11 @@ def make_backend(name: str, resume: bool = False, adopt_session: bool = False):
     if name == "fle":
         from .backends.fle import FleBackend
         b = FleBackend()
-        b.start(resume=resume, adopt_session=adopt_session)
+        if setup_timing is None:
+            b.start(resume=resume, adopt_session=adopt_session)
+        else:
+            b.start(resume=resume, adopt_session=adopt_session,
+                    setup_timing=setup_timing)
         return b
     raise SystemExit(f"unknown backend: {name}")
 
@@ -51,6 +56,8 @@ def cli() -> None:
                    help="Opt-in bounded production choices; does not enable concurrent mutations or belts")
     p.add_argument("--campaign-diagnostics", action="store_true",
                    help="30-minute progress, host pressure, eligibility and blocked-investment evidence")
+    p.add_argument("--setup-timing-file", type=Path,
+                   help="Exclusive content-free one-use initialization timing result")
     p.add_argument("--profile-observations", action="store_true",
                    help="Content-free observation RPC timing; hierarchical FLE only")
     p.add_argument("--consolidated-observations", action="store_true",
@@ -108,6 +115,9 @@ def cli() -> None:
         p.error("--adopt-session requires hierarchical FLE --resume and a new checkpoint")
     if args.steps is not None and args.steps < 0:
         p.error("--steps must be nonnegative")
+    if args.setup_timing_file and (args.steps != 1 or args.duration_hours is not None
+                                   or args.controller != 'hierarchical'):
+        p.error("--setup-timing-file requires one hierarchical step")
     if not 0 <= args.confidence_floor <= 1:
         p.error("--confidence-floor must be finite and in [0, 1]")
     if args.backend not in {"mock", "play_api", "fle"}:
@@ -257,6 +267,18 @@ def cli() -> None:
             coal_economic_admission=treatment.get('coal_economic_admission', False) if treatment else False,
             treatment_sha256=treatment_digest,
         )
+    setup_timing = None
+    if args.setup_timing_file:
+        target = args.setup_timing_file.absolute()
+        if (target.exists() or target.is_symlink() or not target.parent.is_dir()
+                or any(other and target == Path(other).absolute()
+                       for other in (args.checkpoint, args.log_file, args.dashboard_events))):
+            p.error("Setup timing output must be a new separate file in an existing directory")
+        from .setup_timing import SetupTiming
+        import atexit
+        setup_timing = SetupTiming(target, backend_expected=args.backend == 'fle')
+        atexit.register(setup_timing.write)
+        setup_timing.mark('setup_start')
     with ExitStack() as cleanup:
         research = None
         if run_dir is not None:
@@ -264,6 +286,8 @@ def cli() -> None:
                 research = cleanup.enter_context(ResearchLog(run_dir, configuration))
             except (OSError, ValueError) as error:
                 p.error(f"Cannot initialize research evidence ({type(error).__name__}); backend not started")
+        if setup_timing:
+            setup_timing.mark('research_ready')
         writer = None
         if args.dashboard_events:
             from .dashboard import EventWriter
@@ -272,6 +296,8 @@ def cli() -> None:
                     args.dashboard_events, forbidden=(args.checkpoint, args.log_file)))
             except (OSError, ValueError) as error:
                 p.error(str(error))
+        if setup_timing:
+            setup_timing.mark('dashboard_ready')
         if args.controller == "flat":
             options["research_log"] = research
             loop = AgentLoop(make_backend(args.backend, resume=args.resume), **options)
@@ -339,7 +365,17 @@ def cli() -> None:
                             raise ValueError('Checkpoint changed during composed preflight')
                     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
                         p.error(f'Composed treatment checkpoint preflight failed: {error}')
-            backend = make_backend(args.backend, resume=args.resume, adopt_session=args.adopt_session)
+            if setup_timing:
+                setup_timing.mark('preflight_ready')
+            if setup_timing:
+                backend = make_backend(args.backend, resume=args.resume,
+                                       adopt_session=args.adopt_session,
+                                       setup_timing=setup_timing)
+            else:
+                backend = make_backend(args.backend, resume=args.resume,
+                                       adopt_session=args.adopt_session)
+            if setup_timing:
+                setup_timing.mark('backend_ready')
             if args.backend == "fle" and args.profile_observations:
                 backend.profile_observations = True
                 backend.consolidated_observations = args.consolidated_observations
@@ -347,6 +383,8 @@ def cli() -> None:
                                     target=args.target, policy=args.policy, checkpoint=args.checkpoint,
                                     resume_controller=args.resume_controller,
                                     factory_scheduling=args.factory_scheduling, **options)
+        if setup_timing:
+            setup_timing.mark('controller_ready')
         if writer is not None:
             from .dashboard import attach
             attach(loop, writer)
@@ -355,12 +393,16 @@ def cli() -> None:
         if args.backend == "fle" and (args.log_file or args.dashboard_events):
             from .research_catalog import export_sidecar
             export_sidecar(getattr(loop, "backend", None), Path(args.log_file or args.dashboard_events).parent)
+        if setup_timing:
+            setup_timing.mark('outputs_ready')
         if research is not None:
             memory = getattr(loop, "memory", None)
             research.emit("controller_initialized", {
                 "requested_model": getattr(getattr(loop, "jev", None), "model", None),
                 "model_is_mock": bool(getattr(getattr(loop, "jev", None), "is_mock", False)),
             }, session_id=getattr(memory, "session_id", None))
+        if setup_timing:
+            setup_timing.mark('initialized')
         try:
             if args.duration_hours is not None:
                 loop.run(steps=None, duration_seconds=args.duration_hours * 3600)
@@ -370,6 +412,9 @@ def cli() -> None:
             from .recovery_policy import record_exit
             record_exit(loop, error)
             raise
+        finally:
+            if setup_timing:
+                setup_timing.capture_final_iteration_safely(loop)
         if research is not None:
             research.emit("controller_stopped", {
                 "terminal": bool(getattr(loop, "terminal", False)),
