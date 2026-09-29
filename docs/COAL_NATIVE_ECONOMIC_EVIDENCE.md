@@ -116,6 +116,23 @@ subtract all available stock, exclude alternate production, bind an immutable
 goal, forecast future burn, or authorize construction. Native 2.0.77 field
 compatibility and a positive bill still require an isolated runtime readback.
 
+The v5 fixed query extends that same read-only RPC with the connected actor's
+main inventory and handcraft queue, each proposed fuel target's full fuel
+inventory and furnace output inventory, the selected technology's research-unit
+energy, and each active furnace recipe's energy and current crafting speed.
+The decoder binds these rows to the graph's actor, exact owned target units and
+coal counts. A non-coal item in a selected target's fuel inventory is still
+rejected by the underlying fuel graph; non-coal actor stock is retained, not
+silently treated as absent. All inventory rows are bounded, normal-quality and
+unique. Missing inventory or unsupported energy/speed yields no projection.
+`material_scope.closure_complete` is fixed to **false** by both producer and
+decoder. This scope excludes other owned outputs and buffers, unregistered
+stock, belts, in-flight/queued production contents, future harvesting or
+alternate supply, and any goal-to-technology commitment. It cannot yield a
+positive net deficit or native payback. The 2.0.77 API shape and actual stock
+readback remain unqualified until an isolated native trial; no live profile is
+installed by this source change.
+
 The v3 query introduced a diagnostic manual-row projection, retained by v4
 only under a separately source-qualified, additive v5 native profile. The
 retained native v4 profile continues to

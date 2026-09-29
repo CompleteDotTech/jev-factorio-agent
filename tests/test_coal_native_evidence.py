@@ -26,10 +26,13 @@ def example():
                   'actor_index': 1, 'actor_unit': 999999, 'surface_index': 1, 'force_index': 1},
         'registry': [], 'connector_routes': [], 'prototypes': [], 'buffer_witnesses': [], 'poles': [], 'supply_surveys': [],
         'electric_members': [], 'fluid_members': [], 'fuel_targets': [], 'sources': [],
+        'material_scope': {'status': 'observed', 'reason': 'partial_actor_and_fuel_targets',
+                           'closure_complete': False, 'actor_unit': 999999,
+                           'actor_items': [], 'crafting_queue': 0, 'owned_stock': []},
         'research_work': {'status': 'unavailable', 'reason': 'no_current_research',
                           'technology': '', 'progress': 0, 'unit_count': 0,
                           'cost_multiplier': 0, 'ignore_cost_multiplier': False,
-                          'ingredients': [], 'lab': {}, 'targets': []},
+                          'unit_energy': 0, 'ingredients': [], 'lab': {}, 'targets': []},
         'manual_cycle': {'status': 'unavailable', 'reason': 'journal_not_installed',
                          'journal_asset_sha256': '', 'gathers': [], 'deliveries': []},
         'coal_fuel_joules': 4_000_000,
@@ -58,6 +61,8 @@ def example():
         raw['fuel_targets'].append({'role': target, 'unit': e['unit_number'], 'name': e['name'],
             'coal': 10, 'burning': '', 'remaining_burning_fuel': 0, 'heat': 0,
             'operation': {'active': True, 'status': 'working', 'control_behavior_present': False}})
+        raw['material_scope']['owned_stock'].append({'role': target, 'unit': e['unit_number'],
+            'fuel': [{'name': 'coal', 'count': 10}], 'output': []})
         a, b = saved['mining_area']['left_top'], saved['mining_area']['right_bottom']
         raw['sources'].append({**{k: deepcopy(saved[k]) for k in ('layout', 'mining_area', 'steps',
             'corridor', 'drill_bounds', 'chest_bounds')}, 'target': target, 'target_unit': e['unit_number'],
@@ -110,6 +115,7 @@ def example():
     for member in raw['fluid_members']:
         member['operation'] = {'active': True, 'status': 'working', 'control_behavior_present': False}
     raw['registry'].sort(key=lambda x: x['role']); raw['fluid_members'].sort(key=lambda x: x['unit'])
+    raw['material_scope']['owned_stock'].sort(key=lambda x: x['role'])
     raw['supply_surveys'].sort(key=lambda x: (x['kind'], x['key']))
     return raw, bundle
 
@@ -243,7 +249,11 @@ def lua_runtime(raw, bundle):
         defines={wire_connector_id={pole_copper=5},entity_status={working=1,disabled_by_control_behavior=2,no_input_fluid=3}}
         surface={index=1};force={index=1}
         actor={valid=true,unit_number=model.epoch.actor_unit,surface=surface,force=force}
-        player={index=1,connected=true,character=actor,cheat_mode=false}
+        local function inventory(rows)
+            return {valid=true,get_contents=function() return rows end}
+        end
+        player={index=1,connected=true,character=actor,cheat_mode=false,
+            crafting_queue_size=0,get_main_inventory=function() return inventory({}) end}
         game={tick=model.epoch.tick,speed=1,tick_paused=false,connected_players={player},
             get_player=function(index) return index==1 and player or nil end}
         campaign={entities={},observe=forbidden,
@@ -299,9 +309,14 @@ def lua_runtime(raw, bundle):
         for _,row in ipairs(model.fuel_targets) do local e=by_unit[row.unit]
             e.burner={remaining_burning_fuel=row.remaining_burning_fuel,heat=row.heat}
             if row.burning~='' then e.burner.currently_burning={name={name=row.burning},quality={name='normal'}} end
-            local inv={valid=true}
+            local inv={valid=true,get_contents=function()
+                return row.coal>0 and {{name='coal',count=row.coal}} or {}
+            end}
             if row.coal>0 then inv[1]={valid_for_read=true,name='coal',quality={name='normal'},count=row.coal} end
             e.get_fuel_inventory=function() return inv end
+            if row.name=='stone-furnace' then
+                e.get_output_inventory=function() return inventory({}) end
+            end
         end
         for _,row in ipairs(model.sources) do
             local s=bundle[row.target];s.parts={};s.resources={}
@@ -388,6 +403,7 @@ def test_fixed_query_projects_current_research_and_active_furnace_in_same_rpc():
     lua.execute('''
         defines.inventory={furnace_source=1,lab_input=2}
         force.current_research={name='current-study',research_unit_count=30,
+            research_unit_energy=30,
             research_unit_ingredients={{name='automation-science-pack',amount=1}},
             prototype={ignore_tech_cost_multiplier=false}}
         force.research_progress=.25
@@ -403,11 +419,12 @@ def test_fixed_query_projects_current_research_and_active_furnace_in_same_rpc():
         furnace.get_inventory=function(kind)
             assert(kind==1); return inventory({{name='iron-ore',count=30}})
         end
-        furnace.get_recipe=function() return {name='iron-plate',
+        furnace.get_recipe=function() return {name='iron-plate',energy=3.2,
             ingredients={{type='item',name='iron-ore',amount=1}},
             products={{type='item',name='iron-plate',amount=1}}} end
         furnace.is_crafting=function() return true end
         furnace.crafting_progress=.5
+        furnace.crafting_speed=1
     ''')
     lua.execute(files('jev_factorio').joinpath('lua/coal_economics.lua').read_text())
     projected = plain(lua.globals().projected)
@@ -416,6 +433,7 @@ def test_fixed_query_projects_current_research_and_active_furnace_in_same_rpc():
     work = facts.research_work
     assert work.technology == 'current-study' and work.progress == .25
     assert work.unit_count == 30 and work.cost_multiplier == 1
+    assert work.unit_energy == 30
     assert work.ignore_cost_multiplier is False
     assert work.ingredients == (('automation-science-pack', 1),)
     assert work.lab_input == (('automation-science-pack', 2),)
@@ -424,9 +442,68 @@ def test_fixed_query_projects_current_research_and_active_furnace_in_same_rpc():
     assert work.targets[0].input == (('iron-ore', 30),)
     assert work.targets[0].recipe_ingredients == (('iron-ore', 1),)
     assert work.targets[0].recipe_products == (('iron-plate', 1),)
+    assert work.targets[0].recipe_energy == 3.2 and work.targets[0].crafting_speed == 1
     assert facts.mutation_authorized is False and facts.native_payback_proven is False
     projected['research_work']['targets'][0]['unit'] = 999
     with pytest.raises(NativeEconomicsUnavailable, match='research_target_identity_mismatch'):
+        checked(projected, bundle)
+
+
+def test_fixed_query_binds_partial_actor_and_owned_stock_in_same_rpc():
+    raw, bundle = example()
+    lua = lua_runtime(raw, bundle)
+    lua.execute('''
+        player.get_main_inventory=function() return {valid=true,get_contents=function()
+            return {{name='automation-science-pack',count=8},{name='wood',count=2}}
+        end} end
+        player.crafting_queue_size=2
+        campaign.entities.furnace.get_output_inventory=function()
+            return {valid=true,get_contents=function() return {{name='iron-plate',count=11}} end}
+        end
+    ''')
+    lua.execute(files('jev_factorio').joinpath('lua/coal_economics.lua').read_text())
+    projected = plain(lua.globals().projected)
+    assert projected['query_status'] == 'observed', projected['reason']
+    facts = checked(projected, bundle)
+    assert facts.material_scope.actor_items == (('automation-science-pack', 8), ('wood', 2))
+    assert facts.material_scope.crafting_queue == 2
+    assert facts.material_scope.owned_stock[0].output == (('iron-plate', 11),)
+    assert facts.material_scope.closure_complete is False
+    assert facts.mutation_authorized is False and facts.native_payback_proven is False
+
+
+@pytest.mark.parametrize('change,reason', [
+    (lambda r: r['material_scope'].update(closure_complete=True), 'invalid_material_scope'),
+    (lambda r: r['material_scope'].update(actor_unit=999998), 'invalid_material_scope'),
+    (lambda r: r['material_scope'].update(crafting_queue=-1), 'invalid_native_integer'),
+    (lambda r: r['material_scope']['actor_items'].append({'name': 'coal', 'count': -1}), 'invalid_native_integer'),
+    (lambda r: r['material_scope']['owned_stock'][0].update(unit=999), 'material_stock_owner_mismatch'),
+    (lambda r: r['material_scope']['owned_stock'][0]['fuel'][0].update(count=9), 'material_fuel_stock_mismatch'),
+    (lambda r: r['material_scope']['owned_stock'].pop(), 'invalid_native_array'),
+])
+def test_partial_material_scope_rejects_forged_closure_or_stock(change, reason):
+    raw, bundle = example()
+    change(raw)
+    with pytest.raises(NativeEconomicsUnavailable, match=reason):
+        checked(raw, bundle)
+
+
+@pytest.mark.parametrize('mutation,reason', [
+    ("player.crafting_queue_size=1001", 'material_crafting_queue'),
+    ("campaign.entities.furnace.get_output_inventory=function() return nil end",
+     'material_inventory_unavailable'),
+    ("campaign.entities.furnace.get_fuel_inventory=function() return {valid=true,"
+     "{valid_for_read=true,name='wood',quality={name='normal'},count=1},"
+     "get_contents=function() return {{name='wood',count=1}} end} end", 'unsupported_fuel'),
+])
+def test_native_partial_material_scope_fails_closed_on_unsupported_state(mutation, reason):
+    raw, bundle = example(); lua = lua_runtime(raw, bundle)
+    lua.execute(mutation)
+    lua.execute(files('jev_factorio').joinpath('lua/coal_economics.lua').read_text())
+    projected = plain(lua.globals().projected)
+    assert projected['query_status'] == 'unsupported'
+    assert projected['reason'] == reason
+    with pytest.raises(NativeEconomicsUnavailable):
         checked(projected, bundle)
 
 
@@ -450,13 +527,15 @@ def test_selected_research_without_owned_lab_preserves_graph_projection():
     assert projected['research_work'] == {'status': 'unavailable',
         'reason': 'research_lab_unowned', 'technology': 'current-study',
         'progress': .1, 'unit_count': 0, 'cost_multiplier': 0,
-        'ignore_cost_multiplier': False, 'ingredients': {}, 'lab': {}, 'targets': {}}
+        'ignore_cost_multiplier': False, 'unit_energy': 0,
+        'ingredients': {}, 'lab': {}, 'targets': {}}
     # This minimal early graph still misses the decoder's pre-existing two
     # electric-member bound; research absence itself does not fail the Lua query.
 
 
 @pytest.mark.parametrize('mutation,reason', [
     ('force.current_research.research_unit_count=0', 'research_unit_count'),
+    ('force.current_research.research_unit_energy=0', 'research_unit_count'),
     ('game.difficulty_settings.technology_price_multiplier=0', 'research_cost_setting'),
     ('force.current_research.prototype.ignore_tech_cost_multiplier=nil', 'research_cost_setting'),
     ("force.current_research.research_unit_ingredients[1].amount=0", 'research_bill_unsupported'),
@@ -464,6 +543,8 @@ def test_selected_research_without_owned_lab_preserves_graph_projection():
     ("campaign.entities['furnace'].recipe.products[1].probability=.5", 'research_bill_unsupported'),
     ("campaign.entities['furnace'].recipe.products[1].shared_probability={group='x'}", 'research_bill_unsupported'),
     ("campaign.entities['furnace'].recipe.ingredients[1].type='fluid'", 'research_bill_kind'),
+    ("campaign.entities['furnace'].recipe.energy=0", 'research_recipe_energy'),
+    ("campaign.entities['furnace'].crafting_speed=0", 'research_crafting_speed'),
 ])
 def test_native_research_bill_refuses_unsupported_forms(mutation, reason):
     raw, bundle = example()
@@ -471,6 +552,7 @@ def test_native_research_bill_refuses_unsupported_forms(mutation, reason):
     lua.execute('''
         defines.inventory={furnace_source=1,lab_input=2}
         force.current_research={name='current-study',research_unit_count=30,
+            research_unit_energy=30,
             research_unit_ingredients={{name='automation-science-pack',amount=1}},
             prototype={ignore_tech_cost_multiplier=false}}
         force.research_progress=.25
@@ -479,12 +561,13 @@ def test_native_research_bill_refuses_unsupported_forms(mutation, reason):
         campaign.entities['utility:lab'].get_inventory=function() return inventory end
         local furnace=campaign.entities['furnace']
         furnace.get_inventory=function() return inventory end
-        furnace.recipe={name='iron-plate',
+        furnace.recipe={name='iron-plate',energy=3.2,
             ingredients={{type='item',name='iron-ore',amount=1}},
             products={{type='item',name='iron-plate',amount=1}}}
         furnace.get_recipe=function() return furnace.recipe end
         furnace.is_crafting=function() return true end
         furnace.crafting_progress=.5
+        furnace.crafting_speed=1
     ''')
     lua.execute(mutation)
     lua.execute(files('jev_factorio').joinpath('lua/coal_economics.lua').read_text())
@@ -590,13 +673,14 @@ def observed_research_fixture():
     furnace_unit = next(row for row in raw['registry'] if row['role'] == 'furnace')['unit']
     raw['research_work'] = {'status': 'observed', 'reason': 'current_research_activity',
         'technology': 'current-study', 'progress': .25, 'unit_count': 30,
-        'cost_multiplier': 1, 'ignore_cost_multiplier': False,
+        'cost_multiplier': 1, 'ignore_cost_multiplier': False, 'unit_energy': 30,
         'ingredients': [{'name': 'automation-science-pack', 'amount': 1}],
         'lab': {'role': 'utility:lab', 'unit': 1002,
                 'input': [{'name': 'automation-science-pack', 'count': 2}]},
         'targets': [{'role': 'furnace', 'unit': furnace_unit,
                      'recipe': 'iron-plate', 'crafting': True, 'crafting_progress': .5,
-                     'burning': 'coal', 'input': [{'name': 'iron-ore', 'count': 30}],
+                     'burning': 'coal', 'crafting_speed': 1, 'recipe_energy': 3.2,
+                     'input': [{'name': 'iron-ore', 'count': 30}],
                      'recipe_ingredients': [{'name': 'iron-ore', 'amount': 1}],
                      'recipe_products': [{'name': 'iron-plate', 'amount': 1}]}]}
     return raw, bundle
