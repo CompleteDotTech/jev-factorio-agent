@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
+from contextlib import contextmanager
 from importlib.resources import files
 from pathlib import Path
 
@@ -107,6 +109,49 @@ def _lock_binding(lock, expected: dict | None = None) -> dict:
     return binding
 
 
+@contextmanager
+def _transaction_lock(lock_path: Path, owner_lock_fd: int | None):
+    """Use the existing owner flock or acquire the lock for a standalone call.
+
+    Duplicating the caller's descriptor preserves its open-file description and
+    therefore its flock. Closing our duplicate cannot release the caller's lock.
+    """
+    import fcntl
+
+    if owner_lock_fd is None:
+        fd = os.open(lock_path, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+    else:
+        if type(owner_lock_fd) is not int or owner_lock_fd < 0:
+            raise RuntimeError('Already-acquired owner lock descriptor is invalid')
+        fd = os.dup(owner_lock_fd)
+    with os.fdopen(fd, 'r+b') as lock:
+        _lock_identity(lock_path, lock)
+        if owner_lock_fd is not None:
+            opened = os.fstat(lock.fileno())
+            if (not stat.S_ISREG(opened.st_mode)
+                    or opened.st_uid != os.geteuid()
+                    or stat.S_IMODE(opened.st_mode) != 0o600
+                    or fcntl.fcntl(lock.fileno(), fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDWR):
+                raise RuntimeError('Already-acquired owner lock identity changed')
+            # An independent shared lock must contend. An exclusive probe
+            # would also contend with a caller's shared lock and could cause
+            # us to upgrade that shared lock before establishing ownership.
+            probe = os.open(lock_path, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                try:
+                    fcntl.flock(probe, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pass
+                else:
+                    fcntl.flock(probe, fcntl.LOCK_UN)
+                    raise RuntimeError('Owner lock descriptor is not already locked')
+            finally:
+                os.close(probe)
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_identity(lock_path, lock)
+        yield lock
+
+
 def _command(attachment: dict) -> str:
     proposed = _manifest(attachment)
     source = files('jev_factorio').joinpath(
@@ -164,13 +209,11 @@ def migrate_connector_observer_v51(
     client, *, checkpoint_path: Path, receipt_path: Path, lock_path: Path,
     intent_path: Path, expected_session_id: str, expected_actor_unit: int,
     expected_target: str, expected_checkpoint_sha256: str,
-    expected_receipt_sha256: str,
+    expected_receipt_sha256: str, owner_lock_fd: int | None = None,
 ) -> dict:
     """Add only the missing observation bridge; never run a controller step."""
     if os.name != 'posix':
         raise RuntimeError('Native migration requires the POSIX owner-lock host')
-    import fcntl
-
     checkpoint_path, receipt_path = Path(checkpoint_path), Path(receipt_path)
     intent_path = Path(intent_path)
     if intent_path != checkpoint_path.with_name(INTENT_NAME):
@@ -183,11 +226,7 @@ def migrate_connector_observer_v51(
     lock_stat = lock_path.stat()
     if lock_stat.st_uid != os.geteuid() or lock_stat.st_mode & 0o077:
         raise RuntimeError('Single-writer lock must be owned by controller and private')
-    fd = os.open(lock_path, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
-    with os.fdopen(fd, 'r+b') as lock:
-        _lock_identity(lock_path, lock)
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        _lock_identity(lock_path, lock)
+    with _transaction_lock(lock_path, owner_lock_fd) as lock:
         lock_binding = _lock_binding(lock)
         if (_digest(_private_bytes(checkpoint_path)) != expected_checkpoint_sha256
                 or _digest(_private_bytes(receipt_path)) != expected_receipt_sha256):
@@ -411,13 +450,11 @@ def qualify_connector_snapshot_v1(
     client, *, checkpoint_path: Path, receipt_path: Path, lock_path: Path,
     witness_path: Path, expected_session_id: str, expected_actor_unit: int,
     expected_target: str, expected_checkpoint_sha256: str,
-    expected_receipt_sha256: str,
+    expected_receipt_sha256: str, owner_lock_fd: int | None = None,
 ) -> dict:
     """Call the retained observer once under a durable, owner-locked intent."""
     if os.name != 'posix':
         raise RuntimeError('Native snapshot qualification requires the POSIX owner-lock host')
-    import fcntl
-
     checkpoint_path, receipt_path = Path(checkpoint_path), Path(receipt_path)
     witness_path, lock_path = Path(witness_path), Path(lock_path)
     if witness_path != checkpoint_path.with_name(CONNECTOR_OBSERVER_WITNESS_NAME):
@@ -429,11 +466,7 @@ def qualify_connector_snapshot_v1(
     lock_stat = lock_path.stat()
     if lock_stat.st_uid != os.geteuid() or lock_stat.st_mode & 0o077:
         raise RuntimeError('Single-writer lock must be owned by controller and private')
-    fd = os.open(lock_path, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
-    with os.fdopen(fd, 'r+b') as lock:
-        _lock_identity(lock_path, lock)
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        _lock_identity(lock_path, lock)
+    with _transaction_lock(lock_path, owner_lock_fd) as lock:
         lock_binding = _lock_binding(lock)
         if (_digest(_private_bytes(checkpoint_path)) != expected_checkpoint_sha256
                 or _digest(_private_bytes(receipt_path)) != expected_receipt_sha256):
