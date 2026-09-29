@@ -16,6 +16,7 @@ from jev_factorio.backends.native_attachment import (
 )
 from jev_factorio.backends.native_connector_observation_migration import (
     INTENT_NAME, SENTINEL, _command, _manifest, _preflight,
+    _transaction_lock,
     migrate_connector_observer_v51, reconcile_connector_observer_v51,
     _snapshot_command, qualify_connector_snapshot_v1, reconcile_connector_snapshot_v1,
 )
@@ -298,12 +299,27 @@ def test_bridge_attachment_requires_emitted_snapshot_and_matching_durable_witnes
 
 @pytest.mark.skipif(os.name != 'posix', reason='owner lock requires POSIX')
 @pytest.mark.parametrize('outcome', ['ack', 'lost_ack', 'unknown_before_apply', 'lock_replaced'])
-def test_owner_locked_repair_is_one_use_and_readback_only_after_ambiguity(tmp_path, outcome):
+@pytest.mark.parametrize('external_lock', [False, True])
+def test_owner_locked_repair_is_one_use_and_readback_only_after_ambiguity(
+        tmp_path, outcome, external_lock):
+    import fcntl
+
     checkpoint = tmp_path / 'controller.json'
     receipt = tmp_path / 'attachment.json'
     lock = tmp_path / 'single-writer.lock'
     intent = tmp_path / INTENT_NAME
     lock.write_bytes(b''); lock.chmod(0o600)
+
+    def independent_available():
+        fd = os.open(lock, os.O_RDWR | os.O_NOFOLLOW)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            return True
+        finally:
+            os.close(fd)
     memory = CampaignMemory('retained-session', 'rocket_launch')
     memory.status = 'blocked'
     memory.connector_ownership = {'protocol': 1, 'session_id': 'retained-session', 'routes': {}}
@@ -323,6 +339,7 @@ def test_owner_locked_repair_is_one_use_and_readback_only_after_ambiguity(tmp_pa
             self.probes = 0
 
         def send_command(self, command):
+            assert not independent_available()
             if command == '/sc ' + PROBE:
                 self.probes += 1
                 return json.dumps(self.row)
@@ -351,12 +368,29 @@ def test_owner_locked_repair_is_one_use_and_readback_only_after_ambiguity(tmp_pa
                   expected_checkpoint_sha256=hashlib.sha256(checkpoint_bytes).hexdigest(),
                   expected_receipt_sha256=hashlib.sha256(receipt_bytes).hexdigest())
     client = Client()
+
+    def invoke():
+        if not external_lock:
+            return migrate_connector_observer_v51(client, **kwargs)
+        with lock.open('r+b') as owner:
+            fcntl.flock(owner.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            assert not independent_available()
+            try:
+                return migrate_connector_observer_v51(
+                    client, **kwargs, owner_lock_fd=owner.fileno())
+            finally:
+                # Closing the API's dup did not release the original flock.
+                if outcome != 'lock_replaced':
+                    assert not independent_available()
+
     if outcome == 'ack':
-        assert migrate_connector_observer_v51(client, **kwargs)[
+        assert invoke()[
             'native_installation']['profile'] == MANUAL_CYCLE_PROFILE
     else:
         with pytest.raises(RuntimeError, match='outcome unknown'):
-            migrate_connector_observer_v51(client, **kwargs)
+            invoke()
+    if outcome != 'lock_replaced':
+        assert independent_available()
     assert client.mutations == 1
     phases = [row['phase'] for row in _intent_events(intent)]
     assert phases == ['dispatching', 'qualified' if outcome == 'ack' else 'unknown']
@@ -381,13 +415,27 @@ def test_owner_locked_repair_is_one_use_and_readback_only_after_ambiguity(tmp_pa
 
 @pytest.mark.skipif(os.name != 'posix', reason='owner lock requires POSIX')
 @pytest.mark.parametrize('outcome', ['ack', 'lost_ack', 'unknown_before_apply'])
+@pytest.mark.parametrize('external_lock', [False, True])
 def test_native_snapshot_qualification_is_journaled_one_shot_and_reconciles_without_observing(
-        tmp_path, outcome):
+        tmp_path, outcome, external_lock):
+    import fcntl
+
     checkpoint = tmp_path / 'controller.json'
     receipt = tmp_path / 'attachment.json'
     lock = tmp_path / 'single-writer.lock'
     witness = tmp_path / 'native-connector-observer-v1.witness.jsonl'
     lock.write_bytes(b''); lock.chmod(0o600)
+
+    def independent_available():
+        fd = os.open(lock, os.O_RDWR | os.O_NOFOLLOW)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            return True
+        finally:
+            os.close(fd)
     memory = CampaignMemory('retained-session', 'rocket_launch')
     memory.status = 'blocked'
     memory.connector_ownership = {'protocol': 1, 'session_id': 'retained-session', 'routes': {}}
@@ -405,8 +453,11 @@ def test_native_snapshot_qualification_is_journaled_one_shot_and_reconciles_with
             self.row = installed_repaired_v5()
             self.dispatches = 0
             self.observations = 0
+            self.expect_held = True
 
         def send_command(self, command):
+            if self.expect_held:
+                assert not independent_available()
             if command == '/sc ' + PROBE:
                 return json.dumps(self.row)
             if 'profile=rt.native_installation.profile' in command:
@@ -438,16 +489,31 @@ def test_native_snapshot_qualification_is_journaled_one_shot_and_reconciles_with
                   expected_actor_unit=2543, expected_target='rocket_launch',
                   expected_checkpoint_sha256=hashlib.sha256(checkpoint_bytes).hexdigest(),
                   expected_receipt_sha256=hashlib.sha256(receipt_bytes).hexdigest())
+
+    def invoke():
+        if not external_lock:
+            return qualify_connector_snapshot_v1(client, **kwargs)
+        with lock.open('r+b') as owner:
+            fcntl.flock(owner.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            assert not independent_available()
+            try:
+                return qualify_connector_snapshot_v1(
+                    client, **kwargs, owner_lock_fd=owner.fileno())
+            finally:
+                assert not independent_available()
+
     if outcome == 'ack':
-        assert qualify_connector_snapshot_v1(client, **kwargs)[
+        assert invoke()[
             'connector_snapshot_qualified'] is True
     else:
         with pytest.raises(RuntimeError, match='outcome unknown'):
-            qualify_connector_snapshot_v1(client, **kwargs)
+            invoke()
+    assert independent_available()
     assert client.dispatches == 1
     status = reconcile_connector_snapshot_v1(
         client, checkpoint_path=checkpoint, receipt_path=receipt,
         lock_path=lock, witness_path=witness)
+    client.expect_held = False  # Later direct readback is outside the API lock.
     if outcome == 'unknown_before_apply':
         assert status == 'connector_snapshot_attempt_consumed_unqualified'
         with pytest.raises(RuntimeError, match='one-use native qualification'):
@@ -460,3 +526,37 @@ def test_native_snapshot_qualification_is_journaled_one_shot_and_reconciles_with
     with pytest.raises(RuntimeError, match='intent exists'):
         qualify_connector_snapshot_v1(client, **kwargs)
     assert client.dispatches == 1
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='owner lock requires POSIX')
+def test_external_lock_fd_must_be_held_and_match_the_private_lock_path(tmp_path):
+    import fcntl
+
+    lock = tmp_path / 'single-writer.lock'
+    other = tmp_path / 'other.lock'
+    for path in (lock, other):
+        path.write_bytes(b'')
+        path.chmod(0o600)
+    with lock.open('r+b') as owner:
+        with pytest.raises(RuntimeError, match='not already locked'):
+            with _transaction_lock(lock, owner.fileno()):
+                pass
+        fcntl.flock(owner.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+        with pytest.raises(RuntimeError, match='not already locked'):
+            with _transaction_lock(lock, owner.fileno()):
+                pass
+        # Rejection must not upgrade or release the caller's shared lock.
+        with lock.open('r+b') as independent:
+            fcntl.flock(independent.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(independent.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(owner.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with other.open('r+b') as wrong:
+            fcntl.flock(wrong.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with pytest.raises(RuntimeError, match='lock identity changed'):
+                with _transaction_lock(lock, wrong.fileno()):
+                    pass
+        lock.chmod(0o400)
+        with pytest.raises(RuntimeError, match='owner lock identity changed'):
+            with _transaction_lock(lock, owner.fileno()):
+                pass
