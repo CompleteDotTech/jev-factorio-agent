@@ -23,6 +23,7 @@ def legacy():
     modules['successors'] = False
     modules['connector_ownership'] = False
     modules['coal_manual_journal_v1'] = False
+    modules['coal_manual_cycle_v2'] = False
     return {'schema': 1, 'qualified': True, 'session_id': 'retained-session',
             'actor_unit': 2543, 'modules': modules, 'solid_intents': [],
             'coal_targets': [], 'coal_admission_evidence': True,

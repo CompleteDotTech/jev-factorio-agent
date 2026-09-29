@@ -57,6 +57,13 @@ class CoalSupplyFactory:
         return snapshot
 
     def economic_projection(self, snapshot, memory):
+        return self._economic_projection(snapshot, memory, v6=False)
+
+    def economic_projection_v6(self, snapshot, memory):
+        """Use only the separately qualified v6 read-only native profile."""
+        return self._economic_projection(snapshot, memory, v6=True)
+
+    def _economic_projection(self, snapshot, memory, *, v6):
         """Query and decode a fresh native graph without granting admission.
 
         The caller must retain the returned raw response and query digest in a
@@ -70,7 +77,9 @@ class CoalSupplyFactory:
         from ..coal_supply import commitment, sources
         from ..connector_checkpoint import validate_binding
         from ..memory import CampaignMemory
-        from .native_attachment import MANUAL_CYCLE_PROFILE, require_asset
+        from .native_attachment import (
+            CLOSED_WORLD_PROFILE, MANUAL_CYCLE_PROFILE, require_asset,
+        )
 
         rows = sources(snapshot)
         runtime = snapshot.factory.get("acceptance_runtime")
@@ -126,14 +135,24 @@ class CoalSupplyFactory:
                           "force_index": data["force_index"]}
         journal_hash = None
         attachment = getattr(getattr(self.native, 'backend', None), '_native_attachment', None)
+        manifest = None
         if isinstance(attachment, dict) and isinstance(attachment.get('native_installation'), dict):
             manifest = attachment['native_installation']
-            if manifest.get('profile') == MANUAL_CYCLE_PROFILE:
+            if manifest.get('profile') in {MANUAL_CYCLE_PROFILE, CLOSED_WORLD_PROFILE}:
                 require_asset(attachment, 'coal_manual_journal_v1')
                 journal_hash = manifest['assets']['coal_manual_journal_v1']
-        source = files("jev_factorio").joinpath("lua/coal_economics.lua").read_text()
+        if v6:
+            if not isinstance(manifest, dict) or manifest.get('profile') != CLOSED_WORLD_PROFILE:
+                raise RuntimeError('V6 census requires a qualified native installation')
+            require_asset(attachment, 'coal_manual_cycle_v2')
+            from ..coal_economic_v6 import decode_v6, fixed_query
+            source = fixed_query()
+            decoder = decode_v6
+        else:
+            source = files("jev_factorio").joinpath("lua/coal_economics.lua").read_text()
+            decoder = decode
         raw_response = self.native.command(source)
-        decoded = decode(decode_native(raw_response), expected_epoch=expected_epoch,
+        decoded = decoder(decode_native(raw_response), expected_epoch=expected_epoch,
                          expected_bundle={key: commitment(row) for key, row in rows.items()},
                          unit_qualification=UNIT_QUALIFICATION,
                          expected_connectors=connectors, expected_routes=expected_routes,
