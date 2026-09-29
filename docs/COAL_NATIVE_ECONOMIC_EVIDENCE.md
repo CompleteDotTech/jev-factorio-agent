@@ -163,6 +163,21 @@ introspection and cannot protect an unmanifested ad-hoc callback. Failed or
 ambiguous migration responses require read-only manifest reconciliation; they
 never authorize automatic retry or gameplay dispatch. Native owner review and
 runtime readback remain separate requirements before any opt-in installation.
+The source migration now requires a private, checkpoint-bound
+`native-manual-cycle-v5.intent.jsonl` on the POSIX owner host. While holding
+the exclusive controller lock it fsyncs a `dispatching` record containing the
+exact checkpoint/receipt hashes, source-bound before/after manifests, and
+command digest before sending the only mutating RPC. The fixed path is never
+reused, including when the command throws or acknowledgement is missing.
+`reconcile_manual_cycle_v5` takes the same lock and performs only the fixed
+readback: exact v5 can be recorded as installed, exact v4 is reported as an
+**attempt consumed**, and any other state stops dispatch. It never retries or
+deletes the intent. A v4 readback contradicting a durable `qualified`/v5
+reconciliation record also stops dispatch. The readback must retain the exact
+session, actor, complete module map, source manifests, checkpoint and receipt
+hashes in the intent. This source journal is not a guest-side transaction token;
+the owner must still schedule a quiescent checkpoint and retain the private
+intent and native readback evidence before any opt-in installation.
 The query checks the installed source hash, callback identity, journal owner,
 complete bounded gather rows, and current retained coal-transfer receipts in
 the same RPC as the graph, burner and research state. Its decoder binds target

@@ -12,7 +12,8 @@ from jev_factorio.backends.native_attachment import (
     connector_ownership_sha256, manual_journal_sha256, readback, require_asset,
 )
 from jev_factorio.backends.native_manual_cycle_migration import (
-    SENTINEL, _command, _manifest, _no_open_investment, migrate_manual_cycle_v5,
+    SENTINEL, _command, _manifest, _no_open_investment, _intent_events,
+    migrate_manual_cycle_v5, reconcile_manual_cycle_v5,
 )
 from jev_factorio.memory import CampaignMemory
 from test_native_observation_migration import _lua_fixture
@@ -150,10 +151,12 @@ def test_v5_lua_transaction_rolls_back_handler_and_manifest_on_failure():
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='owner lock requires POSIX')
-def test_v5_owner_locked_migration_reconciles_ambiguous_response(tmp_path):
+@pytest.mark.parametrize('outcome', ['ack_v5', 'missing_ack_v5', 'throw_v4'])
+def test_v5_owner_locked_migration_reconciles_ambiguous_response(tmp_path, outcome):
     checkpoint = tmp_path / 'controller.json'
     receipt = tmp_path / 'attachment.json'
     lock = tmp_path / 'single-writer.lock'
+    intent = tmp_path / 'native-manual-cycle-v5.intent.jsonl'
     lock.write_bytes(b''); lock.chmod(0o600)
     memory = CampaignMemory('retained-session', 'rocket_launch')
     memory.status = 'blocked'
@@ -168,37 +171,84 @@ def test_v5_owner_locked_migration_reconciles_ambiguous_response(tmp_path):
     receipt.write_bytes(receipt_bytes); receipt.chmod(0o600)
 
     class Client:
-        def __init__(self, ambiguous=False):
+        def __init__(self):
             self.row = installed_v4()
             self.calls = 0
-            self.ambiguous = ambiguous
+            self.probes = 0
 
         def send_command(self, command):
             if command == '/sc ' + PROBE:
+                self.probes += 1
                 return json.dumps(self.row)
             self.calls += 1
+            if outcome == 'throw_v4':
+                raise ConnectionError('unknown dispatch')
             proposed = _manifest(self.row)
             self.row['modules']['connector_ownership'] = True
             self.row['modules']['coal_manual_journal_v1'] = True
             self.row['native_installation'] = proposed
-            return '' if self.ambiguous else SENTINEL
+            return '' if outcome == 'missing_ack_v5' else SENTINEL
 
     kwargs = dict(checkpoint_path=checkpoint, receipt_path=receipt, lock_path=lock,
+                  intent_path=intent,
                   expected_session_id='retained-session', expected_actor_unit=2543,
                   expected_target='rocket_launch',
                   expected_checkpoint_sha256=hashlib.sha256(checkpoint_bytes).hexdigest(),
                   expected_receipt_sha256=hashlib.sha256(receipt_bytes).hexdigest())
     client = Client()
-    assert migrate_manual_cycle_v5(client, **kwargs)['native_installation']['profile'] == MANUAL_CYCLE_PROFILE
+    if outcome != 'ack_v5':
+        with pytest.raises(RuntimeError, match='outcome unknown'):
+            migrate_manual_cycle_v5(client, **kwargs)
+    else:
+        assert migrate_manual_cycle_v5(client, **kwargs)['native_installation']['profile'] == MANUAL_CYCLE_PROFILE
     assert client.calls == 1 and checkpoint.read_bytes() == checkpoint_bytes
-    with pytest.raises(RuntimeError, match='exact v4'):
+    assert [row['phase'] for row in _intent_events(intent)] == [
+        'dispatching', 'qualified' if outcome == 'ack_v5' else 'unknown']
+    assert reconcile_manual_cycle_v5(client, intent_path=intent, lock_path=lock,
+                                     checkpoint_path=checkpoint, receipt_path=receipt) == (
+        'v4_observed_attempt_consumed' if outcome == 'throw_v4' else 'v5_installed')
+    assert _intent_events(intent)[-1]['phase'] == (
+        'reconciled_v5' if outcome == 'missing_ack_v5' else
+        'qualified' if outcome == 'ack_v5' else 'unknown')
+    with pytest.raises(RuntimeError, match='intent already exists'):
         migrate_manual_cycle_v5(client, **kwargs)
-    ambiguous = Client(ambiguous=True)
-    with pytest.raises(RuntimeError, match='acknowledgement absent'):
-        migrate_manual_cycle_v5(ambiguous, **kwargs)
-    assert readback(ambiguous)['native_installation']['profile'] == MANUAL_CYCLE_PROFILE
-    with pytest.raises(RuntimeError, match='exact v4'):
-        migrate_manual_cycle_v5(ambiguous, **kwargs)
+    assert client.calls == 1
+    probes = client.probes
+    with pytest.raises(RuntimeError, match='checkpoint-bound fixed path'):
+        reconcile_manual_cycle_v5(client, intent_path=tmp_path / 'arbitrary.jsonl',
+                                  lock_path=lock, checkpoint_path=checkpoint,
+                                  receipt_path=receipt)
+    assert client.probes == probes
+    original_intent = intent.read_bytes()
+    events = _intent_events(intent)
+    events[0]['after'] = events[0]['before']
+    intent.write_text(''.join(json.dumps(row) + '\n' for row in events))
+    with pytest.raises(RuntimeError, match='profile requires reconciliation'):
+        reconcile_manual_cycle_v5(client, intent_path=intent, lock_path=lock,
+                                  checkpoint_path=checkpoint, receipt_path=receipt)
+    assert client.probes == probes
+    intent.write_bytes(original_intent)
+    events = _intent_events(intent)
+    events[0]['actor_unit'] = str(events[0]['actor_unit'])
+    intent.write_text(''.join(json.dumps(row) + '\n' for row in events))
+    with pytest.raises(RuntimeError, match='requires reconciliation'):
+        reconcile_manual_cycle_v5(client, intent_path=intent, lock_path=lock,
+                                  checkpoint_path=checkpoint, receipt_path=receipt)
+    assert client.probes == probes
+    intent.write_bytes(original_intent)
+    if outcome == 'ack_v5':
+        current = client.row
+        client.row = installed_v4()
+        with pytest.raises(RuntimeError, match='success contradicts v4'):
+            reconcile_manual_cycle_v5(client, intent_path=intent, lock_path=lock,
+                                      checkpoint_path=checkpoint, receipt_path=receipt)
+        client.row = current
+        probes = client.probes
+    checkpoint.write_bytes(checkpoint_bytes + b' ')
+    with pytest.raises(RuntimeError, match='evidence changed'):
+        reconcile_manual_cycle_v5(client, intent_path=intent, lock_path=lock,
+                                  checkpoint_path=checkpoint, receipt_path=receipt)
+    assert client.probes == probes
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='owner lock requires POSIX')
@@ -206,6 +256,7 @@ def test_v5_migration_rejects_nonempty_connector_checkpoint_before_rpc(tmp_path)
     checkpoint = tmp_path / 'controller.json'
     receipt = tmp_path / 'attachment.json'
     lock = tmp_path / 'single-writer.lock'
+    intent = tmp_path / 'native-manual-cycle-v5.intent.jsonl'
     lock.write_bytes(b''); lock.chmod(0o600)
     memory = CampaignMemory('retained-session', 'rocket_launch')
     memory.status = 'blocked'
@@ -225,7 +276,25 @@ def test_v5_migration_rejects_nonempty_connector_checkpoint_before_rpc(tmp_path)
 
     with pytest.raises(RuntimeError, match='exactly empty'):
         migrate_manual_cycle_v5(Client(), checkpoint_path=checkpoint,
-            receipt_path=receipt, lock_path=lock, expected_session_id='retained-session',
+            receipt_path=receipt, lock_path=lock, intent_path=intent,
+            expected_session_id='retained-session',
             expected_actor_unit=2543, expected_target='rocket_launch',
             expected_checkpoint_sha256=hashlib.sha256(checkpoint_bytes).hexdigest(),
             expected_receipt_sha256=hashlib.sha256(receipt_bytes).hexdigest())
+    assert not intent.exists()
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='private intent requires POSIX')
+def test_v5_partial_or_replaced_intent_fails_closed(tmp_path):
+    intent = tmp_path / 'native-manual-cycle-v5.intent.jsonl'
+    intent.write_bytes(b'{"phase":"dispatching"}')
+    intent.chmod(0o600)
+    with pytest.raises(RuntimeError, match='requires reconciliation'):
+        _intent_events(intent)
+    intent.write_bytes(b'{"phase":"dispatching","phase":"qualified"}\n')
+    with pytest.raises(RuntimeError, match='requires reconciliation'):
+        _intent_events(intent)
+    intent.unlink()
+    intent.symlink_to(tmp_path / 'absent')
+    with pytest.raises(RuntimeError, match='requires reconciliation|missing or is a symlink'):
+        _intent_events(intent)
