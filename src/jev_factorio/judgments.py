@@ -258,6 +258,60 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
             pointer = f"`candidate_plans[{json.dumps(plan.id)}]`"
             row = evidence.get(plan.id)
             row = row if isinstance(row, dict) else {}
+            raw = row.get('raw_prerequisite')
+            raw_path = raw.get('planner_item_path') if isinstance(raw, dict) else None
+            gather_start = row.get('gather_start_evidence')
+            gather_step = plan.steps[0] if len(plan.steps) == 1 else None
+            gather_parameters = gather_step.parameters if gather_step is not None else None
+            qualified_raw_gather = (
+                len(selected) == 1 and gather_step is not None
+                and gather_step.action == 'factory_gather'
+                and gather_step.effect == 'inventory'
+                and gather_step.costs in (None, {})
+                and isinstance(gather_parameters, dict)
+                and isinstance(gather_parameters.get('resource'), str)
+                and bool(gather_parameters['resource'])
+                and gather_parameters['resource'] == gather_step.item
+                and row.get('work_scope') == 'immediate'
+                and row.get('unknowns') == [] and row.get('reasons') == []
+                and type(row.get('urgency')) is int and row['urgency'] == 0
+                and row.get('research_deadline_tick') is None
+                and row.get('requires_investment') is False
+                and type(tick) is int and isinstance(target, str) and bool(target)
+                and isinstance(raw, dict) and isinstance(gather_start, dict)
+                and raw.get('observed_tick') == tick
+                and raw.get('basis') ==
+                    'current_planner_dependency_and_native_catalog_recipe'
+                and raw.get('later_steps_require_fresh_native_preconditions') is True
+                and isinstance(raw_path, list) and 2 <= len(raw_path) <= 32
+                and all(isinstance(item, str) and bool(item) for item in raw_path)
+                and raw_path[0] == target
+                and raw_path[-2] == raw.get('direct_product')
+                and raw_path[-1] == gather_step.item
+                and isinstance(raw.get('direct_recipe'), str)
+                and bool(raw['direct_recipe'])
+                and gather_start.get('resource_in_current_observation') is True
+                and gather_start.get('fair_target_identity_observed') is True
+                and gather_start.get('travel_is_lower_bound_not_arrival_proof') is True
+                and type(gather_start.get('resource_inventory_now')) is int
+                and gather_start['resource_inventory_now'] >= 0
+                and type(gather_start.get('target_inventory_after_this_step')) is int
+                and type(gather_step.threshold) is int
+                and gather_start['target_inventory_after_this_step'] ==
+                    gather_step.threshold > gather_start['resource_inventory_now']
+                and type(gather_parameters.get('quantity')) is int
+                and gather_parameters['quantity'] == (
+                    gather_step.threshold - gather_start['resource_inventory_now']))
+            raw_gather_hint = (
+                " This sole current raw gather has observed resource and fair-target "
+                "start facts and a same-tick native-recipe path to the local target. "
+                "Gathering its bounded quantity supplies a useful recipe input "
+                "(level 1); the path alone does not prove an already removed "
+                "production blocker (level 2) or completed downstream output. "
+                "Use level 2 only with an independent current blocker fact. "
+                "A contrary current fact can lower the score. Native harvest and "
+                "later recipe steps still require fresh verification."
+                if qualified_raw_gather else "")
             placement_start = row.get('placement_start_evidence')
             placement_dependency = row.get('placement_dependency')
             placement_step = plan.steps[0] if len(plan.steps) == 1 else None
@@ -498,7 +552,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "from one bounded local production action. A current "
                     "`raw_prerequisite` is evidence that gathering supplies an input to "
                     "the named native recipe, not that the later craft already happened."
-                    + craft_hint + bill_craft_hint + place_hint + fuel_hint
+                    + raw_gather_hint + craft_hint + bill_craft_hint + place_hint + fuel_hint
                     + transfer_hint + input_hint
                     + pickup_hint
                 ),
