@@ -133,6 +133,18 @@ positive net deficit or native payback. The 2.0.77 API shape and actual stock
 readback remain unqualified until an isolated native trial; no live profile is
 installed by this source change.
 
+`planning/coal_goal_alignment.py` provides a read-only relevance predicate for
+the current rocket goal. It binds the controller checkpoint, snapshot and
+decoded native research to one session, tick and actor, then traverses a fresh
+bounded catalog prerequisite graph. The selected technology must be on the
+rocket-silo research path or on the current locked basic-assembler capability
+path, and its catalog science-pack bill must match the native observation.
+Malformed, cyclic, changed and unrelated paths fail closed. The predicate
+always returns `future_commitment=false` and `mutation_authorized=false`:
+the current goal is not a durable promise to complete that research, and
+the v5 material scope remains incomplete. No native action or admission gate
+calls this predicate yet.
+
 The v3 query introduced a diagnostic manual-row projection, retained by v4
 only under a separately source-qualified, additive v5 native profile. The
 retained native v4 profile continues to
