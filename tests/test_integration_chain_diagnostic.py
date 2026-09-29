@@ -86,6 +86,83 @@ def test_complete_paid_sequence_is_diagnostic_correlation_only():
     assert value['intermediate_provenance_qualified'] is False
 
 
+def stock_chain_inputs():
+    """Paid insert first appears with fresh input stock, followed by recipe work."""
+    _, routes, receipts = chain_inputs()
+    receipts['extract-pack']['tick'] = 15
+    receipts['insert-lab']['tick'] = 16
+    item, role = CHAIN['product_item'], CHAIN['consumer_role']
+    route = {'target': {'role': CHAIN['producer_role'], 'unit_number': 11}}
+    def state(tick, stock, products, seen):
+        return {'tick': tick, 'factory': {
+            'solid_routes': {'routes': {CHAIN['route']: deepcopy(route)}},
+            'entities': {role: {'unit_number': 22, 'recipe': CHAIN['science_pack'],
+                                'products_finished': products,
+                                'input': {item: stock} if stock else {}}},
+            'receipts': {key: deepcopy(receipts[key]) for key in seen}}}
+    rows = [
+        {'state': state(10, 0, 0, ()), 'after_state': state(10, 0, 0, ())},
+        {'state': state(11, 0, 0, ('extract-ingredient',)),
+         'after_state': state(12, 2, 0, ('extract-ingredient', 'insert-ingredient'))},
+        {'state': state(13, 2, 0, ('extract-ingredient', 'insert-ingredient')),
+         'after_state': state(14, 0, 1, ('extract-ingredient', 'insert-ingredient'))},
+        {'state': state(15, 0, 1, ('extract-ingredient', 'insert-ingredient', 'extract-pack')),
+         'after_state': state(16, 0, 1, receipts)},
+    ]
+    return rows, routes, receipts
+
+
+def test_paid_receipt_fresh_stock_and_later_recipe_work_are_correlated_only():
+    value = diagnose(*stock_chain_inputs())
+    assert value['receipt_stock_recipe_status_by_declared_order'] == [
+        'paid_insert_stock_and_recipe_work_correlated']
+    assert value['receipt_stock_recipe_correlations'] == 1
+    assert value['intermediate_provenance_qualified'] is False
+
+
+def change_later(rows, *, stock=None, products=None):
+    for row in rows[2:]:
+        for label in ('state', 'after_state'):
+            entity = row[label]['factory']['entities'][CHAIN['consumer_role']]
+            if stock is not None:
+                entity['input'] = {'iron-plate': stock} if stock else {}
+            if products is not None:
+                entity['products_finished'] = products
+
+
+@pytest.mark.parametrize('damage', [
+    lambda rows, receipts: rows[0]['state']['factory']['receipts'].update(
+        {'insert-ingredient': deepcopy(receipts['insert-ingredient'])}),
+    lambda rows, receipts: rows[1]['state']['factory']['entities'][
+        CHAIN['consumer_role']]['input'].update({'iron-plate': 1}),
+    lambda rows, receipts: rows[1]['after_state']['factory']['entities'][
+        CHAIN['consumer_role']]['input'].update({'iron-plate': 3}),
+    lambda rows, receipts: receipts.update({'duplicate-insert': deepcopy(receipts['insert-ingredient'])}),
+    lambda rows, receipts: change_later(rows, stock=2),
+    lambda rows, receipts: change_later(rows, products=0),
+    lambda rows, receipts: rows[2]['state']['factory']['entities'][
+        CHAIN['consumer_role']].update(input={}),
+    lambda rows, receipts: rows[2]['after_state']['factory']['receipts'][
+        'insert-ingredient'].update(quantity=3),
+])
+def test_stale_duplicate_unrelated_or_unconsumed_stock_does_not_qualify(damage):
+    rows, routes, receipts = stock_chain_inputs()
+    damage(rows, receipts)
+    value = diagnose(rows, routes, receipts)
+    assert value['receipt_stock_recipe_correlations'] == 0
+    assert value['intermediate_provenance_qualified'] is False
+
+
+def test_foreign_receipt_and_invalid_route_cannot_qualify_stock_sequence():
+    rows, routes, receipts = stock_chain_inputs()
+    receipts['insert-ingredient']['unit_number'] = 99
+    assert diagnose(rows, routes, receipts)['receipt_stock_recipe_correlations'] == 0
+    rows, routes, receipts = stock_chain_inputs()
+    routes[CHAIN['route']]['attributed_received'] = 0
+    assert diagnose(rows, routes, receipts)['receipt_stock_recipe_status_by_declared_order'] == [
+        'chain_not_qualified']
+
+
 @pytest.mark.parametrize('damage', [
     lambda rows, routes, receipts: rows[0].pop('after_state'),
     lambda rows, routes, receipts: rows[0]['after_state']['factory'].pop('solid_routes'),
