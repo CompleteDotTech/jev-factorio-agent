@@ -36,7 +36,7 @@ PINNED_ASSETS = {
     'coal_supply': '3ec3b94b03c86cf963328ef9a6f75551ab285968ccfd50d2e2a25c72e89a242e',
     'successors': '7cd7999d3a4fee0faeb157c81487091b05366d919e17f34ae51a3061274d90ae',
 }
-OPTIONAL_ASSETS = {'coal_manual_journal_v1'}
+OPTIONAL_ASSETS = {'coal_manual_journal_v1', 'coal_manual_cycle_v2'}
 
 LEGACY_OBSERVATION_PROFILE = 'e759-observation-v2-bound-bootstrap-v2'
 LEGACY_OBSERVATION_SHA256 = 'f51ea4aeb66b5c11366dbfe37cb755f2187152fa634928ac8a911f670d746780'
@@ -47,11 +47,17 @@ WATER_ORIGIN_OBSERVATION_PROFILE = 'e759-observation-v2-water-origin-v4'
 WATER_ORIGIN_OBSERVATION_SHA256 = '3e989a8a6686a964f457a5c9820dc7ad68f1e25dcbd8a8ca3d02218271be6989'
 WATER_ORIGIN_OBSERVATION_ASSET = 'observation_v2_water_origin_v4.lua'
 MANUAL_CYCLE_PROFILE = 'e759-observation-v2-water-origin-v4-manual-cycle-v5'
+CLOSED_WORLD_PROFILE = 'e759-observation-v2-water-origin-v4-manual-cycle-v6'
 
 
 def manual_journal_sha256():
     return hashlib.sha256(files('jev_factorio').joinpath(
         'lua/coal_manual_journal_v1.lua').read_bytes()).hexdigest()
+
+
+def cycle_journal_sha256():
+    return hashlib.sha256(files('jev_factorio').joinpath(
+        'lua/coal_manual_cycle_v2.lua').read_bytes()).hexdigest()
 
 
 def connector_ownership_sha256():
@@ -82,6 +88,7 @@ local o=rt and rt.mining_outposts
 local p=rt and rt.production_sites
 local x=rt and rt.successors
 local mj=rt and rt.coal_manual_journal_v1
+local cj=rt and rt.coal_manual_cycle_v2
 local n=rt and rt.native_installation
 local nc=n and n.callbacks
 local a=rt and rt.agent_characters and rt.agent_characters[1]
@@ -120,6 +127,12 @@ if mj then ok=ok and mj.protocol==1 and mj.session_id==rt.jev_session_id
     and mj.actor_unit==a.unit_number and mj.surface_index==a.surface.index
     and mj.force_index==a.force.index and good(mj.tick_handler)
     and good(mj.begin) and good(mj.finish) and good(mj.observe) end
+if cj then ok=ok and cj.protocol==2 and mj and cj.session_id==rt.jev_session_id
+    and cj.actor_index==player.index and cj.actor_unit==a.unit_number
+    and cj.surface_index==a.surface.index and cj.force_index==a.force.index
+    and good(cj.tick_handler) and good(cj.combined_tick_handler)
+    and good(cj.begin) and good(cj.begin_delivery)
+    and good(cj.finish_delivery) and good(cj.finish) end
 if c and c.connector_ledger then ok=ok and c.connector_ledger.protocol==1
     and type(c.connector_ledger.routes)=="table" and good(c.connector_begin)
     and good(c.connector_finish) and good(c.connector_page)
@@ -135,7 +148,8 @@ if n then ok=ok and type(n.assets)=="table" and type(nc)=="table"
     and nc.connector_finish==(c and c.connector_finish)
     and nc.connector_page==(c and c.connector_page)
     and nc.connector_observe==(c and c.observe_connector_ownership)
-    and nc.journal_tick==(mj and mj.tick_handler) end
+    and nc.journal_tick==(mj and mj.tick_handler)
+    and nc.cycle_tick==(cj and cj.combined_tick_handler) end
 if c and s then ok=ok and c.observe==s.observer and c.transfer==s.transfer
 elseif c and i then ok=ok and c.observe==i.observer and c.transfer==i.transfer
 elseif c and b then ok=ok and c.observe==b.observer and c.transfer==b.transfer
@@ -147,7 +161,7 @@ local modules={fair_actions=true,factory=c~=nil,launch_readiness=l~=nil,
     output_buffers=b~=nil,input_routes=i~=nil,production_sites=p~=nil,
     mining_outposts=o~=nil,solid_routes=s~=nil,coal_supply=q~=nil,
     successors=x~=nil,connector_ownership=c and c.connector_ledger~=nil or false,
-    coal_manual_journal_v1=mj~=nil}
+    coal_manual_journal_v1=mj~=nil,coal_manual_cycle_v2=cj~=nil}
 rcon.print(helpers.table_to_json({schema=1,qualified=ok==true,
     session_id=rt and rt.jev_session_id or "",actor_unit=a and a.unit_number or 0,
     modules=modules,solid_intents=s and s.intents or {},coal_targets=q and q.targets or {},
@@ -169,7 +183,9 @@ CALLBACKS_EXPR = (
     'connector_page=c and c.connector_page or nil, '
     'connector_observe=c and c.observe_connector_ownership or nil, '
     'journal_tick=jev_fle_runtime.coal_manual_journal_v1 '
-    'and jev_fle_runtime.coal_manual_journal_v1.tick_handler or nil}'
+    'and jev_fle_runtime.coal_manual_journal_v1.tick_handler or nil, '
+    'cycle_tick=jev_fle_runtime.coal_manual_cycle_v2 '
+    'and jev_fle_runtime.coal_manual_cycle_v2.combined_tick_handler or nil}'
 )
 
 
@@ -273,6 +289,7 @@ def readback(client, *, receipt_path=None):
             if (result['modules']['connector_ownership'] is not True
                     or result['modules']['successors']
                     or result['modules']['coal_manual_journal_v1'] is not True
+                    or result['modules']['coal_manual_cycle_v2'] is not False
                     or native['assets'].get('factory') != PINNED_ASSETS['factory']
                     or native['assets'].get('observation_v2') != WATER_ORIGIN_OBSERVATION_SHA256
                     or native['assets'].get('connector_ownership') != connector_ownership_sha256()
@@ -283,14 +300,32 @@ def readback(client, *, receipt_path=None):
                                      else PINNED_ASSETS.get(name))
                            for name, value in native['assets'].items())):
                 raise RuntimeError('Manual-cycle migration profile requires reconciliation')
+        elif profile == CLOSED_WORLD_PROFILE:
+            if (result['modules']['connector_ownership'] is not True
+                    or result['modules']['successors']
+                    or result['modules']['coal_manual_journal_v1'] is not True
+                    or result['modules']['coal_manual_cycle_v2'] is not True
+                    or native['assets'].get('factory') != PINNED_ASSETS['factory']
+                    or native['assets'].get('observation_v2') != WATER_ORIGIN_OBSERVATION_SHA256
+                    or native['assets'].get('connector_ownership') != connector_ownership_sha256()
+                    or native['assets'].get('coal_manual_journal_v1') != manual_journal_sha256()
+                    or native['assets'].get('coal_manual_cycle_v2') != cycle_journal_sha256()
+                    or any(value != (WATER_ORIGIN_OBSERVATION_SHA256 if name == 'observation_v2'
+                                     else connector_ownership_sha256() if name == 'connector_ownership'
+                                     else manual_journal_sha256() if name == 'coal_manual_journal_v1'
+                                     else cycle_journal_sha256() if name == 'coal_manual_cycle_v2'
+                                     else PINNED_ASSETS.get(name))
+                           for name, value in native['assets'].items())):
+                raise RuntimeError('Closed-world migration profile requires reconciliation')
         elif profile is not False:
             raise RuntimeError('Unknown native installation profile requires reconciliation')
         for name, expected in native['assets'].items():
             source = _asset_source(name, profile)
             if profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE,
-                           WATER_ORIGIN_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE} \
+                           WATER_ORIGIN_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE,
+                           CLOSED_WORLD_PROFILE} \
                     and name not in {'observation_v2', 'connector_ownership',
-                                     'coal_manual_journal_v1'}:
+                                     'coal_manual_journal_v1', 'coal_manual_cycle_v2'}:
                 continue  # Exact e759 hash is pinned; retained closure is reused.
             if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
                 raise RuntimeError('Native Lua source differs from installed manifest')
@@ -337,9 +372,10 @@ def require_asset(attachment, name):
                 else PINNED_ASSETS.get(name))
     if (isinstance(manifest, dict)
             and profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE,
-                            WATER_ORIGIN_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE}
+                            WATER_ORIGIN_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE,
+                            CLOSED_WORLD_PROFILE}
             and name not in {'observation_v2', 'connector_ownership',
-                             'coal_manual_journal_v1'}):
+                             'coal_manual_journal_v1', 'coal_manual_cycle_v2'}):
         if expected != PINNED_ASSETS.get(name):
             raise RuntimeError('Retained native asset differs from the legacy profile')
         return True

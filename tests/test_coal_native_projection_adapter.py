@@ -112,6 +112,32 @@ def test_changed_v5_journal_source_refuses_query(monkeypatch):
     assert calls == []
 
 
+def test_v6_query_requires_exact_versioned_attachment_and_never_grants_payment(monkeypatch):
+    adapter, snapshot, raw, calls, _ = fixture(monkeypatch, v5=True)
+    with pytest.raises(RuntimeError, match='qualified native installation'):
+        adapter.economic_projection_v6(snapshot, snapshot.memory)
+    assert calls == []
+    from test_native_closed_world_migration import installed_v5
+    from jev_factorio.backends.native_attachment import PROBE
+    from jev_factorio.backends.native_closed_world_migration import _manifest as v6_manifest
+    row = installed_v5()
+    row['native_installation'] = v6_manifest(row)
+    row['modules']['coal_manual_cycle_v2'] = True
+    adapter.native.backend._native_attachment = readback(SimpleNamespace(
+        send_command=lambda query: json.dumps(row) if query == '/sc ' + PROBE else None))
+
+    def decoded(value, **kwargs):
+        assert value == raw
+        assert kwargs['expected_journal_asset_sha256'] == manual_journal_sha256()
+        return SimpleNamespace(mutation_authorized=False, native_payback_proven=False)
+
+    monkeypatch.setattr('jev_factorio.coal_economic_v6.decode_v6', decoded)
+    result = adapter.economic_projection_v6(snapshot, snapshot.memory)
+    assert len(calls) == 1 and 'jev.coal-native-economics.v6' in calls[0]
+    assert result['native'].mutation_authorized is False
+    assert result['native'].native_payback_proven is False
+
+
 @pytest.mark.parametrize('change', [
     lambda adapter, snapshot: setattr(adapter, 'coal_economic_admission', False),
     lambda adapter, snapshot: snapshot.factory['coal_supply'].update(committed=True),
