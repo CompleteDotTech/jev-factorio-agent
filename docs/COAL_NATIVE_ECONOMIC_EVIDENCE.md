@@ -229,6 +229,15 @@ retains `attempts_bound=false`, `cycle_complete=false`,
 `native_payback_proven=false`, and `mutation_authorized=false` until separately
 qualified native evidence and payment integration exist.
 
+The v6 decoder can feed `diagnostic_stock_upper_bounds` for named materials.
+It sums every bounded census view, including overlapping actor main/inventory
+and entity inventory/fuel/output views. Double counting is deliberate: the
+result is an upper bound on observed stock, so subtracting it from a later
+qualified material bill cannot invent a larger deficit. It does not prove a
+committed goal bill, fungible ownership, future coal demand, native payback or
+first-spend authority. The helper rejects incomplete census and claimed
+authority and returns all admission flags false.
+
 Two independent admission/payment integrations remain essential:
 
 The source-only `coal_current_evidence` helpers now bind a fully carried,

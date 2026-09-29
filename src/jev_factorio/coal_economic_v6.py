@@ -104,6 +104,59 @@ class V6Observation:
     mutation_authorized: bool = False
 
 
+def diagnostic_stock_upper_bounds(observed: V6Observation,
+                                  names: tuple[str, ...]) -> dict:
+    """Overcount every census view so a later deficit cannot undercount stock.
+
+    Main inventory, fuel, output and entity inventory views can overlap. Their
+    sum is an upper bound, not a fungible-stock or goal-demand proof. No caller
+    may use this diagnostic as permission to spend.
+    """
+    if (type(observed) is not V6Observation
+            or observed.native_payback_proven is not False
+            or observed.mutation_authorized is not False
+            or observed.census.owned_surface_coverage_complete is not True
+            or observed.graph.material_scope is None
+            or observed.graph.material_scope.closure_complete is not False
+            or observed.graph.mutation_authorized is not False
+            or observed.graph.native_payback_proven is not False
+            or observed.census.actor_items != observed.graph.material_scope.actor_items
+            or type(names) is not tuple or not 1 <= len(names) <= 32
+            or any(type(name) is not str for name in names)
+            or tuple(sorted(set(names))) != names):
+        raise ValueError('Coal stock diagnostic has unqualified census or items')
+    counts = {identity(name): 0 for name in names}
+    if len(counts) != len(names):
+        raise ValueError('Coal stock diagnostic items are aliased')
+
+    def add(items):
+        for name, count in items:
+            if name in counts:
+                counts[name] += integer(count, 1, 200_000)
+                if counts[name] > 2**53 - 1:
+                    raise ValueError('Coal stock diagnostic count overflow')
+
+    add(observed.census.actor_items)
+    for _, items in observed.census.actor_inventories:
+        add(items)
+    for row in observed.census.entities:
+        for _, items in row.inventories:
+            add(items)
+        for _, items in row.belts:
+            add(items)
+        add(row.held)
+        add(row.fuel)
+        add(row.output)
+    return {'schema': 'jev.coal-stock-upper-bounds.v1',
+            'native_raw_sha256': observed.raw_sha256,
+            'session_id': observed.graph.epoch.session_id,
+            'tick': observed.graph.epoch.tick,
+            'upper_counts': counts,
+            'basis': 'sum_all_census_views_including_overlaps',
+            'goal_demand_proven': False, 'native_payback_proven': False,
+            'mutation_authorized': False}
+
+
 def _items(value):
     result = []
     for item in rows(value, 0, 128):
