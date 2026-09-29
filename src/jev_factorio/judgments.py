@@ -500,12 +500,78 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
             )
             recipe_input_start = ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get(
                 'recipe_input_transfer_start_evidence')
+            input_step = plan.steps[0] if len(plan.steps) == 1 else None
+            input_parameters = input_step.parameters if input_step is not None else None
+            input_path = (recipe_input_start.get('planner_item_path')
+                          if isinstance(recipe_input_start, dict) else None)
+            qualified_recipe_input = (
+                len(selected) == 1 and input_step is not None
+                and input_step.action == 'factory_insert'
+                and input_step.effect == 'transfer'
+                and isinstance(input_parameters, dict)
+                and isinstance(recipe_input_start, dict)
+                # The current _transfer plan carries its item in parameters/costs.
+                and input_step.item == ''
+                and isinstance(input_parameters.get('item'), str)
+                and input_parameters['item'] == recipe_input_start.get('ingredient')
+                and row.get('work_scope') == 'immediate'
+                and row.get('unknowns') == [] and row.get('reasons') == []
+                and type(row.get('urgency')) is int and row['urgency'] == 0
+                and row.get('research_deadline_tick') is None
+                and row.get('requires_investment') is False
+                and type(tick) is int and isinstance(target, str) and bool(target)
+                and isinstance(row.get('local_target'), dict)
+                and row['local_target'].get('item') == target
+                and recipe_input_start.get('observed_tick') == tick
+                and recipe_input_start.get('basis') ==
+                    'current_planner_recipe_input_and_owned_native_machine'
+                and recipe_input_start.get(
+                    'native_transfer_and_later_output_require_verification') is True
+                and isinstance(input_path, list) and 2 <= len(input_path) <= 32
+                and all(isinstance(part, str) and bool(part) for part in input_path)
+                and input_path[0] == target
+                and isinstance(recipe_input_start.get('direct_native_recipe'), str)
+                and recipe_input_start['direct_native_recipe']
+                and input_path[-2:] == [recipe_input_start['direct_native_recipe'],
+                                         input_parameters['item']]
+                and recipe_input_start.get('owned_source_role') ==
+                    input_parameters.get('role') == (
+                        'recipe:' + recipe_input_start['direct_native_recipe'])
+                and type(recipe_input_start.get('owned_source_unit')) is int
+                and recipe_input_start['owned_source_unit'] > 0
+                and type(recipe_input_start.get('ingredient_in_machine_now')) is int
+                and recipe_input_start['ingredient_in_machine_now'] >= 0
+                and type(recipe_input_start.get('ingredient_in_inventory_now')) is int
+                and type(recipe_input_start.get('paid_quantity_to_transfer')) is int
+                and recipe_input_start['paid_quantity_to_transfer'] > 0
+                and recipe_input_start['ingredient_in_inventory_now'] >=
+                    recipe_input_start['paid_quantity_to_transfer']
+                and type(input_parameters.get('quantity')) is int
+                and recipe_input_start['paid_quantity_to_transfer'] ==
+                    input_parameters.get('quantity')
+                and input_step.costs == {
+                    input_parameters['item']:
+                        recipe_input_start['paid_quantity_to_transfer']}
+                and isinstance(input_parameters.get('receipt'), str)
+                and input_parameters['receipt'] ==
+                    recipe_input_start.get('planned_native_receipt_id') == (
+                        f"{tick}:factory_insert:{input_parameters['role']}:"
+                        f"{input_parameters['item']}"))
             input_hint = (
                 " `recipe_input_transfer_start_evidence` ties this paid ingredient transfer "
                 "to the current planner path, native recipe, owned machine, carried input, "
-                "and planned receipt ID. It does not prove transfer or output; native "
-                "verification remains required."
-                if recipe_input_start else ""
+                "and planned receipt ID. This sole same-tick, bounded transfer would "
+                "supply a useful recipe input if its paid receipt verifies (level 1); "
+                "it does not itself prove an observed "
+                "production blocker was removed (level 2) or downstream output. Use "
+                "level 2 only with an independent current blocker fact. A contrary "
+                "current fact can lower the score. The native transfer receipt and "
+                "later output still require verification."
+                if qualified_recipe_input else
+                " A reported recipe-input transfer witness alone does not establish "
+                "a current paid transfer or downstream output. Check its recipe path, "
+                "owned machine, carried input, and planned receipt before assigning benefit."
+                if isinstance(recipe_input_start, dict) else ""
             )
             pickup_start = row.get('output_pickup_start_evidence')
             pickup_step = plan.steps[0] if len(plan.steps) == 1 else None
