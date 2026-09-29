@@ -120,6 +120,18 @@ v1/v2 trial meaning and same-pack downstream qualification are unchanged.
 | `minimum_timing_samples` | Integer 2–50000, chosen before inspecting outcomes |
 | `regression_limits` | `max_iteration_p95_ratio` in 0.01–10 and `min_science_rate_ratio` in 0–10 |
 
+`downstream_recipe_witness.py` and its fixed Lua v1 query are a separate,
+read-only source interface for the missing recipe edge. Under an owner-controlled
+ordered RCON read, it checks the source-qualified solid-route installation, the
+current paid route target and owned science consumer, and deterministic native
+item products/ingredients at one actor session and tick. The strict decoder
+requires a separately validated expected route and a bounded tick window. It
+can establish current recipe dependency only: `stock_provenance_qualified` and
+`mutation_authorized` are always false. The v3 integration analyzer does not
+consume this witness or upgrade intermediate routes to science-flow acceptance;
+later native qualification must first prove the pinned 2.0.77 query shape,
+receipt/stock lineage and actual science use through the retained campaign.
+
 The seven configuration booleans are `background_work`, `furnace_output_buffers`,
 `furnace_input_belts`, `mining_outposts`, `ore_side_successors`, `solid_routes`, and
 `solid_science_policy`. The optional campaign booleans are `lead_time_supply`,
