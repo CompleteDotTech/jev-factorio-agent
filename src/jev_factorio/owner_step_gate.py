@@ -118,13 +118,26 @@ class OwnerStepGate:
     def _checkpoint(self, loop) -> tuple[str, str | None]:
         raw = _private_file(self.checkpoint, maximum=64 * 1024 * 1024)
         saved = loop.memory_type.from_bytes(raw, loop.memory.session_id, loop.target)
-        if (saved.status != "running" or saved.pending is not None
-                or saved.attempt is not None or saved.background_job is not None
-                or saved.background_attempt is not None
-                or saved.transfer_recovery is not None
-                or saved.reservations
-                or getattr(saved, "solid_commitments", None)
-                or getattr(saved, "coal_commitments", None)):
+        # A grant is valid only at a fully quiescent composed checkpoint. The
+        # controller may otherwise retain a paid route, outpost, connector, or
+        # funding owner even when the immediate dispatch is verified.
+        def quiescent(memory) -> bool:
+            null_owners = (
+                "pending", "attempt", "active_plan", "background_job",
+                "background_attempt", "transfer_recovery", "connector_ownership",
+                "capital_investment", "solid_funding", "coal_funding",
+            )
+            empty_owners = (
+                "reservations", "solid_commitments", "coal_commitments",
+                "output_commitments", "input_commitments", "outpost_commitments",
+                "successor_projects",
+            )
+            return (memory.status == "running"
+                    and all(getattr(memory, name, None) is None for name in null_owners)
+                    and all(isinstance(getattr(memory, name, {}), dict)
+                            and not getattr(memory, name, {}) for name in empty_owners))
+
+        if not quiescent(saved) or not quiescent(loop.memory):
             raise StepGateClosed("Checkpoint has unresolved ownership")
         if (loop.memory.status != saved.status or loop.memory.pending != saved.pending
                 or loop.memory.attempt != saved.attempt

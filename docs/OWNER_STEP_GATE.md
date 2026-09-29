@@ -16,8 +16,11 @@ must use a new directory only after reconciling the prior attempt; an existing
 directory is never resumed.
 
 After a verified step, the process checks that the in-memory and durable
-checkpoint agree, that no pending/attempt/background/transfer/reservation
-ownership remains, and that the provider and native actor are idle. It reads
+checkpoint agree, that no pending attempt, active plan, background job,
+transfer recovery, reservation, route or outpost commitment, successor project,
+connector owner, capital investment, or solid/coal funding owner remains, and
+that the provider and native actor are idle. The same composed ownership check
+runs again after the external grant, before acceptance. It reads
 the installed native manifest, current paid receipt ledger and original
 attachment receipt, then fsyncs a
 private `step-NNNN-request.json` with schema `jev.owner-step-gate.v1`. The
@@ -53,8 +56,9 @@ order. These source tests are offline contract checks; deploying this feature
 requires separate exact-source review, a reviewed native wrapper and a guarded
 trial. No live throughput or capacity improvement follows from the tests.
 
-The first implementation also refuses nonempty solid or coal commitments even
-when they may be completed. This is deliberately conservative: admitting a
-completed commitment requires an independently reviewed native/checkpoint
-reconciliation rule. A refusal leaves the durable campaign state intact and
-requires an ordinary owner-reviewed one-use continuation.
+The gate refuses any nonempty solid, coal, output, input or outpost commitment,
+including one that may be completed, and any nonempty successor, connector or
+funding owner. This is deliberately conservative: admitting reconciled
+ownership requires an independently reviewed native/checkpoint rule. A refusal
+leaves the durable campaign state intact and requires an ordinary owner-reviewed
+one-use continuation.

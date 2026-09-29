@@ -36,6 +36,14 @@ def gate_fixture(tmp_path, monkeypatch):
                              attempt=None, background_job=None, background_attempt=None,
                              transfer_recovery=None, reservations={}, last_tick=1,
                              attempt_outcomes=[{'id': 'prior', 'outcome': 'verified'}])
+    memory.active_plan = None
+    memory.connector_ownership = None
+    memory.capital_investment = None
+    memory.solid_funding = None
+    memory.coal_funding = None
+    for name in ('solid_commitments', 'coal_commitments', 'output_commitments',
+                 'input_commitments', 'outpost_commitments', 'successor_projects'):
+        setattr(memory, name, {})
 
     class MemoryType:
         @staticmethod
@@ -45,6 +53,8 @@ def gate_fixture(tmp_path, monkeypatch):
             decoded = json.loads(raw)
             saved.last_tick = decoded['tick']
             saved.attempt_outcomes = decoded['outcomes']
+            for name, owner in decoded.get('owners', {}).items():
+                setattr(saved, name, owner)
             return saved
 
     snapshot = SimpleNamespace(session_id='session', _native_controls={
@@ -249,6 +259,65 @@ def test_pending_owner_cannot_issue_request(gate_fixture):
     with pytest.raises(StepGateClosed, match='unresolved ownership'):
         gate(loop, 1, {'verified': True, 'status': 'running'})
     assert not list(gate.directory.iterdir())
+
+
+@pytest.mark.parametrize('name,owner', [
+    ('active_plan', {'id': 'active'}),
+    ('output_commitments', {'route': 'held'}),
+    ('input_commitments', {'route': 'held'}),
+    ('outpost_commitments', {'site': 'held'}),
+    ('successor_projects', {'project': 'active'}),
+    ('connector_ownership', {'routes': {}}),
+    ('capital_investment', {'held': 1}),
+    ('solid_funding', {'held': 1}),
+    ('coal_funding', {'held': 1}),
+])
+def test_composed_owner_blocks_request(gate_fixture, name, owner):
+    make_gate, loop, _ = gate_fixture
+    setattr(loop.memory, name, owner)
+    gate = make_gate(sleep=lambda _: None)
+    with pytest.raises(StepGateClosed, match='unresolved ownership'):
+        gate(loop, 1, {'verified': True, 'status': 'running'})
+    assert not list(gate.directory.iterdir())
+
+
+@pytest.mark.parametrize('name,owner', [
+    ('active_plan', {'id': 'active'}),
+    ('output_commitments', {'route': 'held'}),
+    ('input_commitments', {'route': 'held'}),
+    ('outpost_commitments', {'site': 'held'}),
+    ('successor_projects', {'project': 'active'}),
+    ('connector_ownership', {'routes': {}}),
+    ('capital_investment', {'held': 1}),
+    ('solid_funding', {'held': 1}),
+    ('coal_funding', {'held': 1}),
+])
+def test_composed_owner_appearing_after_grant_blocks_acceptance(gate_fixture, name, owner):
+    make_gate, loop, _ = gate_fixture
+
+    def sleep(_):
+        _grant(gate.directory / 'step-0001-request.json')
+        setattr(loop.memory, name, owner)
+
+    gate = make_gate(sleep=sleep)
+    with pytest.raises(StepGateClosed, match='unresolved ownership'):
+        gate(loop, 1, {'verified': True, 'status': 'running'})
+    assert not (gate.directory / 'step-0001-accepted.json').exists()
+
+
+def test_durable_composed_owner_appearing_after_grant_blocks_acceptance(gate_fixture):
+    make_gate, loop, checkpoint = gate_fixture
+
+    def sleep(_):
+        _grant(gate.directory / 'step-0001-request.json')
+        checkpoint.write_text(json.dumps({'tick': 1, 'outcomes': [
+            {'id': 'prior', 'outcome': 'verified'}],
+            'owners': {'input_commitments': {'route': 'held'}}}))
+
+    gate = make_gate(sleep=sleep)
+    with pytest.raises(StepGateClosed, match='unresolved ownership'):
+        gate(loop, 1, {'verified': True, 'status': 'running'})
+    assert not (gate.directory / 'step-0001-accepted.json').exists()
 
 
 def test_missing_grant_durably_closes_without_next_step(gate_fixture):
