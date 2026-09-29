@@ -1,5 +1,7 @@
 """Redaction equivalence and traversal bounds; no timing-dependent assertions."""
 from copy import deepcopy
+from dataclasses import asdict, dataclass
+import math
 
 import pytest
 
@@ -23,6 +25,26 @@ def legacy_clean(redactor, value):
                                 else legacy_clean(redactor, item))
         return result
     return value
+
+
+def legacy_safe_payload(snapshot, secrets):
+    """Reproduce the prior snapshot asdict -> normalize -> clean sequence."""
+    def normalize(item):
+        if item is None or type(item) in (str, bool, int):
+            return item
+        if type(item) is float:
+            return item if math.isfinite(item) else {'invalid_numeric': repr(item)}
+        if type(item) in (list, tuple):
+            return [normalize(child) for child in item]
+        if type(item) is dict:
+            if any(type(key) is not str for key in item):
+                raise ValueError('Causal evidence keys must be strings')
+            return {key: normalize(child) for key, child in item.items()}
+        return '[unsupported value]'
+
+    redactor = rl.Redactor({f'SECRET_{index}': secret for index, secret in enumerate(secrets)
+                            if isinstance(secret, str) and secret})
+    return redactor.clean(normalize(asdict(snapshot)))
 
 
 def synthetic_snapshot(count=128):
@@ -80,3 +102,48 @@ def test_validation_visits_each_value_once(monkeypatch):
         visited.clear()
         rl.Redactor({}).clean(value)
         assert len(visited) == 2 * depth + 1
+
+
+def test_safe_payload_matches_two_pass_reference_for_nested_and_sensitive_data():
+    @dataclass
+    class NestedEvidence:
+        token: str
+        values: tuple
+
+    @dataclass
+    class SnapshotFixture:
+        snapshot: dict
+
+    snapshot = SnapshotFixture({
+        **synthetic_snapshot(32),
+        'extra': {
+            'record': NestedEvidence('fixture-secret', (1, {'url': 'https://example.invalid/private'})),
+            'api_token': {'deep': {1: 'invalid but redacted'}},
+            'not_finite': float('nan'),
+            'unsupported': object(),
+            'authorization': 'Bearer abcDEF123',
+        },
+    })
+    secrets = ['fixture-secret', 'abcDEF123']
+
+    with pytest.raises(ValueError, match='keys must be strings'):
+        legacy_safe_payload(snapshot, secrets)
+    with pytest.raises(ValueError, match='keys must be strings'):
+        rl._safe_observation_payload({'snapshot': snapshot.snapshot}, secrets)
+
+    snapshot.snapshot['extra']['api_token'] = {'deep': {'field': 'safe'}}
+    expected = legacy_safe_payload(snapshot, secrets)
+    actual = rl._safe_observation_payload({'snapshot': snapshot.snapshot}, secrets)
+    assert rl.canonical_bytes(actual) == rl.canonical_bytes(expected)
+    assert rl.digest(actual) == rl.digest(expected)
+    assert 'fixture-secret' not in rl.canonical_bytes(actual).decode()
+    assert 'https://' not in rl.canonical_bytes(actual).decode()
+
+
+def test_unrelated_event_dataclass_remains_unsupported_without_leaking_fields():
+    from dataclasses import make_dataclass
+
+    InternalNote = make_dataclass('InternalNote', [('internal_note', str)])
+    captured = rl.safe_payload({'extra': InternalNote('unlisted private text')})
+    assert captured == {'extra': '[unsupported value]'}
+    assert 'unlisted private text' not in rl.canonical_bytes(captured).decode()

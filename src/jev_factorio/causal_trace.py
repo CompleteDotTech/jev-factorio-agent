@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 import errno
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from copy import deepcopy
 from functools import wraps
 from typing import Callable, TypeVar
@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import requests
 
-from .research_log import EventSink, ResearchLogError, safe_payload
+from .research_log import EventSink, ResearchLogError, _safe_observation_payload, safe_payload
 from .iteration_timing import profiled_iteration, measured, span
 
 class TraceStorageError(ResearchLogError):
@@ -20,6 +20,16 @@ class TraceStorageError(ResearchLogError):
 
 
 T = TypeVar("T")
+
+
+def _snapshot_payload(snapshot: object) -> dict:
+    """Expose snapshot fields without copying their nested values first.
+
+    ``emit`` immediately normalizes, redacts, and detaches the complete event
+    before it reaches a sink. ``dataclasses.asdict`` would deep-copy every
+    nested field here before the observation sanitizer built the sink-owned tree.
+    """
+    return {field.name: getattr(snapshot, field.name) for field in fields(snapshot)}
 
 
 def error_facts(error: BaseException) -> dict:
@@ -144,7 +154,10 @@ class CausalTrace:
                         "factorio_tick": self._tick, "supervisor_provenance": self.provenance,
                         **payload}
             # Even a custom sink must not retain or mutate live controller data.
-            self.sink.emit(event_type, safe_payload(envelope, self._secrets))
+            clean_envelope = (_safe_observation_payload(envelope, self._secrets)
+                              if event_type == "observation"
+                              else safe_payload(envelope, self._secrets))
+            self.sink.emit(event_type, clean_envelope)
         except Exception as error:
             failed = True
             self._failed = True
@@ -235,7 +248,7 @@ class CausalTrace:
             self.observation_id = observation_id
             self._session_id, self._world_kind = snapshot.session_id, snapshot.world_kind
             self._tick = snapshot.tick
-            return {"observation_id": observation_id, "snapshot": asdict(snapshot),
+            return {"observation_id": observation_id, "snapshot": _snapshot_payload(snapshot),
                     "validation": "not_yet_validated"}
 
         return self.call("observation", backend.observe,
