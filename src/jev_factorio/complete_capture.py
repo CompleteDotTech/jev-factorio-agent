@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .acceptance_capture import RECORD_FIELDS, STATE_FIELDS, FACTORY_FIELDS, DENIED
 from .acceptance_io import MAX_JSON, MAX_LOG, canonical, hash_file, load_json, records, sha256, stable_read, write_new
-from .integration_evidence import TRIAL_SCHEMA_V2, validate_trial
+from .integration_evidence import TRIAL_SCHEMA_V2, TRIAL_SCHEMA_V3, validate_trial
 from .research_log import Redactor
 from .dev_preflight import checkpoint_type
 from .state import GameSnapshot
@@ -230,8 +230,8 @@ def capture(*, gameplay: Path, trial_path: Path, initial_checkpoint: Path,
     trial_raw = stable_read(trial_path)
     trial = load_json(trial_raw)
     validate_trial(trial)
-    if trial['schema'] != TRIAL_SCHEMA_V2:
-        raise ValueError('Complete capture requires the v2 trial')
+    if trial['schema'] not in {TRIAL_SCHEMA_V2, TRIAL_SCHEMA_V3}:
+        raise ValueError('Complete capture requires a complete trial')
     initial_raw = stable_read(initial_checkpoint)
     final_raw = stable_read(final_checkpoint)
     if sha256(initial_raw) != trial['initial_checkpoint_sha256']:
@@ -318,7 +318,8 @@ def verify(directory: Path) -> dict:
     checked_preflight(preflight, trial, initial, projected)
     checked_checkpoint_progress(initial, final)
     checked_economic_binding(trial, initial, final, projected)
-    if (trial['schema'] != TRIAL_SCHEMA_V2 or len(projected) != manifest.get('records')
+    if (trial['schema'] not in {TRIAL_SCHEMA_V2, TRIAL_SCHEMA_V3}
+            or len(projected) != manifest.get('records')
             or manifest.get('capture_complete') is not True
             or manifest.get('native_acceptance') != 'not_accepted'
             or manifest.get('deployment_authorized') is not False
