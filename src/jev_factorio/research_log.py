@@ -17,7 +17,7 @@ import subprocess
 import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
@@ -186,23 +186,56 @@ class Redactor:
 
 @measured("trace_normalize_redact")
 def safe_payload(value: object, secrets: Iterable[str] = ()) -> object:
-    """Detach causal data and label unsupported values without stringifying them."""
+    """Normalize, redact, and detach causal data in one recursive pass."""
+    redactor = Redactor({f"SECRET_{index}": secret for index, secret in enumerate(secrets)
+                         if isinstance(secret, str) and secret})
+
+    def validate_discarded(item):
+        """Retain key validation under sensitive fields without copying values."""
+        if is_dataclass(item) and not isinstance(item, type):
+            for field in fields(item):
+                validate_discarded(getattr(item, field.name))
+        elif type(item) in (list, tuple):
+            for child in item:
+                validate_discarded(child)
+        elif type(item) is dict:
+            if any(type(key) is not str for key in item):
+                raise ValueError("Causal evidence keys must be strings")
+            for child in item.values():
+                validate_discarded(child)
+
+    def clean_mapping(items):
+        result = {}
+        for key, child in items:
+            if type(key) is not str:
+                raise ValueError("Causal evidence keys must be strings")
+            if _SENSITIVE.search(key):
+                validate_discarded(child)
+                cleaned = REDACTED
+            else:
+                cleaned = normalize(child)
+            safe_key = redactor.text(key)
+            if safe_key in result:
+                raise ValueError("Redaction produced duplicate evidence keys")
+            result[safe_key] = cleaned
+        return result
+
     def normalize(item):
         if item is None or type(item) in (str, bool, int):
-            return item
+            return redactor.text(item) if type(item) is str else item
         if type(item) is float:
-            return item if math.isfinite(item) else {"invalid_numeric": repr(item)}
+            return item if math.isfinite(item) else clean_mapping((("invalid_numeric", repr(item)),))
+        if is_dataclass(item) and not isinstance(item, type):
+            return clean_mapping((field.name, getattr(item, field.name)) for field in fields(item))
         if type(item) in (list, tuple):
             return [normalize(child) for child in item]
         if type(item) is dict:
             if any(type(key) is not str for key in item):
                 raise ValueError("Causal evidence keys must be strings")
-            return {key: normalize(child) for key, child in item.items()}
-        return "[unsupported value]"
+            return clean_mapping(item.items())
+        return redactor.text("[unsupported value]")
 
-    redactor = Redactor({f"SECRET_{index}": secret for index, secret in enumerate(secrets)
-                         if isinstance(secret, str) and secret})
-    return redactor.clean(normalize(value))
+    return normalize(value)
 
 
 def collect_provenance(repo_dir: Path, environ: Mapping[str, str]) -> dict:

@@ -4,7 +4,7 @@ import io
 import json
 import sys
 from contextlib import redirect_stdout
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from itertools import count
 from uuid import UUID
 
@@ -20,6 +20,7 @@ from jev_factorio.loop import AgentLoop
 from jev_factorio.memory import CampaignMemory
 from jev_factorio.research_log import ResearchLog, ResearchLogError, RunConfiguration, verify_run
 from jev_factorio.skills import Plan, Step
+from jev_factorio.state import GameSnapshot
 
 
 class Sink:
@@ -35,6 +36,47 @@ class Sink:
 
 def events(sink, kind):
     return [e["payload"] for e in sink.events if e["event_type"] == kind]
+
+
+def test_observation_capture_avoids_intermediate_deepcopy_and_preserves_values():
+    class NoDeepcopy:
+        def __deepcopy__(self, memo):
+            raise AssertionError("snapshot capture made a redundant deep copy")
+
+    @dataclass
+    class NestedValue:
+        units: int
+
+    snapshot = GameSnapshot(
+        tick=12, session_id="mock:capture", world_kind="mock",
+        inventory={"iron": 3},
+        factory={"nested": [NestedValue(2)], "unsupported": NoDeepcopy()},
+    )
+
+    class Backend:
+        def observe(self):
+            return snapshot
+
+    class RetainingSink:
+        def __init__(self):
+            self.events = []
+
+        def emit(self, kind, payload):
+            self.events.append((kind, payload))
+
+    sink = RetainingSink()
+    CausalTrace(sink, "capture-test").observe(Backend(), "before_decision")
+    captured = next(payload for kind, payload in sink.events if kind == "observation")
+    saved = captured["snapshot"]
+
+    assert saved["factory"]["unsupported"] == "[unsupported value]"
+    assert saved["inventory"] == {"iron": 3}
+    assert saved["factory"]["nested"] == [{"units": 2}]
+
+    snapshot.inventory["iron"] = 99
+    snapshot.factory["nested"][0].units = 99
+    assert saved["inventory"] == {"iron": 3}
+    assert saved["factory"]["nested"] == [{"units": 2}]
 
 
 class Backend(MockBackend):
