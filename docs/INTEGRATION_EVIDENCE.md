@@ -38,8 +38,11 @@ or handoff mechanism. See [the staged runbook](NATIVE_ACCEPTANCE_103.md).
 Provide four files from a bounded, retained evidence window:
 
 1. Complete gameplay JSONL, including before/after observations, owned entities,
-   native route envelopes, runtime identity, transfer receipts, failure budgets,
-   provenance and completed-iteration timing. A truncated tail is rejected.
+    native route envelopes, runtime identity, transfer receipts, failure budgets,
+    provenance and completed-iteration timing. An optional read-only recipe
+    dependency capture may be stored on its matching record as
+    `recipe_dependency_witnesses`; keep these bundles with the private evidence.
+    A truncated tail is rejected.
 2. A predeclared trial JSON document using the exact schema below.
 3. The initial checkpoint copy.
 4. The final checkpoint copy at the last captured after-state tick.
@@ -127,10 +130,20 @@ current paid route target and owned science consumer, and deterministic native
 item products/ingredients at one actor session and tick. The strict decoder
 requires a separately validated expected route and a bounded tick window. It
 can establish current recipe dependency only: `stock_provenance_qualified` and
-`mutation_authorized` are always false. The v3 integration analyzer does not
-consume this witness or upgrade intermediate routes to science-flow acceptance;
-later native qualification must first prove the pinned 2.0.77 query shape,
-receipt/stock lineage and actual science use through the retained campaign.
+`mutation_authorized` are always false. `observe_capture()` returns a private
+binding bundle for one such query; attach it to the matching complete gameplay
+record under `recipe_dependency_witnesses` for offline analysis. The analyzer
+replays the strict decoder and binds the request, route, actor/session identity
+and query tick to the predeclared chain and an owned observation within 120 native
+ticks. Duplicate captures, malformed lists, and malformed or unassociated list
+members cannot qualify a witness. When
+present, this current recipe edge is composed with the separate paid-transfer
+and fresh-stock/recipe-counter diagnostics. The combined label remains
+correlation only: it does not show that the transferred units caused the recipe
+output, prove actual science use, or authenticate the evidence. The capture does
+not upgrade intermediate routes to science-flow acceptance; later native
+qualification must still prove the pinned 2.0.77 query shape, receipt/stock
+lineage and actual science use through the retained campaign.
 
 The seven configuration booleans are `background_work`, `furnace_output_buffers`,
 `furnace_input_belts`, `mining_outposts`, `ore_side_successors`, `solid_routes`, and

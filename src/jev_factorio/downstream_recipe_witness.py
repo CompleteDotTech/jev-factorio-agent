@@ -15,6 +15,7 @@ from .backends.native_attachment import (
 from .iteration_timing import decode_native
 
 SCHEMA = 'jev.downstream-recipe-witness.v1'
+CAPTURE_SCHEMA = 'jev.downstream-recipe-witness-capture.v1'
 SOURCE = 'lua/downstream_recipe_witness.lua'
 REQUEST_KEYS = frozenset({'route', 'producer_role', 'producer_unit', 'product_item',
                           'consumer_role', 'consumer_unit', 'science_pack'})
@@ -33,6 +34,8 @@ PACKS = frozenset({'automation-science-pack', 'logistic-science-pack',
 REASONS = frozenset({'unsupported', 'malformed', 'bound', 'request', 'native_version',
                      'installed_source', 'actor', 'epoch', 'route', 'identity',
                      'producer', 'recipe', 'dependency'})
+CAPTURE_KEYS = frozenset({'schema', 'request', 'expected_epoch', 'expected_route',
+                          'attachment', 'result'})
 _NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9:_.-]*\Z')
 
 
@@ -47,6 +50,19 @@ def _name(value, maximum=128) -> bool:
 
 def _integer(value, minimum=1, maximum=9007199254740991) -> bool:
     return type(value) is int and minimum <= value <= maximum
+
+
+def _same_typed(left, right) -> bool:
+    """Compare JSON values without Python's bool/int/float equality coercions."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _same_typed(left[key], right[key]) for key in left)
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _same_typed(a, b) for a, b in zip(left, right))
+    return left == right
 
 
 def _attachment(attachment: dict) -> None:
@@ -97,7 +113,7 @@ def decode(raw: dict, *, request: dict, expected_epoch: dict,
     _attachment(attachment)
     _need(isinstance(raw, dict) and set(raw) == ROOT_KEYS and raw['schema'] == SCHEMA
           and raw['base_version'] == '2.0.77'
-          and raw['request'] == request
+          and _same_typed(raw['request'], request)
           and raw['stock_provenance_qualified'] is False
           and raw['mutation_authorized'] is False, 'invalid_witness')
     if raw['status'] == 'unqualified':
@@ -108,34 +124,45 @@ def decode(raw: dict, *, request: dict, expected_epoch: dict,
     _need(raw['status'] == 'observed' and raw['reason'] == 'none'
           and raw['recipe_dependency_verified'] is True, 'invalid_observed_witness')
     epoch = raw['epoch']
-    _need(isinstance(expected_epoch, dict) and set(expected_epoch) == EPOCH_KEYS - {'tick'}
+    identity_keys = EPOCH_KEYS - {'tick'}
+    _need(isinstance(expected_epoch, dict) and set(expected_epoch) == identity_keys
           | {'min_tick', 'max_tick'} and isinstance(epoch, dict)
           and set(epoch) == EPOCH_KEYS
-          and all(epoch[key] == expected_epoch[key] for key in EPOCH_KEYS - {'tick'})
+          and _name(expected_epoch.get('session_id'))
+          and all(_integer(expected_epoch.get(key)) for key in
+                  ('actor_index', 'actor_unit', 'surface_index', 'force_index'))
+          and _integer(expected_epoch.get('min_tick'), 0)
+          and _integer(expected_epoch.get('max_tick'), 0)
+          and _name(epoch.get('session_id'))
+          and all(_integer(epoch.get(key)) for key in
+                  ('actor_index', 'actor_unit', 'surface_index', 'force_index'))
+          and _same_typed({key: epoch[key] for key in identity_keys},
+                          {key: expected_epoch[key] for key in identity_keys})
           and epoch['session_id'] == attachment['session_id']
           and epoch['actor_unit'] == attachment['actor_unit']
           and _integer(epoch['tick'], 0)
-          and _integer(expected_epoch['min_tick'], 0)
-          and _integer(expected_epoch['max_tick'], 0)
           and expected_epoch['min_tick'] <= epoch['tick'] <= expected_epoch['max_tick']
           and expected_epoch['max_tick'] - expected_epoch['min_tick'] <= 120,
           'epoch_mismatch')
     route = raw['route']
     _need(isinstance(expected_route, dict) and set(expected_route) == ROUTE_KEYS
           and isinstance(route, dict) and set(route) == ROUTE_KEYS
-          and route == expected_route
+          and _same_typed(route, expected_route)
           and route['id'] == request['route']
           and _name(route['item']) and _name(route['source_role'])
           and _integer(route['source_unit'])
           and route['target_role'] == request['producer_role']
+          and _integer(route['target_unit'])
           and route['target_unit'] == request['producer_unit']
           and _integer(route['paid_parts'], 1, 128), 'route_mismatch')
     producer, consumer = raw['producer'], raw['consumer']
     _need(isinstance(producer, dict) and set(producer) == {'role', 'unit', 'recipe'}
           and producer['role'] == request['producer_role']
+          and _integer(producer['unit'])
           and producer['unit'] == request['producer_unit']
           and isinstance(consumer, dict) and set(consumer) == {'role', 'unit', 'recipe'}
           and consumer['role'] == request['consumer_role']
+          and _integer(consumer['unit'])
           and consumer['unit'] == request['consumer_unit'], 'entity_mismatch')
     _recipe(producer['recipe'], request['product_item'])
     _recipe(consumer['recipe'], request['science_pack'])
@@ -146,6 +173,67 @@ def decode(raw: dict, *, request: dict, expected_epoch: dict,
 
 def decode_response(response: str, **kwargs) -> dict:
     return decode(decode_native(response), **kwargs)
+
+
+def _capture_attachment(attachment: dict) -> dict:
+    """Keep only the private fields needed to revalidate a captured witness."""
+    _attachment(attachment)
+    manifest = attachment['native_installation']
+    assets = manifest.get('assets')
+    _need(isinstance(assets, dict) and 'solid_routes' in assets, 'invalid_attachment')
+    return {
+        'session_id': attachment['session_id'],
+        'actor_unit': attachment['actor_unit'],
+        'modules': {'solid_routes': True},
+        'native_installation': {
+            'profile': manifest['profile'],
+            'assets': {'solid_routes': assets['solid_routes']},
+        },
+    }
+
+
+def capture_bundle(raw: dict, *, request: dict, expected_epoch: dict,
+                   expected_route: dict, attachment: dict) -> dict:
+    """Return a private, replayable binding for one already-read-only witness.
+
+    Callers may append this object to the matching gameplay JSONL record under
+    ``recipe_dependency_witnesses``. It carries no action authority.
+    """
+    request = validate_request(request)
+    result = decode(raw, request=request, expected_epoch=expected_epoch,
+                    expected_route=expected_route, attachment=attachment)
+    return {
+        'schema': CAPTURE_SCHEMA,
+        'request': request,
+        'expected_epoch': dict(expected_epoch),
+        'expected_route': dict(expected_route),
+        'attachment': _capture_attachment(attachment),
+        'result': result,
+    }
+
+
+def decode_capture_bundle(value: dict, *, request: dict,
+                          expected_epoch: dict, expected_route: dict) -> dict:
+    """Revalidate a private capture bundle against independently derived bounds."""
+    request = validate_request(request)
+    _need(isinstance(value, dict) and set(value) == CAPTURE_KEYS
+          and value['schema'] == CAPTURE_SCHEMA
+          and _same_typed(value['request'], request)
+          and _same_typed(value['expected_epoch'], expected_epoch)
+          and _same_typed(value['expected_route'], expected_route),
+          'invalid_capture_binding')
+    attachment = value['attachment']
+    _need(isinstance(attachment, dict)
+          and set(attachment) == {'session_id', 'actor_unit', 'modules', 'native_installation'}
+          and isinstance(attachment.get('modules'), dict)
+          and set(attachment['modules']) == {'solid_routes'}
+          and isinstance(attachment.get('native_installation'), dict)
+          and set(attachment['native_installation']) == {'profile', 'assets'}
+          and isinstance(attachment['native_installation'].get('assets'), dict)
+          and set(attachment['native_installation']['assets']) == {'solid_routes'},
+          'invalid_capture_attachment')
+    return decode(value['result'], request=request, expected_epoch=expected_epoch,
+                  expected_route=expected_route, attachment=attachment)
 
 
 def observe(client, *, request: dict, expected_epoch: dict,
@@ -159,3 +247,13 @@ def observe(client, *, request: dict, expected_epoch: dict,
     response = client.send_command(command(request, attachment))
     return decode_response(response, request=request, expected_epoch=expected_epoch,
                            expected_route=expected_route, attachment=attachment)
+
+
+def observe_capture(client, *, request: dict, expected_epoch: dict,
+                    expected_route: dict, receipt_path=None) -> dict:
+    """Capture one private binding bundle after qualified readback and one query."""
+    attachment = readback(client, receipt_path=receipt_path)
+    response = client.send_command(command(request, attachment))
+    return capture_bundle(decode_native(response), request=request,
+                          expected_epoch=expected_epoch, expected_route=expected_route,
+                          attachment=attachment)
