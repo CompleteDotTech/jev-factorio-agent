@@ -14,7 +14,7 @@ from .research_log import ResearchLog, RunConfiguration, validate_output_paths
 
 
 def make_backend(name: str, resume: bool = False, adopt_session: bool = False,
-                 setup_timing=None):
+                 setup_timing=None, connector_witness_path=None):
     if name == "mock":
         return MockBackend()
     if name == "play_api":
@@ -25,10 +25,12 @@ def make_backend(name: str, resume: bool = False, adopt_session: bool = False,
         from .backends.fle import FleBackend
         b = FleBackend()
         if setup_timing is None:
-            b.start(resume=resume, adopt_session=adopt_session)
+            b.start(resume=resume, adopt_session=adopt_session,
+                    connector_witness_path=connector_witness_path)
         else:
             b.start(resume=resume, adopt_session=adopt_session,
-                    setup_timing=setup_timing)
+                    setup_timing=setup_timing,
+                    connector_witness_path=connector_witness_path)
         return b
     raise SystemExit(f"unknown backend: {name}")
 
@@ -317,7 +319,10 @@ def cli() -> None:
             setup_timing.mark('dashboard_ready')
         if args.controller == "flat":
             options["research_log"] = research
-            loop = AgentLoop(make_backend(args.backend, resume=args.resume), **options)
+            connector_witness = (Path(args.checkpoint).with_name(
+                'native-connector-observer-v1.witness.jsonl') if args.checkpoint else None)
+            loop = AgentLoop(make_backend(args.backend, resume=args.resume,
+                                          connector_witness_path=connector_witness), **options)
         else:
             options["research_log"] = research
             loop_type = HierarchicalLoop
@@ -385,12 +390,18 @@ def cli() -> None:
             if setup_timing:
                 setup_timing.mark('preflight_ready')
             if setup_timing:
+                connector_witness = (Path(args.checkpoint).with_name(
+                    'native-connector-observer-v1.witness.jsonl') if args.checkpoint else None)
                 backend = make_backend(args.backend, resume=args.resume,
                                        adopt_session=args.adopt_session,
-                                       setup_timing=setup_timing)
+                                       setup_timing=setup_timing,
+                                       connector_witness_path=connector_witness)
             else:
+                connector_witness = (Path(args.checkpoint).with_name(
+                    'native-connector-observer-v1.witness.jsonl') if args.checkpoint else None)
                 backend = make_backend(args.backend, resume=args.resume,
-                                       adopt_session=args.adopt_session)
+                                       adopt_session=args.adopt_session,
+                                       connector_witness_path=connector_witness)
             if setup_timing:
                 setup_timing.mark('backend_ready')
             if args.backend == "fle" and args.profile_observations:

@@ -576,13 +576,19 @@ def test_native_research_bill_refuses_unsupported_forms(mutation, reason):
     assert projected['reason'] == reason
 
 
-def test_fixed_query_projects_source_bound_manual_rows_with_current_graph():
+@pytest.mark.parametrize('cycle_enabled', [False, True], ids=['bridged-v5', 'closed-world-v6'])
+def test_fixed_query_projects_source_bound_manual_rows_with_current_graph(cycle_enabled):
     raw, bundle = example()
     lua = lua_runtime(raw, bundle)
-    from jev_factorio.backends.native_attachment import MANUAL_CYCLE_PROFILE
+    from jev_factorio.backends.native_attachment import (
+        CLOSED_WORLD_PROFILE, MANUAL_CYCLE_PROFILE, connector_observer_bridge_sha256,
+        cycle_journal_sha256)
     journal_hash = 'a' * 64
-    lua.globals().manual_profile = MANUAL_CYCLE_PROFILE
+    lua.globals().manual_profile = CLOSED_WORLD_PROFILE if cycle_enabled else MANUAL_CYCLE_PROFILE
     lua.globals().journal_hash = journal_hash
+    lua.globals().bridge_hash = connector_observer_bridge_sha256()
+    lua.globals().cycle_hash = cycle_journal_sha256() if cycle_enabled else ''
+    lua.globals().cycle_enabled = cycle_enabled
     lua.execute('''
         local j={protocol=1,session_id=jev_fle_runtime.jev_session_id,
             actor_index=1,actor_unit=actor.unit_number,surface_index=1,force_index=1,
@@ -594,9 +600,22 @@ def test_fixed_query_projects_source_bound_manual_rows_with_current_graph():
             started_tick=9000,finished_tick=9100,coal_before=0,coal_after=5,
             walking_ticks=20,mining_ticks=30}
         jev_fle_runtime.coal_manual_journal_v1=j
+        jev_fle_runtime.connector_observer_bridge_v1={protocol=1,
+            snapshot_qualified=true,snapshot_tick=8999,
+            snapshot_ownership={protocol=1,session_id=jev_fle_runtime.jev_session_id,
+                tick=8999,routes={}}}
+        local cycle=nil
+        if cycle_enabled then
+            cycle={protocol=2,combined_tick_handler=function() end}
+            jev_fle_runtime.coal_manual_cycle_v2=cycle
+        end
+        local assets={coal_manual_journal_v1=journal_hash,
+            connector_observer_bridge_v1=bridge_hash}
+        if cycle then assets.coal_manual_cycle_v2=cycle_hash end
         jev_fle_runtime.native_installation={profile=manual_profile,
-            callbacks={journal_tick=j.tick_handler},
-            assets={coal_manual_journal_v1=journal_hash}}
+            callbacks={journal_tick=j.tick_handler,
+                cycle_tick=cycle and cycle.combined_tick_handler or nil},
+            assets=assets}
         campaign.receipt_order={'deliver-1','deliver-2'}
         campaign.receipts={
             ['deliver-1']={role='furnace',item='coal',quantity=2,
@@ -638,6 +657,7 @@ def test_fixed_query_projects_source_bound_manual_rows_with_current_graph():
     "table.insert(j.order,'missing')",
     "jev_fle_runtime.native_installation.callbacks.journal_tick=function() end",
     "jev_fle_runtime.native_installation.profile='retained-v4'",
+    "jev_fle_runtime.native_installation.profile='e759-observation-v2-water-origin-v4-manual-cycle-v5-connector-observer-v1'",
 ])
 def test_fixed_manual_query_refuses_pending_fault_rebound_or_unqualified_source(mutation):
     raw, bundle = example()

@@ -269,10 +269,31 @@ local ok,reason=pcall(function()
     local journal=rt.coal_manual_journal_v1
     if journal then
         local installation=rt.native_installation
-        need(installation and installation.profile==
-            "e759-observation-v2-water-origin-v4-manual-cycle-v5"
+        local bridge=rt.connector_observer_bridge_v1
+        local snapshot=bridge and bridge.snapshot_ownership
+        local profile=installation and installation.profile
+        local manual_profile="e759-observation-v2-water-origin-v4-manual-cycle-v5-connector-observer-v1"
+        local closed_world_profile=manual_profile:gsub(
+            "%-manual%-cycle%-v5%-connector%-observer%-v1",
+            "-manual-cycle-v6-connector-observer-v1")
+        local cycle=rt.coal_manual_cycle_v2
+        local cycle_qualified=(profile==manual_profile
+            and not cycle and installation.callbacks and installation.callbacks.cycle_tick==nil
+            and installation.assets and installation.assets.coal_manual_cycle_v2==nil)
+            or (profile==closed_world_profile
+            and cycle and cycle.protocol==2 and installation.callbacks
+            and installation.callbacks.cycle_tick==cycle.combined_tick_handler
+            and installation.assets and type(installation.assets.coal_manual_cycle_v2)=="string")
+        need((profile==manual_profile or profile==closed_world_profile)
+            and cycle_qualified
             and installation.callbacks and installation.callbacks.journal_tick==journal.tick_handler
             and installation.assets and type(installation.assets.coal_manual_journal_v1)=="string"
+            and bridge and bridge.protocol==1 and bridge.snapshot_qualified==true
+            and type(bridge.snapshot_tick)=="number" and bridge.snapshot_tick>=0
+            and type(snapshot)=="table" and snapshot.protocol==1
+            and snapshot.session_id==rt.jev_session_id and snapshot.tick==bridge.snapshot_tick
+            and type(snapshot.routes)=="table"
+            and type(installation.assets.connector_observer_bridge_v1)=="string"
             and journal.protocol==1 and journal.pending==nil
             and journal.session_id==rt.jev_session_id and journal.actor_index==index
             and journal.actor_unit==actor.unit_number

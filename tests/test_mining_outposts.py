@@ -549,7 +549,11 @@ def test_cli_records_explicit_outpost_treatment_and_preserves_resume(monkeypatch
     manifest = json.loads((tmp_path/'research/manifest.json').read_text())
     assert manifest['configuration']['mining_outposts'] is True
     assert manifest['configuration']['resume'] and manifest['configuration']['resume_controller']
-    assert captured['options'] == {'resume': True, 'adopt_session': False}
+    assert captured['options'] == {
+        'resume': True, 'adopt_session': False,
+        'connector_witness_path': checkpoint.with_name(
+            'native-connector-observer-v1.witness.jsonl'),
+    }
     assert captured['loop_options']['resume_controller'] and captured['steps'] == 0
     assert verify_run(tmp_path/'research')['complete']
     assert checkpoint.read_text() == '{}'

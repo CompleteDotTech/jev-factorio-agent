@@ -28,9 +28,14 @@ def qualified():
     modules['connector_ownership'] = False
     modules['coal_manual_journal_v1'] = False
     modules['coal_manual_cycle_v2'] = False
+    modules['connector_observer_bridge_v1'] = False
     return {'schema': 1, 'qualified': True, 'session_id': 'synthetic-session',
             'actor_unit': 17, 'modules': modules, 'solid_intents': [],
             'coal_targets': [], 'coal_admission_evidence': False,
+            'connector_observer_bridge_qualified': False,
+            'connector_snapshot_qualified': False,
+            'connector_snapshot_tick': 0,
+            'connector_snapshot_ownership': False,
             'native_installation': False}
 
 
@@ -58,6 +63,9 @@ def test_preflight_is_fixed_read_only_query_and_rejects_partial_chain(tmp_path, 
     assert client.sent == ['/sc ' + PROBE]
     assert 'script.on_event' not in PROBE and 'script.on_nth_tick' not in PROBE
     assert 'fair.bind(' not in PROBE and 'campaign.observe(' not in PROBE
+    assert 'c.observe()' not in PROBE
+    assert 'c.observe_connector_ownership()' not in PROBE
+    assert 'connector_observer_bridge_qualified' in PROBE
     assert 'c.observe==i.observer and c.transfer==i.transfer' in PROBE
     assert 'c.observe==b.observer and c.transfer==b.transfer' in PROBE
     assert 'c.observe==j.observe_wrapper and c.transfer==l.transfer' in PROBE
@@ -122,7 +130,8 @@ def test_source_change_or_missing_capability_cannot_reattach(monkeypatch):
         require_asset(attachment, 'fair_actions')
 
 
-def test_fresh_install_records_exact_assets_and_reattaches_without_external_receipt(monkeypatch):
+def test_fresh_install_records_exact_assets_and_requires_connector_snapshot_witness(
+        monkeypatch, tmp_path):
     monkeypatch.delenv('JEV_NATIVE_ATTACHMENT_RECEIPT', raising=False)
     root = files('jev_factorio').joinpath('lua')
     source = root.joinpath('connector_ownership.lua').read_text()
@@ -134,6 +143,8 @@ def test_fresh_install_records_exact_assets_and_reattaches_without_external_rece
         prepare_install_command(source, {'native_installation': {}})
     row = qualified()
     row['modules']['connector_ownership'] = True
+    row['modules']['connector_observer_bridge_v1'] = True
+    row['connector_observer_bridge_qualified'] = True
     row['native_installation'] = {
         'schema': NATIVE_SCHEMA, 'session_id': row['session_id'],
         'actor_unit': row['actor_unit'], 'profile': False,
@@ -146,7 +157,15 @@ def test_fresh_install_records_exact_assets_and_reattaches_without_external_rece
         def send_command(self, command):
             assert command == '/sc ' + PROBE
             return json.dumps(row)
-    assert readback(Client())['native_installation']['assets']['connector_ownership'] == sha
+    from native_connector_witness_helpers import write_snapshot_witness
+    receipt, witness = write_snapshot_witness(tmp_path, row)
+    assert readback(Client(), receipt_path=receipt,
+                    connector_witness_path=witness)['native_installation'][
+                        'assets']['connector_ownership'] == sha
+    bridge_sha = hashlib.sha256(root.joinpath('connector_observer_bridge_v1.lua').read_bytes()).hexdigest()
+    assert readback(Client(), receipt_path=receipt, connector_witness_path=witness)[
+        'native_installation']['assets'][
+        'connector_observer_bridge_v1'] == bridge_sha
     assert require_asset(row, 'connector_ownership') is True
     row['native_installation']['assets']['connector_ownership'] = '0' * 64
     with pytest.raises(RuntimeError, match='differs from installed manifest'):
@@ -154,6 +173,30 @@ def test_fresh_install_records_exact_assets_and_reattaches_without_external_rece
     row['native_installation']['assets']['connector_ownership'] = sha
     row['native_installation']['assets'].pop('connector_ownership')
     with pytest.raises(RuntimeError, match='requires reconciliation'):
+        readback(Client())
+
+
+def test_connector_ledger_without_observer_bridge_cannot_reattach():
+    row = qualified()
+    row['modules'] = dict.fromkeys(PINNED_ASSETS, False)
+    row['modules']['connector_ownership'] = True
+    row['modules']['coal_manual_journal_v1'] = False
+    row['modules']['coal_manual_cycle_v2'] = False
+    row['modules']['connector_observer_bridge_v1'] = False
+    row['connector_observer_bridge_qualified'] = False
+    row['native_installation'] = {
+        'schema': NATIVE_SCHEMA, 'session_id': row['session_id'],
+        'actor_unit': row['actor_unit'], 'profile': False,
+        'assets': {'connector_ownership': hashlib.sha256(
+            files('jev_factorio').joinpath('lua/connector_ownership.lua').read_bytes()
+        ).hexdigest()},
+    }
+    class Client:
+        def send_command(self, command):
+            assert command == '/sc ' + PROBE
+            return json.dumps(row)
+
+    with pytest.raises(RuntimeError, match='observer bridge requires reconciliation'):
         readback(Client())
 
 

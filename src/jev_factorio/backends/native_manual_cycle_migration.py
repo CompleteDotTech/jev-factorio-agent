@@ -16,7 +16,8 @@ from ..memory import load_checkpoint
 from .native_attachment import (
     CALLBACKS_EXPR, MANUAL_CYCLE_PROFILE, NATIVE_SCHEMA, PINNED_ASSETS,
     WATER_ORIGIN_OBSERVATION_PROFILE, WATER_ORIGIN_OBSERVATION_SHA256,
-    connector_ownership_sha256, manual_journal_sha256, readback,
+    connector_observer_bridge_sha256, connector_ownership_sha256,
+    manual_journal_sha256, readback,
 )
 from .native_observation_migration import _digest, _private_bytes
 from .native_observation_water_origin_migration import (
@@ -124,12 +125,15 @@ def _manifest(attachment: dict) -> dict:
     return {**native, 'profile': MANUAL_CYCLE_PROFILE,
             'assets': {**expected,
                        'connector_ownership': connector_ownership_sha256(),
-                       'coal_manual_journal_v1': manual_journal_sha256()}}
+                       'coal_manual_journal_v1': manual_journal_sha256(),
+                       'connector_observer_bridge_v1': connector_observer_bridge_sha256()}}
 
 
 def _command(attachment: dict) -> str:
     connector_source = files('jev_factorio').joinpath('lua/connector_ownership.lua').read_text()
     journal_source = files('jev_factorio').joinpath('lua/coal_manual_journal_v1.lua').read_text()
+    bridge_source = files('jev_factorio').joinpath(
+        'lua/connector_observer_bridge_v1.lua').read_text()
     proposed = _manifest(attachment)
     old = attachment['native_installation']
     assets = json.dumps(old['assets'], sort_keys=True, separators=(',', ':'))
@@ -138,6 +142,7 @@ def _command(attachment: dict) -> str:
     return '/sc ' + (
         'local rt=assert(jev_fle_runtime); local storage=rt; '
         'local c=assert(rt.campaign); local f=assert(rt.fair); '
+        'local solid=assert(rt.solid_routes); '
         'local a=assert(rt.agent_characters[1]); '
         'local n=assert(rt.native_installation); local q=assert(rt.coal_supply); '
         'assert(rt.jev_session_id==' + session + ' and a.valid and a.unit_number=='
@@ -147,7 +152,9 @@ def _command(attachment: dict) -> str:
         'assert(not f.actor().walking_state.walking and not f.actor().mining_state.mining); '
         'assert(c.connector_ledger==nil and c.connector_begin==nil and c.connector_finish==nil '
         'and c.connector_page==nil and c.observe_connector_ownership==nil '
-        'and f.connector_place==nil and rt.coal_manual_journal_v1==nil); '
+        'and f.connector_place==nil and rt.coal_manual_journal_v1==nil '
+        'and rt.connector_observer_bridge_v1==nil); '
+        'assert(c.observe==solid.observer and n.callbacks and n.callbacks.observe==c.observe); '
         'assert(not q.committed and q.revision==4); '
         'for _,row in pairs(q.rows) do assert(not row.pending and not row.fault '
         'and not row.manual_pending and next(row.parts)==nil) end; '
@@ -164,28 +171,39 @@ def _command(attachment: dict) -> str:
         'local old_ledger=c.connector_ledger; local old_begin=c.connector_begin; '
         'local old_finish=c.connector_finish; local old_page=c.connector_page; '
         'local old_observe=c.observe_connector_ownership; '
-        'local old_place=f.connector_place; '
+        'local old_place=f.connector_place; local old_campaign_observe=c.observe; '
+        'local old_solid_observer=solid.observer; '
+        'local old_bridge=rt.connector_observer_bridge_v1; '
         'local ok,err=pcall(function() do\n' + connector_source + '\nend; '
         'assert(c.connector_ledger and c.connector_ledger.protocol==1 '
         'and next(c.connector_ledger.routes)==nil and c.connector_ledger.active==nil); '
         'do\n' + journal_source + '\nend; '
         'assert(rt.coal_manual_journal_v1 and rt.coal_manual_journal_v1.protocol==1); '
+        'do\n' + bridge_source + '\nend; '
+        'assert(rt.connector_observer_bridge_v1 and rt.connector_observer_bridge_v1.protocol==1 '
+        'and c.observe==solid.observer and c.observe==rt.connector_observer_bridge_v1.observer); '
         'n.assets.connector_ownership=' + json.dumps(connector_ownership_sha256()) + '; '
         'n.assets.coal_manual_journal_v1=' + json.dumps(manual_journal_sha256()) + '; '
+        'n.assets.connector_observer_bridge_v1=' + json.dumps(connector_observer_bridge_sha256()) + '; '
         'n.profile=' + json.dumps(MANUAL_CYCLE_PROFILE) + '; '
         'n.callbacks=' + CALLBACKS_EXPR + ' end); '
         'if not ok then script.on_nth_tick(1,nil); rt.coal_manual_journal_v1=nil; '
         'c.connector_ledger=old_ledger; c.connector_begin=old_begin; '
         'c.connector_finish=old_finish; c.connector_page=old_page; '
         'c.observe_connector_ownership=old_observe; f.connector_place=old_place; '
+        'c.observe=old_campaign_observe; solid.observer=old_solid_observer; '
+        'rt.connector_observer_bridge_v1=old_bridge; '
         'n.assets.connector_ownership=nil; '
         'n.assets.coal_manual_journal_v1=nil; '
+        'n.assets.connector_observer_bridge_v1=nil; '
         'n.profile=' + json.dumps(WATER_ORIGIN_OBSERVATION_PROFILE) + '; '
         'n.callbacks=old_callbacks; error(err) end; '
         'assert(n.assets.connector_ownership=='
         + json.dumps(proposed['assets']['connector_ownership']) + ' '
         'and n.assets.coal_manual_journal_v1=='
-        + json.dumps(proposed['assets']['coal_manual_journal_v1']) + '); '
+        + json.dumps(proposed['assets']['coal_manual_journal_v1'])
+        + ' and n.assets.connector_observer_bridge_v1=='
+        + json.dumps(proposed['assets']['connector_observer_bridge_v1']) + '); '
         'rcon.print(' + json.dumps(SENTINEL) + ')'
     )
 
@@ -251,7 +269,8 @@ def migrate_manual_cycle_v5(
             'after': proposed,
             'before_modules': attachment['modules'],
             'after_modules': {**attachment['modules'], 'connector_ownership': True,
-                              'coal_manual_journal_v1': True},
+                              'coal_manual_journal_v1': True,
+                              'connector_observer_bridge_v1': True},
             'command_sha256': hashlib.sha256(command.encode('utf-8')).hexdigest(),
         })
         try:
@@ -259,9 +278,10 @@ def migrate_manual_cycle_v5(
                 response = client.send_command(command)
                 if not isinstance(response, str) or not response.strip().endswith(SENTINEL):
                     raise RuntimeError('Migration acknowledgement absent')
-                after = readback(client)
+                after = readback(client, allow_unqualified_connector_bridge=True)
                 expected_modules = {**attachment['modules'], 'connector_ownership': True,
-                                    'coal_manual_journal_v1': True}
+                                    'coal_manual_journal_v1': True,
+                                    'connector_observer_bridge_v1': True}
                 if (after['session_id'] != expected_session_id
                         or after['actor_unit'] != expected_actor_unit
                         or after['modules'] != expected_modules
@@ -321,7 +341,8 @@ def reconcile_manual_cycle_v5(
                 or any(type(value) is not bool for value in first['before_modules'].values())
                 or any(type(value) is not bool for value in first['after_modules'].values())
                 or first['after_modules'] != {**first['before_modules'],
-                    'connector_ownership': True, 'coal_manual_journal_v1': True}
+                    'connector_ownership': True, 'coal_manual_journal_v1': True,
+                    'connector_observer_bridge_v1': True}
                 or [row.get('phase') for row in rows[1:]] not in (
                     [], ['unknown'], ['qualified'], ['unknown', 'reconciled_v5'])
                 or any(not _valid_followup(row) for row in rows[1:])):
@@ -345,7 +366,7 @@ def reconcile_manual_cycle_v5(
         if (_digest(_private_bytes(checkpoint_path)) != first['checkpoint_sha256']
                 or _digest(_private_bytes(Path(receipt_path))) != first['receipt_sha256']):
             raise RuntimeError('Migration evidence changed; stop dispatch')
-        observed = readback(client)
+        observed = readback(client, allow_unqualified_connector_bridge=True)
         if (_digest(_private_bytes(checkpoint_path)) != first['checkpoint_sha256']
                 or _digest(_private_bytes(Path(receipt_path))) != first['receipt_sha256']):
             raise RuntimeError('Migration evidence changed during readback; stop dispatch')
