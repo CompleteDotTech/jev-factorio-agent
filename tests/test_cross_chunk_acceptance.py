@@ -31,6 +31,8 @@ def fixture(root):
         rows.append({'session_id': 'campaign', 'world_kind': 'fle', 'controller': 'hierarchical',
                      'policy': 'jev', 'requested_model': 'jev-1.13.0',
                      'code_revision': {'commit': '1' * 40, 'dirty': False},
+                     'acceptance_configuration': {'solid_routes': True},
+                     'campaign_treatment': {'schema': 1, 'lead_time_supply': True},
                      'model_call': i % 2 == 0,
                      'status': 'running', 'recorded_at_utc': (base + timedelta(seconds=600*i)).isoformat(),
                      'after_state': {'session_id': 'campaign', 'tick': tick, 'researched': [],
@@ -45,14 +47,19 @@ def fixture(root):
                                                      'quantity': 1, 'tick': 36001, 'unit_number': 77}}
                                                      if i >= 1 else {})}}})
     chunks = []
-    checkpoint = put(root, 'cp0.json', {'session_id': 'campaign', 'status': 'running', 'last_tick': 0})
+    checkpoint = put(root, 'cp0.json', {'session_id': 'campaign', 'status': 'running',
+                                       'stalled_decisions': 0, 'failures': {}, 'last_tick': 0})
     for index, subset in enumerate((rows[:3], rows[3:])):
         gameplay = f'game{index}.jsonl'
         span = b''.join((json.dumps(row, sort_keys=True) + '\n').encode() for row in subset)
         (root / gameplay).write_bytes(span)
         next_checkpoint = put(root, f'cp{index + 1}.json',
-                              {'session_id': 'campaign', 'status': 'running', 'last_tick': subset[-1]['after_state']['tick']})
-        result = put(root, f'result{index}.json', {'status': 'verified', 'chunk': index})
+                              {'session_id': 'campaign', 'status': 'running',
+                               'stalled_decisions': 0, 'failures': {},
+                               'last_tick': subset[-1]['after_state']['tick']})
+        result = put(root, f'result{index}.json', {'status': 'verified', 'identity': identity,
+            'before_sha256': checkpoint, 'after_sha256': next_checkpoint,
+            'span_sha256': h(span)})
         chunks.append({'gameplay': gameplay, 'start_byte': 0, 'end_byte': len(span), 'span_sha256': h(span),
                        'before_checkpoint': f'cp{index}.json', 'before_sha256': checkpoint,
                        'after_checkpoint': f'cp{index + 1}.json', 'after_sha256': next_checkpoint,
@@ -67,6 +74,10 @@ def fixture(root):
 
 def test_cross_chunk_science_is_bounded_and_not_native_acceptance(tmp_path):
     fixture(tmp_path)
+    # The live gameplay writer omits the private treatment digest from this
+    # row; owner receipts and the manifest carry that binding separately.
+    assert 'treatment_sha256' not in json.loads((tmp_path / 'game0.jsonl').read_bytes().splitlines()[0])[
+        'acceptance_configuration']
     report = analyze(tmp_path / 'manifest.json')
     assert report['records'] == 5
     assert report['useful_seconds_lower_bound'] == 1800
@@ -77,7 +88,7 @@ def test_cross_chunk_science_is_bounded_and_not_native_acceptance(tmp_path):
 
 
 @pytest.mark.parametrize('damage,reason', [
-    ('span', 'Gameplay span digest mismatch'),
+    ('span', 'Owner result identity or boundary mismatch'),
     ('checkpoint', 'Checkpoint chain gap'),
     ('outcome', 'Ambiguous or repeated owner outcome'),
     ('time', 'Observation gap'),
@@ -107,6 +118,11 @@ def test_cross_chunk_rejects_reused_log_overlap(tmp_path):
     manifest['chunks'][1]['end_byte'] = len(first + second)
     manifest['chunks'][1]['span_sha256'] = hashlib.sha256((first + second)[
         manifest['chunks'][1]['start_byte']:]).hexdigest()
+    chunk = manifest['chunks'][1]
+    chunk['owner_result_sha256'] = put(tmp_path, chunk['owner_result'], {
+        'status': 'verified', 'identity': manifest['identity'],
+        'before_sha256': chunk['before_sha256'], 'after_sha256': chunk['after_sha256'],
+        'span_sha256': chunk['span_sha256']})
     put(tmp_path, 'manifest.json', manifest)
     with pytest.raises(ValueError, match='Gap or overlap'):
         analyze(tmp_path / 'manifest.json')
@@ -120,6 +136,10 @@ def rewrite_rows(root, manifest, chunk_index, change):
     (root / chunk['gameplay']).write_bytes(span)
     chunk['end_byte'] = len(span)
     chunk['span_sha256'] = hashlib.sha256(span).hexdigest()
+    result = {'status': 'verified', 'identity': manifest['identity'],
+              'before_sha256': chunk['before_sha256'], 'after_sha256': chunk['after_sha256'],
+              'span_sha256': chunk['span_sha256']}
+    chunk['owner_result_sha256'] = put(root, chunk['owner_result'], result)
     put(root, 'manifest.json', manifest)
 
 
@@ -146,9 +166,55 @@ def test_source_drift_and_counter_regression_fail_closed(tmp_path):
         analyze(tmp_path / 'manifest.json')
 
 
+def test_emitted_treatment_drift_or_future_digest_mismatch_rejected(tmp_path):
+    manifest = fixture(tmp_path)
+    rewrite_rows(tmp_path, manifest, 1, lambda rows: rows[0]['campaign_treatment'].update(
+        lead_time_supply=False))
+    with pytest.raises(ValueError, match='Gameplay treatment changed'):
+        analyze(tmp_path / 'manifest.json')
+    manifest = fixture(tmp_path)
+    rewrite_rows(tmp_path, manifest, 1, lambda rows: rows[0]['acceptance_configuration'].update(
+        treatment_sha256='f' * 64))
+    with pytest.raises(ValueError, match='Gameplay treatment binding missing'):
+        analyze(tmp_path / 'manifest.json')
+
+
 def test_unowned_lab_receipt_rejected(tmp_path):
     manifest = fixture(tmp_path)
     rewrite_rows(tmp_path, manifest, 0, lambda rows: rows[1]['after_state']['factory']['receipts'][
         'paid-lab-1'].update(unit_number=999))
     with pytest.raises(ValueError, match='Unbound lab delivery'):
+        analyze(tmp_path / 'manifest.json')
+
+
+@pytest.mark.parametrize('kind', ['prefix', 'suffix'])
+def test_omitted_failed_row_in_log_rejected(tmp_path, kind):
+    manifest = fixture(tmp_path)
+    chunk = manifest['chunks'][0]
+    path = tmp_path / chunk['gameplay']
+    failed = b'{"status":"failed"}\n'
+    if kind == 'prefix':
+        path.write_bytes(failed + path.read_bytes())
+        chunk['start_byte'] = len(failed)
+        chunk['end_byte'] += len(failed)
+    else:
+        path.write_bytes(path.read_bytes() + failed)
+    put(tmp_path, 'manifest.json', manifest)
+    with pytest.raises(ValueError, match='Uncovered gameplay'):
+        analyze(tmp_path / 'manifest.json')
+
+
+def test_symlinked_parent_directory_rejected(tmp_path):
+    manifest = fixture(tmp_path)
+    outside = tmp_path.parent / (tmp_path.name + '-outside')
+    outside.mkdir()
+    (outside / 'game0.jsonl').write_bytes((tmp_path / 'game0.jsonl').read_bytes())
+    alias = tmp_path / 'alias'
+    try:
+        alias.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip('Symlink creation is unavailable on this host')
+    manifest['chunks'][0]['gameplay'] = 'alias/game0.jsonl'
+    put(tmp_path, 'manifest.json', manifest)
+    with pytest.raises(ValueError, match='Symlinked evidence path component'):
         analyze(tmp_path / 'manifest.json')

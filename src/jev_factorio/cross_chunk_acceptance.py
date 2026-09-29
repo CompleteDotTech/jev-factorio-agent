@@ -39,7 +39,14 @@ def _path(root: Path, name: object) -> Path:
     candidate = Path(name)
     _require(not candidate.is_absolute() and all(p not in ('', '.', '..') for p in candidate.parts),
              'Evidence path escapes manifest directory')
-    return root / candidate
+    resolved_root = root.resolve(strict=True)
+    current = root
+    for part in candidate.parts:
+        current = current / part
+        _require(not current.is_symlink(), 'Symlinked evidence path component')
+    _require(current.resolve(strict=True).is_relative_to(resolved_root),
+             'Evidence path escapes manifest directory')
+    return current
 
 
 def _read(root: Path, name: object, maximum: int, expected: str) -> bytes:
@@ -87,6 +94,15 @@ def _row_identity(row: dict, identity: dict) -> None:
     revision = row.get('code_revision')
     _require(isinstance(revision, dict) and revision.get('commit') == identity['source_commit']
              and revision.get('dirty') is False, 'Gameplay source drift')
+    configuration = row.get('acceptance_configuration')
+    # The current gameplay writer omits the private production-treatment hash;
+    # it lives in the run configuration/owner receipt. Check it when a future
+    # row carries it, and require the emitted configuration/treatment to remain
+    # identical across all observed chunks.
+    _require(isinstance(configuration, dict)
+             and (configuration.get('treatment_sha256', identity['treatment_sha256'])
+                  == identity['treatment_sha256'])
+             and isinstance(row.get('campaign_treatment'), dict), 'Gameplay treatment binding missing')
     # Legacy rows do not carry every private witness digest. Their immutable
     # owner artifacts are bound by the manifest and still need native review.
 
@@ -121,7 +137,8 @@ def analyze(manifest_path: Path) -> dict:
     _require(isinstance(chunks, list) and 2 <= len(chunks) <= 10000, 'Expected bounded cross-chunk sequence')
     root = manifest_path.parent
     previous_checkpoint = previous_time = previous_tick = previous_counter = previous_research = None
-    previous_path = previous_end = None
+    previous_configuration = previous_treatment = None
+    previous_path = previous_end = previous_length = None
     first_progress = last_progress = None
     first_research = last_research = None
     lab_unit = None
@@ -138,15 +155,24 @@ def analyze(manifest_path: Path) -> dict:
         _require(previous_checkpoint is None or previous_checkpoint == chunk['before_sha256'],
                  'Checkpoint chain gap')
         result = load_json(_read(root, chunk['owner_result'], MAX_JSON, chunk['owner_result_sha256']))
-        _require(isinstance(result, dict) and result.get('status') == 'verified', 'Owner result not verified')
+        _require(isinstance(result, dict) and set(result) == {'status', 'identity', 'before_sha256',
+                 'after_sha256', 'span_sha256'} and result['status'] == 'verified'
+                 and result['identity'] == identity
+                 and result['before_sha256'] == chunk['before_sha256']
+                 and result['after_sha256'] == chunk['after_sha256']
+                 and result['span_sha256'] == chunk['span_sha256'],
+                 'Owner result identity or boundary mismatch')
         before = load_json(_read(root, chunk['before_checkpoint'], MAX_JSON, chunk['before_sha256']))
         after = load_json(_read(root, chunk['after_checkpoint'], MAX_JSON, chunk['after_sha256']))
         for checkpoint in (before, after):
             _require(isinstance(checkpoint, dict) and checkpoint.get('session_id') == identity['session_id']
                      and checkpoint.get('status') == 'running'
+                     and checkpoint.get('stalled_decisions') == 0
+                     and isinstance(checkpoint.get('failures'), dict)
                      and not any(checkpoint.get(k) for k in ('pending', 'attempt', 'background_job',
                                                              'background_attempt', 'reservations')),
                      'Checkpoint identity or idle ownership failed')
+        _require(before['failures'] == after['failures'], 'Failure history changed within chunk')
         previous_checkpoint = chunk['after_sha256']
         path = _path(root, chunk['gameplay'])
         raw = stable_read(path, MAX_LOG)
@@ -154,9 +180,13 @@ def analyze(manifest_path: Path) -> dict:
         _require(type(start) is int and type(end) is int and 0 <= start < end <= len(raw)
                  and (start == 0 or raw[start - 1:start] == b'\n')
                  and raw[end - 1:end] == b'\n', 'Invalid gameplay byte span')
-        _require(previous_path != chunk['gameplay'] or previous_end == start,
-                 'Gap or overlap in reused gameplay log')
-        previous_path, previous_end = chunk['gameplay'], end
+        if previous_path == chunk['gameplay']:
+            _require(previous_end == start, 'Gap or overlap in reused gameplay log')
+        else:
+            _require(previous_path is None or previous_end == previous_length,
+                     'Uncovered gameplay suffix')
+            _require(start == 0, 'Uncovered gameplay prefix')
+        previous_path, previous_end, previous_length = chunk['gameplay'], end, len(raw)
         span = raw[start:end]
         digest = hashlib.sha256(span).hexdigest()
         _require(digest == chunk['span_sha256'], 'Gameplay span digest mismatch')
@@ -170,6 +200,12 @@ def analyze(manifest_path: Path) -> dict:
             _require(row_hash not in seen_rows, 'Repeated gameplay row')
             seen_rows.add(row_hash)
             _row_identity(row, identity)
+            if previous_configuration is not None:
+                _require(row['acceptance_configuration'] == previous_configuration
+                         and row['campaign_treatment'] == previous_treatment,
+                         'Gameplay treatment changed across chunks')
+            previous_configuration = row['acceptance_configuration']
+            previous_treatment = row['campaign_treatment']
             state = row.get('after_state')
             _require(isinstance(state, dict) and state.get('session_id') == identity['session_id'],
                      'Missing native after-state')
@@ -180,7 +216,7 @@ def analyze(manifest_path: Path) -> dict:
             last_chunk_tick = tick
             now = _stamp(row.get('recorded_at_utc'))
             _require(previous_time is None or now > previous_time, 'Wall clock regression or duplicate')
-            _require(row.get('status') not in ('blocked', 'uncertain', 'failed'), 'Stopped or ambiguous row')
+            _require(row.get('status') == 'running', 'Stopped or ambiguous row')
             _require(type(row.get('model_call')) is bool, 'Missing JEV invocation evidence')
             model_calls += int(row['model_call'])
             factory = state.get('factory')
@@ -238,6 +274,7 @@ def analyze(manifest_path: Path) -> dict:
             records += 1
         _require(type(before.get('last_tick')) is int and before['last_tick'] <= first_chunk_tick
                  and after.get('last_tick') == last_chunk_tick, 'Checkpoint/gameplay tick boundary mismatch')
+    _require(previous_end == previous_length, 'Uncovered gameplay suffix')
     useful = (last_progress - first_progress).total_seconds() if first_progress and last_progress else 0
     issues = ['native_paid_coal_and_downstream_rollup_required', 'owner_receipt_body_qualification_required']
     if useful < 1800:

@@ -14,6 +14,9 @@ with schema `jev-factorio.cross-chunk-evidence.v1`. It names one exact immutable
 gameplay file and byte span per ordered chunk. Paths are relative to the
 manifest directory, regular files only. Each span has start/end offsets and a
 SHA-256; it must begin/end at a complete JSONL record boundary. Every chunk
+in a new gameplay file must start at byte zero, and all ordered spans for that
+file must cover through EOF without gaps or overlap. Symlinked path components
+are rejected. Every chunk
 also binds exact pre/post checkpoint bytes and an exact original attachment
 receipt hash. Adjacent checkpoint hashes must match, and spans in a reused log
 must be contiguous; duplicated or missing bytes are rejected. The stable
@@ -62,6 +65,10 @@ pre/post checkpoint pair. These owner attestations are *inputs*, not a
 substitute for inspecting their private receipt bodies. A final acceptance
 review must establish those receipts and native ledger bindings before using
 this report. The analyzer rejects missing, malformed, or overlapping evidence.
+The normalized owner result has exactly `status`, `identity`, `before_sha256`,
+`after_sha256`, and `span_sha256`; each must agree with the manifest. Producing
+this normalized file from the actual one-use receipts needs a separately
+reviewed qualification step, and it is not a self-authorizing receipt.
 
 ## Output and interpretation
 
