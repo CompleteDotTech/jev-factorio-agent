@@ -27,7 +27,9 @@ def example():
         'registry': [], 'connector_routes': [], 'prototypes': [], 'buffer_witnesses': [], 'poles': [], 'supply_surveys': [],
         'electric_members': [], 'fluid_members': [], 'fuel_targets': [], 'sources': [],
         'research_work': {'status': 'unavailable', 'reason': 'no_current_research',
-                          'technology': '', 'progress': 0, 'lab': {}, 'targets': []},
+                          'technology': '', 'progress': 0, 'unit_count': 0,
+                          'cost_multiplier': 0, 'ignore_cost_multiplier': False,
+                          'ingredients': [], 'lab': {}, 'targets': []},
         'manual_cycle': {'status': 'unavailable', 'reason': 'journal_not_installed',
                          'journal_asset_sha256': '', 'gathers': [], 'deliveries': []},
         'coal_fuel_joules': 4_000_000,
@@ -385,8 +387,11 @@ def test_fixed_query_projects_current_research_and_active_furnace_in_same_rpc():
     lua = lua_runtime(raw, bundle)
     lua.execute('''
         defines.inventory={furnace_source=1,lab_input=2}
-        force.current_research={name='current-study'}
+        force.current_research={name='current-study',research_unit_count=30,
+            research_unit_ingredients={{name='automation-science-pack',amount=1}},
+            prototype={ignore_tech_cost_multiplier=false}}
         force.research_progress=.25
+        game.difficulty_settings={technology_price_multiplier=1}
         local function inventory(rows)
             return {valid=true,get_contents=function() return rows end}
         end
@@ -398,7 +403,9 @@ def test_fixed_query_projects_current_research_and_active_furnace_in_same_rpc():
         furnace.get_inventory=function(kind)
             assert(kind==1); return inventory({{name='iron-ore',count=30}})
         end
-        furnace.get_recipe=function() return {name='iron-plate'} end
+        furnace.get_recipe=function() return {name='iron-plate',
+            ingredients={{type='item',name='iron-ore',amount=1}},
+            products={{type='item',name='iron-plate',amount=1}}} end
         furnace.is_crafting=function() return true end
         furnace.crafting_progress=.5
     ''')
@@ -408,10 +415,15 @@ def test_fixed_query_projects_current_research_and_active_furnace_in_same_rpc():
     facts = checked(projected, bundle)
     work = facts.research_work
     assert work.technology == 'current-study' and work.progress == .25
+    assert work.unit_count == 30 and work.cost_multiplier == 1
+    assert work.ignore_cost_multiplier is False
+    assert work.ingredients == (('automation-science-pack', 1),)
     assert work.lab_input == (('automation-science-pack', 2),)
     assert work.targets[0].role == 'furnace' and work.targets[0].recipe == 'iron-plate'
     assert work.targets[0].crafting and work.targets[0].burning == 'coal'
     assert work.targets[0].input == (('iron-ore', 30),)
+    assert work.targets[0].recipe_ingredients == (('iron-ore', 1),)
+    assert work.targets[0].recipe_products == (('iron-plate', 1),)
     assert facts.mutation_authorized is False and facts.native_payback_proven is False
     projected['research_work']['targets'][0]['unit'] = 999
     with pytest.raises(NativeEconomicsUnavailable, match='research_target_identity_mismatch'):
@@ -437,9 +449,48 @@ def test_selected_research_without_owned_lab_preserves_graph_projection():
     assert projected['query_status'] == 'observed', projected['reason']
     assert projected['research_work'] == {'status': 'unavailable',
         'reason': 'research_lab_unowned', 'technology': 'current-study',
-        'progress': .1, 'lab': {}, 'targets': {}}
+        'progress': .1, 'unit_count': 0, 'cost_multiplier': 0,
+        'ignore_cost_multiplier': False, 'ingredients': {}, 'lab': {}, 'targets': {}}
     # This minimal early graph still misses the decoder's pre-existing two
     # electric-member bound; research absence itself does not fail the Lua query.
+
+
+@pytest.mark.parametrize('mutation,reason', [
+    ('force.current_research.research_unit_count=0', 'research_unit_count'),
+    ('game.difficulty_settings.technology_price_multiplier=0', 'research_cost_setting'),
+    ('force.current_research.prototype.ignore_tech_cost_multiplier=nil', 'research_cost_setting'),
+    ("force.current_research.research_unit_ingredients[1].amount=0", 'research_bill_unsupported'),
+    ("campaign.entities['furnace'].recipe.products[1].independent_probability=.5", 'research_bill_unsupported'),
+    ("campaign.entities['furnace'].recipe.products[1].probability=.5", 'research_bill_unsupported'),
+    ("campaign.entities['furnace'].recipe.products[1].shared_probability={group='x'}", 'research_bill_unsupported'),
+    ("campaign.entities['furnace'].recipe.ingredients[1].type='fluid'", 'research_bill_kind'),
+])
+def test_native_research_bill_refuses_unsupported_forms(mutation, reason):
+    raw, bundle = example()
+    lua = lua_runtime(raw, bundle)
+    lua.execute('''
+        defines.inventory={furnace_source=1,lab_input=2}
+        force.current_research={name='current-study',research_unit_count=30,
+            research_unit_ingredients={{name='automation-science-pack',amount=1}},
+            prototype={ignore_tech_cost_multiplier=false}}
+        force.research_progress=.25
+        game.difficulty_settings={technology_price_multiplier=1}
+        local inventory={valid=true,get_contents=function() return {} end}
+        campaign.entities['utility:lab'].get_inventory=function() return inventory end
+        local furnace=campaign.entities['furnace']
+        furnace.get_inventory=function() return inventory end
+        furnace.recipe={name='iron-plate',
+            ingredients={{type='item',name='iron-ore',amount=1}},
+            products={{type='item',name='iron-plate',amount=1}}}
+        furnace.get_recipe=function() return furnace.recipe end
+        furnace.is_crafting=function() return true end
+        furnace.crafting_progress=.5
+    ''')
+    lua.execute(mutation)
+    lua.execute(files('jev_factorio').joinpath('lua/coal_economics.lua').read_text())
+    projected = plain(lua.globals().projected)
+    assert projected['query_status'] == 'unsupported'
+    assert projected['reason'] == reason
 
 
 def test_fixed_query_projects_source_bound_manual_rows_with_current_graph():
@@ -538,12 +589,16 @@ def observed_research_fixture():
     next(row for row in raw['fuel_targets'] if row['role'] == 'furnace')['burning'] = 'coal'
     furnace_unit = next(row for row in raw['registry'] if row['role'] == 'furnace')['unit']
     raw['research_work'] = {'status': 'observed', 'reason': 'current_research_activity',
-        'technology': 'current-study', 'progress': .25,
+        'technology': 'current-study', 'progress': .25, 'unit_count': 30,
+        'cost_multiplier': 1, 'ignore_cost_multiplier': False,
+        'ingredients': [{'name': 'automation-science-pack', 'amount': 1}],
         'lab': {'role': 'utility:lab', 'unit': 1002,
                 'input': [{'name': 'automation-science-pack', 'count': 2}]},
         'targets': [{'role': 'furnace', 'unit': furnace_unit,
                      'recipe': 'iron-plate', 'crafting': True, 'crafting_progress': .5,
-                     'burning': 'coal', 'input': [{'name': 'iron-ore', 'count': 30}]}]}
+                     'burning': 'coal', 'input': [{'name': 'iron-ore', 'count': 30}],
+                     'recipe_ingredients': [{'name': 'iron-ore', 'amount': 1}],
+                     'recipe_products': [{'name': 'iron-plate', 'amount': 1}]}]}
     return raw, bundle
 
 
@@ -555,6 +610,13 @@ def observed_research_fixture():
     lambda r: r['research_work']['targets'][0]['input'].append({'name': 'iron-ore', 'count': 1}),
     lambda r: r['research_work']['lab']['input'][0].update(count=-1),
     lambda r: r['research_work'].update(progress=1.1),
+    lambda r: r['research_work'].update(unit_count=0),
+    lambda r: r['research_work'].update(cost_multiplier=0),
+    lambda r: r['research_work'].update(ignore_cost_multiplier='false'),
+    lambda r: r['research_work']['ingredients'][0].update(amount=-1),
+    lambda r: r['research_work']['targets'][0]['recipe_products'][0].update(name=''),
+    lambda r: r['research_work']['targets'][0]['recipe_products'][0].update(probability=.5),
+    lambda r: r['research_work']['targets'][0]['recipe_ingredients'].clear(),
 ])
 def test_research_witness_rejects_missing_rebound_or_ambiguous_activity(change):
     raw, bundle = observed_research_fixture()

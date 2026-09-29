@@ -12,7 +12,7 @@ import math
 
 from .planning.coal_economic_proof import Epoch, Power, digest
 
-SCHEMA = 'jev.coal-native-economics.v3'
+SCHEMA = 'jev.coal-native-economics.v4'
 QUERY = 'lua/coal_economics.lua'
 MAX_SAFE = 2**53 - 1
 # This is a content-qualified conversion record, not an arbitrary caller hash.
@@ -172,12 +172,18 @@ class ResearchTargetFacts:
     crafting_progress: float
     burning: str
     input: tuple[tuple[str, int], ...]
+    recipe_ingredients: tuple[tuple[str, int], ...]
+    recipe_products: tuple[tuple[str, int], ...]
 
 
 @dataclass(frozen=True)
 class ResearchWorkFacts:
     technology: str
     progress: float
+    unit_count: int
+    cost_multiplier: float
+    ignore_cost_multiplier: bool
+    ingredients: tuple[tuple[str, int], ...]
     lab_unit: int
     lab_input: tuple[tuple[str, int], ...]
     targets: tuple[ResearchTargetFacts, ...]
@@ -559,10 +565,14 @@ def _decode(raw, expected_epoch, expected_bundle, unit_qualification, expected_c
         'inserter_max_joules_per_tick': math.ceil(prototypes['inserter']['max_usage']),
         'inserter_drain_joules_per_tick': math.ceil(prototypes['inserter']['drain'])})
     work = raw['research_work']
-    fields(work, 'status reason technology progress lab targets')
+    fields(work, 'status reason technology progress unit_count cost_multiplier '
+                 'ignore_cost_multiplier ingredients lab targets')
     research_work = None
     if work['status'] == 'unavailable':
-        require(work['lab'] == {} and work['targets'] in ([], {}),
+        require(work['lab'] == {} and work['targets'] in ([], {})
+                and work['unit_count'] == 0 and work['cost_multiplier'] == 0
+                and work['ignore_cost_multiplier'] is False
+                and work['ingredients'] in ([], {}),
                 'invalid_research_absence')
         if work['reason'] == 'no_current_research':
             require(work['technology'] == '' and work['progress'] == 0,
@@ -578,6 +588,20 @@ def _decode(raw, expected_epoch, expected_bundle, unit_qualification, expected_c
                 'invalid_research_status')
         technology = identity(work['technology'])
         progress = number(work['progress'], 0, 1)
+        unit_count = integer(work['unit_count'], 1, 1_000_000)
+        cost_multiplier = number(work['cost_multiplier'], .001, 100_000)
+        require(type(work['ignore_cost_multiplier']) is bool, 'invalid_research_cost_setting')
+        def bill(value):
+            items = rows(value, 1, 8)
+            names = []
+            result = []
+            for item in items:
+                fields(item, 'name amount')
+                names.append(identity(item['name']))
+                result.append((item['name'], integer(item['amount'], 1, 1000)))
+            require(names == sorted(set(names)), 'research_bill_alias')
+            return tuple(result)
+        ingredients = bill(work['ingredients'])
         fields(work['lab'], 'role unit input')
         lab = work['lab']
         lab_unit = integer(lab['unit'], 1)
@@ -602,7 +626,8 @@ def _decode(raw, expected_epoch, expected_bundle, unit_qualification, expected_c
         parsed = []
         expected_furnaces = {role for role, row in fuel.items() if row['name'] == 'stone-furnace'}
         for row in target_rows:
-            fields(row, 'role unit recipe crafting crafting_progress burning input')
+            fields(row, 'role unit recipe crafting crafting_progress burning input '
+                        'recipe_ingredients recipe_products')
             role = identity(row['role'])
             roles.append(role)
             unit = integer(row['unit'], 1)
@@ -619,10 +644,21 @@ def _decode(raw, expected_epoch, expected_bundle, unit_qualification, expected_c
                 # A started craft may be stalled; the API explicitly does not
                 # attest that progress is advancing at this instant.
                 require(row['recipe'] != '', 'research_activity_without_recipe')
+            if row['recipe']:
+                recipe_ingredients = bill(row['recipe_ingredients'])
+                recipe_products = bill(row['recipe_products'])
+            else:
+                require(row['recipe_ingredients'] in ([], {})
+                        and row['recipe_products'] in ([], {}),
+                        'research_recipe_bill_without_recipe')
+                recipe_ingredients = recipe_products = ()
             parsed.append(ResearchTargetFacts(role, unit, row['recipe'], row['crafting'],
-                                               crafting_progress, row['burning'], inventory(row['input'])))
+                                               crafting_progress, row['burning'], inventory(row['input']),
+                                               recipe_ingredients, recipe_products))
         require(roles == sorted(expected_furnaces), 'research_target_set_mismatch')
-        research_work = ResearchWorkFacts(technology, progress, lab_unit, lab_input, tuple(parsed))
+        research_work = ResearchWorkFacts(technology, progress, unit_count,
+                                          cost_multiplier, work['ignore_cost_multiplier'],
+                                          ingredients, lab_unit, lab_input, tuple(parsed))
     manual = raw['manual_cycle']
     fields(manual, 'status reason journal_asset_sha256 gathers deliveries')
     manual_cycle = None

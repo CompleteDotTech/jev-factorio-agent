@@ -101,12 +101,24 @@ the prototype `max_usage` is an upper rate, and `is_crafting()` can remain true
 while progress is stalled. Selected research before lab construction yields
 `research_lab_unowned` in this projection without failing the graph query.
 The read path still returns `native_payback_proven=false` and
-`mutation_authorized=false`. A bounded current-research material bill,
+`mutation_authorized=false`. A goal-bound net material deficit,
 receipt-bound burn or validated active-rate semantics, and same-RPC first
 payment recheck remain necessary before positive demand can enter admission.
 
-The v3 query adds a diagnostic manual-row projection only under a separately
-source-qualified, additive v5 native profile. The v4 profile continues to
+The v4 fixed query adds the selected technology's research-unit count,
+ingredient amounts, current technology-price multiplier and multiplier-ignore
+flag, plus each configured owned furnace recipe's deterministic item inputs
+and products. All bill rows are bounded, sorted, and decoded with the current
+research, lab, furnace unit, burner, graph and fuel in one native RPC. Fluid,
+probabilistic, quality-changing, missing and oversized bills remain unsupported.
+This is a material-bill *observation*, not a required-work deficit: it does not
+subtract all available stock, exclude alternate production, bind an immutable
+goal, forecast future burn, or authorize construction. Native 2.0.77 field
+compatibility and a positive bill still require an isolated runtime readback.
+
+The v3 query introduced a diagnostic manual-row projection, retained by v4
+only under a separately source-qualified, additive v5 native profile. The
+retained native v4 profile continues to
 reject optional connector and journal assets. A one-use owner-locked migration
 can install the exact connector ledger and unchanged v1 journal sources and
 extend the native manifest only from an exact, quiescent v4 installation with
