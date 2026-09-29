@@ -172,6 +172,81 @@ def test_choice_prefers_current_recipe_prerequisite_over_unlinked_lookahead_only
     assert 'larger pickup quantity alone' not in choice_instruction(linked)
 
 
+def test_sole_current_iron_ore_prerequisite_has_bounded_level_one_benefit_cue():
+    # Native-shaped 0073 frontier: verified belts are carried, but iron ore is
+    # still required through the current lab/electronic-circuit/plate path.
+    state, data = snapshot(inventory={'transport-belt': 4, 'iron-gear-wheel': 10,
+                                      'iron-plate': 4, 'copper-plate': 10,
+                                      'iron-ore': 0}), catalog()
+    data.recipes['electronic-circuit'] = recipe(
+        'electronic-circuit', {'iron-plate': 2})
+    data.recipes['lab'] = recipe(
+        'lab', {'electronic-circuit': 2, 'transport-belt': 4})
+    worker = ReadyWorkPlanner(data, state, 'rocket_launch')
+    worker._set_focus('lab', 1)
+    plan = worker._need('iron-ore', 6, ('item:lab', 'item:electronic-circuit',
+                                       'item:iron-plate'))
+    step = plan.steps[0]
+    assert step.action == 'factory_gather'
+    assert step.parameters == {'resource': 'iron-ore', 'quantity': 6}
+    support = scheduling_context(state, data, [plan], 'rocket_launch')
+    row = support['candidate_evidence'][plan.id]
+    assert row['raw_prerequisite']['planner_item_path'] == [
+        'lab', 'electronic-circuit', 'iron-plate', 'iron-ore']
+    assert row['raw_prerequisite']['direct_recipe'] == 'iron-plate'
+    assert row['gather_start_evidence']['resource_in_current_observation'] is True
+    assert row['gather_start_evidence']['fair_target_identity_observed'] is True
+    assert row['unknowns'] == row['reasons'] == []
+    cue = 'supplies a useful recipe input (level 1)'
+
+    def benefit(rows=support, plans=(plan,)):
+        context, questions, _ = question_batch(
+            {'facts': state.for_jev(), **rows}, list(plans))
+        assert len(json.dumps({'state': context, 'questions': questions},
+                              ensure_ascii=False, allow_nan=False).encode('utf-8')) <= 32000
+        return questions[plan.id + '/benefit']['instructions']
+
+    assert cue in benefit()
+    assert 'independent current blocker fact' in benefit()
+    assert 'later recipe steps still require fresh verification' in benefit()
+
+    def no_cue(changed):
+        assert cue not in benefit(changed)
+
+    for mutate in (
+        lambda rows: rows['candidate_evidence'][plan.id]['raw_prerequisite']
+            .__setitem__('observed_tick', state.tick - 1),
+        lambda rows: rows['candidate_evidence'][plan.id]['raw_prerequisite']
+            .__setitem__('planner_item_path', ['other', 'iron-plate', 'iron-ore']),
+        lambda rows: rows['candidate_evidence'][plan.id]['raw_prerequisite']
+            .__setitem__('direct_product', 'copper-plate'),
+        lambda rows: rows['candidate_evidence'][plan.id]['gather_start_evidence']
+            .__setitem__('fair_target_identity_observed', False),
+        lambda rows: rows['candidate_evidence'][plan.id]['gather_start_evidence']
+            .__setitem__('target_inventory_after_this_step', 7),
+        lambda rows: rows['candidate_evidence'][plan.id]
+            .__setitem__('unknowns', ['travel:factory_gather']),
+        lambda rows: rows['candidate_evidence'][plan.id]
+            .__setitem__('reasons', ['native_target_disputed']),
+        lambda rows: rows['candidate_evidence'][plan.id]
+            .__setitem__('urgency', 1),
+        lambda rows: rows['candidate_evidence'][plan.id]
+            .__setitem__('urgency', False),
+        lambda rows: rows['candidate_evidence'][plan.id]
+            .__setitem__('work_scope', 'lookahead'),
+        lambda rows: rows['local_objective']['primary_target']
+            .__setitem__('item', 'other'),
+    ):
+        altered = deepcopy(support)
+        mutate(altered)
+        no_cue(altered)
+    malformed = deepcopy(support)
+    malformed['candidate_evidence'][plan.id]['gather_start_evidence'] = 'observed'
+    no_cue(malformed)
+    other = replace(plan, id='unrelated-gather')
+    assert cue not in benefit(support, (plan, other))
+
+
 @pytest.mark.parametrize('planner_type', [ReadyWorkPlanner, OutputBufferPlanner,
                                          MiningOutpostPlanner])
 def test_ready_lookahead_gear_craft_exposes_bounded_shared_bill_and_possible_overlap(planner_type):
