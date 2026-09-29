@@ -186,53 +186,72 @@ class Redactor:
 
 @measured("trace_normalize_redact")
 def safe_payload(value: object, secrets: Iterable[str] = ()) -> object:
-    """Normalize, redact, and detach causal data in one recursive pass."""
+    """Normalize, redact, and detach an event without expanding dataclasses."""
+    return _normalize_payload(value, secrets)
+
+
+@measured("trace_normalize_redact")
+def _safe_observation_payload(value: object, secrets: Iterable[str] = ()) -> object:
+    """Expand dataclass fields only below the observation event's snapshot key."""
+    return _normalize_payload(value, secrets, expand_dataclasses_at=("snapshot",))
+
+
+def _normalize_payload(value: object, secrets: Iterable[str], *,
+                       expand_dataclasses_at: tuple[str, ...] | None = None) -> object:
     redactor = Redactor({f"SECRET_{index}": secret for index, secret in enumerate(secrets)
                          if isinstance(secret, str) and secret})
 
-    def validate_discarded(item):
+    def expands_dataclasses(path: tuple[str, ...]) -> bool:
+        return (expand_dataclasses_at is not None
+                and path[:len(expand_dataclasses_at)] == expand_dataclasses_at)
+
+    def validate_discarded(item: object, path: tuple[str, ...]) -> None:
         """Retain key validation under sensitive fields without copying values."""
         if is_dataclass(item) and not isinstance(item, type):
-            for field in fields(item):
-                validate_discarded(getattr(item, field.name))
+            if expands_dataclasses(path):
+                for field in fields(item):
+                    validate_discarded(getattr(item, field.name), path + (field.name,))
         elif type(item) in (list, tuple):
             for child in item:
-                validate_discarded(child)
+                validate_discarded(child, path)
         elif type(item) is dict:
             if any(type(key) is not str for key in item):
                 raise ValueError("Causal evidence keys must be strings")
-            for child in item.values():
-                validate_discarded(child)
+            for key, child in item.items():
+                validate_discarded(child, path + (key,))
 
-    def clean_mapping(items):
+    def clean_mapping(items, path):
         result = {}
         for key, child in items:
             if type(key) is not str:
                 raise ValueError("Causal evidence keys must be strings")
+            child_path = path + (key,)
             if _SENSITIVE.search(key):
-                validate_discarded(child)
+                validate_discarded(child, child_path)
                 cleaned = REDACTED
             else:
-                cleaned = normalize(child)
+                cleaned = normalize(child, child_path)
             safe_key = redactor.text(key)
             if safe_key in result:
                 raise ValueError("Redaction produced duplicate evidence keys")
             result[safe_key] = cleaned
         return result
 
-    def normalize(item):
+    def normalize(item: object, path: tuple[str, ...] = ()) -> object:
         if item is None or type(item) in (str, bool, int):
             return redactor.text(item) if type(item) is str else item
         if type(item) is float:
-            return item if math.isfinite(item) else clean_mapping((("invalid_numeric", repr(item)),))
+            return item if math.isfinite(item) else clean_mapping((("invalid_numeric", repr(item)),), path)
         if is_dataclass(item) and not isinstance(item, type):
-            return clean_mapping((field.name, getattr(item, field.name)) for field in fields(item))
+            if not expands_dataclasses(path):
+                return redactor.text("[unsupported value]")
+            return clean_mapping(((field.name, getattr(item, field.name)) for field in fields(item)), path)
         if type(item) in (list, tuple):
-            return [normalize(child) for child in item]
+            return [normalize(child, path) for child in item]
         if type(item) is dict:
             if any(type(key) is not str for key in item):
                 raise ValueError("Causal evidence keys must be strings")
-            return clean_mapping(item.items())
+            return clean_mapping(item.items(), path)
         return redactor.text("[unsupported value]")
 
     return normalize(value)

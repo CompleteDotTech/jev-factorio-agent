@@ -6,7 +6,7 @@ exercise fsync, contact Factorio, or predict native gameplay latency.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, fields, is_dataclass
+from dataclasses import asdict, dataclass, fields, is_dataclass
 import hashlib
 import json
 import math
@@ -25,6 +25,12 @@ def distribution(values: list[int]) -> dict:
         "median_ns": statistics.median(values),
         "p95_ns": ordered[math.ceil(0.95 * len(values)) - 1],
     }
+
+
+@dataclass
+class NestedFixture:
+    status: str
+    quantity: int
 
 
 def legacy_safe_payload(value: object, secrets: tuple[str, ...]) -> object:
@@ -72,7 +78,8 @@ def snapshot_fixture() -> GameSnapshot:
         world_kind="mock",
         researched=["automation", "logistics"],
         production_rates={"iron-plate": 1.5, "copper-plate": 0.75},
-        factory={"entities": entities, "api_token": "fixture-token-1234"},
+        factory={"entities": entities, "api_token": "fixture-token-1234",
+                 "extension_fixture": NestedFixture("working", 3)},
     )
 
 
@@ -85,9 +92,10 @@ def benchmark(samples: int = 100) -> dict:
     arms = {}
     outputs = []
     implementations = (
-        ("legacy_asdict_and_two_pass", lambda: legacy_safe_payload(asdict(snapshot), secrets)),
-        ("shallow_capture_and_one_pass", lambda: research_log.safe_payload(
-            causal_trace._snapshot_payload(snapshot), secrets)),
+        ("legacy_asdict_and_two_pass", lambda: legacy_safe_payload(
+            {"snapshot": asdict(snapshot)}, secrets)),
+        ("shallow_capture_and_one_pass", lambda: research_log._safe_observation_payload(
+            {"snapshot": causal_trace._snapshot_payload(snapshot)}, secrets)),
     )
     timings = {name: {"wall": [], "cpu": []} for name, _ in implementations}
     results = {}
