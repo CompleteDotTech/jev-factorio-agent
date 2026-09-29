@@ -118,13 +118,24 @@ class OwnerStepGate:
     def _checkpoint(self, loop) -> tuple[str, str | None]:
         raw = _private_file(self.checkpoint, maximum=64 * 1024 * 1024)
         saved = loop.memory_type.from_bytes(raw, loop.memory.session_id, loop.target)
+        from .connector_checkpoint import validate_binding
+
+        def empty_connector_ownership(memory) -> bool:
+            binding = getattr(memory, "connector_ownership", None)
+            if binding is None:
+                return True
+            try:
+                return validate_binding(binding, memory.session_id)["routes"] == {}
+            except (TypeError, ValueError):
+                return False
+
         # A grant is valid only at a fully quiescent composed checkpoint. The
         # controller may otherwise retain a paid route, outpost, connector, or
         # funding owner even when the immediate dispatch is verified.
         def quiescent(memory) -> bool:
             null_owners = (
                 "pending", "attempt", "active_plan", "background_job",
-                "background_attempt", "transfer_recovery", "connector_ownership",
+                "background_attempt", "transfer_recovery",
                 "capital_investment", "solid_funding", "coal_funding",
             )
             empty_owners = (
@@ -134,6 +145,7 @@ class OwnerStepGate:
             )
             return (memory.status == "running"
                     and all(getattr(memory, name, None) is None for name in null_owners)
+                    and empty_connector_ownership(memory)
                     and all(isinstance(getattr(memory, name, {}), dict)
                             and not getattr(memory, name, {}) for name in empty_owners))
 
@@ -141,6 +153,7 @@ class OwnerStepGate:
             raise StepGateClosed("Checkpoint has unresolved ownership")
         if (loop.memory.status != saved.status or loop.memory.pending != saved.pending
                 or loop.memory.attempt != saved.attempt
+                or loop.memory.connector_ownership != saved.connector_ownership
                 or loop.memory.last_tick != saved.last_tick):
             raise StepGateClosed("In-memory and durable controller ownership differ")
         outcome = saved.attempt_outcomes[-1] if saved.attempt_outcomes else None

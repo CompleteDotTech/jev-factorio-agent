@@ -9,6 +9,7 @@ import pytest
 
 from jev_factorio.loop import AgentLoop
 from jev_factorio.owner_step_gate import OwnerStepGate, StepGateClosed, _durable_exclusive
+from jev_factorio.planning.connection_identity import connection_key
 
 
 @pytest.fixture
@@ -86,6 +87,24 @@ def _grant(request_path: Path, *, changes=None):
     _durable_exclusive(request_path.with_name('step-0001-grant.json'), grant)
 
 
+def _empty_connector_binding():
+    return {'protocol': 1, 'session_id': 'session', 'routes': {}}
+
+
+def _paid_connector_binding():
+    route = {'source': 'utility:boiler', 'target': 'utility:engine',
+             'kind': 'pipe', 'fluid': 'steam'}
+    receipt = connection_key(route)
+    return {'protocol': 1, 'session_id': 'session', 'routes': {receipt: {
+        'id': receipt, **route, 'source_unit': 11, 'target_unit': 12,
+        'actor_unit': 13, 'surface_index': 1, 'force_index': 1,
+        'session_id': 'session', 'state': 'complete', 'paid': 1,
+        'external': 0, 'owned': True, 'pending': None,
+        'cells': [{'index': 1, 'position': {'x': .5, 'y': 1.5},
+                   'unit_number': 100, 'paid': True, 'external': False}],
+    }}}
+
+
 def test_matching_grant_has_durable_acceptance_before_next_step(gate_fixture, monkeypatch):
     make_gate, loop, _ = gate_fixture
     monkeypatch.setenv('TYPESAFE_API_KEY', 'private-marker-must-not-appear')
@@ -105,6 +124,55 @@ def test_matching_grant_has_durable_acceptance_before_next_step(gate_fixture, mo
         (make_gate_instance.directory / 'step-0001-request.json').read_text())['checkpoint_sha256']
     assert all('private-marker-must-not-appear' not in path.read_text()
                for path in make_gate_instance.directory.iterdir())
+
+
+def test_empty_session_bound_connector_checkpoint_allows_grant(gate_fixture):
+    make_gate, loop, checkpoint = gate_fixture
+    binding = _empty_connector_binding()
+    loop.memory.connector_ownership = binding
+    checkpoint.write_text(json.dumps({'tick': 1, 'outcomes': [
+        {'id': 'prior', 'outcome': 'verified'}],
+        'owners': {'connector_ownership': binding}}))
+
+    def sleep(_):
+        _grant(gate.directory / 'step-0001-request.json')
+
+    gate = make_gate(sleep=sleep)
+    assert gate(loop, 1, {'verified': True, 'status': 'running'}) is True
+    assert (gate.directory / 'step-0001-accepted.json').exists()
+
+
+@pytest.mark.parametrize('binding', [
+    {'routes': {}},
+    {'protocol': True, 'session_id': 'session', 'routes': {}},
+    {'protocol': 1, 'session_id': 'other', 'routes': {}},
+    {'protocol': 1, 'session_id': 'session', 'routes': []},
+    {'protocol': 1, 'session_id': 'session', 'routes': {}, 'active': None},
+    {'protocol': 1, 'session_id': 'session', 'routes': {'route': {}}},
+    _paid_connector_binding(),
+])
+def test_invalid_or_nonempty_connector_checkpoint_blocks_request(gate_fixture, binding):
+    make_gate, loop, checkpoint = gate_fixture
+    loop.memory.connector_ownership = binding
+    checkpoint.write_text(json.dumps({'tick': 1, 'outcomes': [
+        {'id': 'prior', 'outcome': 'verified'}],
+        'owners': {'connector_ownership': binding}}))
+    gate = make_gate(sleep=lambda _: None)
+    with pytest.raises(StepGateClosed, match='unresolved ownership'):
+        gate(loop, 1, {'verified': True, 'status': 'running'})
+    assert not list(gate.directory.iterdir())
+
+
+def test_durable_and_live_empty_connector_bindings_must_agree(gate_fixture):
+    make_gate, loop, checkpoint = gate_fixture
+    loop.memory.connector_ownership = _empty_connector_binding()
+    checkpoint.write_text(json.dumps({'tick': 1, 'outcomes': [
+        {'id': 'prior', 'outcome': 'verified'}],
+        'owners': {'connector_ownership': None}}))
+    gate = make_gate(sleep=lambda _: None)
+    with pytest.raises(StepGateClosed, match='ownership differ'):
+        gate(loop, 1, {'verified': True, 'status': 'running'})
+    assert not list(gate.directory.iterdir())
 
 
 @pytest.mark.parametrize('change', [
