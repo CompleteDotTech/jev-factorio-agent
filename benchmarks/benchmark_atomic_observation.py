@@ -15,6 +15,20 @@ from jev_factorio.backends.craft_jobs import CraftJobFactory
 from jev_factorio.latency_report import distribution
 
 ROOT = Path(__file__).resolve().parents[1]
+WIRE_ONLY_DIAGNOSTICS = ('observation_snapshot_schema', 'observation_query_bounds',
+                         'observation_anchor_diagnostics')
+
+
+def game_facts(value: dict) -> dict:
+    """Compare gameplay facts, retaining diagnostics separately in the report.
+
+    The versioned atomic observer adds bounded search metadata unavailable to
+    the legacy path; it is not an extra game entity, inventory or receipt.
+    """
+    facts = copy.deepcopy(value)
+    for key in WIRE_ONLY_DIAGNOSTICS:
+        facts['factory'].pop(key, None)
+    return facts
 
 
 def benchmark(samples: int = 100) -> dict:
@@ -78,14 +92,14 @@ def benchmark(samples: int = 100) -> dict:
                 counts.append({'rpc':sum(row['count'] for row in profile['calls'].values()),
                     'helpers':sum(row['count'] for row in profile['subcalls'].values())})
             meaning=result.for_jev()
-            for key in ('observation_snapshot_schema','observation_query_bounds'):
-                meaning['factory'].pop(key,None)
-            meanings.append(meaning)
+            anchor_diagnostics=copy.deepcopy(meaning['factory'].get('observation_anchor_diagnostics'))
+            meanings.append(game_facts(meaning))
             assert all(count==counts[0] for count in counts)
             arms['atomic_v2' if atomic else 'legacy_v1']={
                 'wall_ns':distribution(wall),'process_cpu_ns':distribution(cpu),
                 'logical_operations_per_observation':counts[0],
                 'wire_response_bytes':len(wire.encode()),
+                'anchor_diagnostics':anchor_diagnostics,
             }
         assert meanings[0]==meanings[1], 'fixture facts differ'
         paths=['src/jev_factorio/backends/fle.py','src/jev_factorio/backends/observed_factory.py',
@@ -93,6 +107,7 @@ def benchmark(samples: int = 100) -> dict:
                'src/jev_factorio/lua/observation_v2.lua','benchmarks/benchmark_atomic_observation.py']
         return {'schema':1,'evidence_kind':'fixed_fake_transport_real_python_adapters',
             'samples_per_arm':samples,'matching_game_facts':True,'arms':arms,
+            'diagnostics_excluded_from_fact_equality':list(WIRE_ONLY_DIAGNOSTICS),
             'source_sha256':{p:hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in paths},
             'native_speedup_inferred':False,'native_game_executed':False,
             'limitation':'Preencoded fake envelopes; no server, network, entity conversion or dynamic world workload. Native v2 adds protocol/query-bound diagnostics.'}
