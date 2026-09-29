@@ -265,6 +265,18 @@ def test_unassociated_malformed_capture_member_downgrades_valid_bundle_in_same_l
     assert value['intermediate_provenance_qualified'] is False
 
 
+def test_explicit_null_capture_list_cannot_hide_behind_a_valid_bundle():
+    rows, routes, receipts = stock_chain_inputs()
+    rows[1]['recipe_dependency_witnesses'] = [recipe_witness_capture(CHAIN, rows[1], 12)]
+    rows[-1]['recipe_dependency_witnesses'] = None
+    value = diagnose(rows, routes, receipts)
+    assert value['recipe_dependency_status_by_declared_order'] == [
+        'recipe_dependency_witness_unqualified']
+    assert value['current_recipe_dependency_matches'] == 0
+    assert value['receipt_stock_recipe_dependency_correlations'] == 0
+    assert value['intermediate_provenance_qualified'] is False
+
+
 def change_later(rows, *, stock=None, products=None):
     for row in rows[2:]:
         for label in ('state', 'after_state'):

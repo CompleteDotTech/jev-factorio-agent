@@ -437,9 +437,12 @@ def _recipe_witness_statuses(chains, rows):
     malformed = set()
     total = 0
     for row_index, record in enumerate(rows):
-        captures = record.get('recipe_dependency_witnesses') if isinstance(record, dict) else None
-        if captures is None:
+        if not isinstance(record, dict):
+            malformed.add(row_index)
             continue
+        if 'recipe_dependency_witnesses' not in record:
+            continue
+        captures = record['recipe_dependency_witnesses']
         if not isinstance(captures, list) or len(captures) > 16:
             malformed.add(row_index)
             continue
