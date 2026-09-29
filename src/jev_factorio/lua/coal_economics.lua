@@ -1,12 +1,14 @@
 -- Fixed read-only native economics projection, never admission or actuation.
 -- No runtime callbacks, storage writes, handlers, grants or connector creation.
-local out={schema="jev.coal-native-economics.v4",base_version=script.active_mods.base,
+local out={schema="jev.coal-native-economics.v5",base_version=script.active_mods.base,
     mods=script.active_mods,query_status="unsupported",reason="unqualified",
     epoch={},registry={},connector_routes={},prototypes={},buffer_witnesses={},poles={},supply_surveys={},electric_members={},
     fluid_members={},fuel_targets={},sources={},
+    material_scope={status="unavailable",reason="not_observed",closure_complete=false,
+        actor_unit=0,actor_items={},crafting_queue=0,owned_stock={}},
     research_work={status="unavailable",reason="no_current_research",technology="",
         progress=0,unit_count=0,cost_multiplier=0,ignore_cost_multiplier=false,
-        ingredients={},lab={},targets={}},
+        unit_energy=0,ingredients={},lab={},targets={}},
     manual_cycle={status="unavailable",reason="journal_not_installed",
         journal_asset_sha256="",gathers={},deliveries={}}}
 local function need(ok,code) if not ok then error(code,0) end end
@@ -309,6 +311,40 @@ local ok,reason=pcall(function()
             journal_asset_sha256=installation.assets.coal_manual_journal_v1,
             gathers=gathers,deliveries=deliveries}
     end
+    -- The actor and the named fuel targets are observed in the SAME RPC as the
+    -- graph. This is deliberately a partial scope: unregistered stock, belts,
+    -- other owned buffers and future alternative supplies are not closed.
+    local function stock_rows(inv)
+        need(inv and inv.valid,"material_inventory_unavailable")
+        local values={}
+        for _,stack in pairs(inv.get_contents()) do
+            need(text(stack.name) and integer(stack.count,1,200000)
+                and (not stack.quality or stack.quality=="normal"
+                    or stack.quality.name=="normal"),"material_inventory_unsupported")
+            values[#values+1]={name=stack.name,count=stack.count}
+            need(#values<=128,"material_inventory_bound")
+        end
+        sorted(values,"name")
+        for i=2,#values do need(values[i-1].name~=values[i].name,"material_inventory_alias") end
+        return values
+    end
+    need(integer(player.crafting_queue_size,0,1000),"material_crafting_queue")
+    local stock={}
+    for target in pairs(q.rows) do
+        local e=c.entities[target]
+        need(e and e.valid and owned[e.unit_number]==target
+            and (e.name=="stone-furnace" or e.name=="boiler"),"material_target_unowned")
+        local output={}
+        if e.name=="stone-furnace" then output=stock_rows(e.get_output_inventory()) end
+        stock[#stock+1]={role=target,unit=e.unit_number,
+            fuel=stock_rows(e.get_fuel_inventory()),output=output}
+        need(#stock<=4,"material_target_bound")
+    end
+    sorted(stock,"role")
+    out.material_scope={status="observed",reason="partial_actor_and_fuel_targets",
+        closure_complete=false,actor_unit=actor.unit_number,
+        actor_items=stock_rows(player.get_main_inventory()),
+        crafting_queue=player.crafting_queue_size,owned_stock=stock}
     -- Current demand facts are projected in the SAME RPC as the owned graph.
     -- This only observes activity; it does not infer a future coal lower bound.
     local tech=actor.force.current_research
@@ -321,22 +357,8 @@ local ok,reason=pcall(function()
             out.research_work={status="unavailable",reason="research_lab_unowned",
                 technology=tech.name,progress=progress,unit_count=0,
                 cost_multiplier=0,ignore_cost_multiplier=false,
-                ingredients={},lab={},targets={}}
+                unit_energy=0,ingredients={},lab={},targets={}}
         else
-        local function item_rows(inv)
-            need(inv and inv.valid,"research_inventory_unavailable")
-            local values={}
-            for _,stack in pairs(inv.get_contents()) do
-                need(text(stack.name) and integer(stack.count,1,200000)
-                    and (not stack.quality or stack.quality=="normal"
-                        or stack.quality.name=="normal"),"research_inventory_unsupported")
-                values[#values+1]={name=stack.name,count=stack.count}
-                need(#values<=128,"research_inventory_bound")
-            end
-            sorted(values,"name")
-            for i=2,#values do need(values[i-1].name~=values[i].name,"research_inventory_alias") end
-            return values
-        end
         local targets={}
         local function bill_rows(items,allow_untyped)
             sequence(items,8)
@@ -362,7 +384,8 @@ local ok,reason=pcall(function()
                 "research_bill_alias") end
             return values
         end
-        need(integer(tech.research_unit_count,1,1000000),"research_unit_count")
+        need(integer(tech.research_unit_count,1,1000000)
+            and finite(tech.research_unit_energy,.001,100000),"research_unit_count")
         local multiplier=game.difficulty_settings and game.difficulty_settings.technology_price_multiplier
         local ignore=tech.prototype and tech.prototype.ignore_tech_cost_multiplier
         need(finite(multiplier,.001,100000) and type(ignore)=="boolean",
@@ -377,10 +400,13 @@ local ok,reason=pcall(function()
                 local burning_name=burning and (type(burning.name)=="string" and burning.name
                     or burning.name.name) or ""
                 need(burning_name=="" or burning_name=="coal","research_fuel_unsupported")
+                need(finite(e.crafting_speed,.001,1000),"research_crafting_speed")
+                need(not recipe or finite(recipe.energy,.001,100000),"research_recipe_energy")
                 targets[#targets+1]={role=target,unit=e.unit_number,
                     recipe=recipe and recipe.name or "",crafting=e.is_crafting(),
                     crafting_progress=e.crafting_progress or 0,burning=burning_name,
-                    input=item_rows(e.get_inventory(defines.inventory.furnace_source)),
+                    crafting_speed=e.crafting_speed,recipe_energy=recipe and recipe.energy or 0,
+                    input=stock_rows(e.get_inventory(defines.inventory.furnace_source)),
                     recipe_ingredients=recipe and bill_rows(recipe.ingredients,false) or {},
                     recipe_products=recipe and bill_rows(recipe.products,false) or {}}
                 need(#targets<=3,"research_target_bound")
@@ -389,9 +415,10 @@ local ok,reason=pcall(function()
         sorted(targets,"role")
         out.research_work={status="observed",reason="current_research_activity",
             technology=tech.name,progress=progress,unit_count=tech.research_unit_count,
-            cost_multiplier=multiplier,ignore_cost_multiplier=ignore,ingredients=ingredients,
+            cost_multiplier=multiplier,ignore_cost_multiplier=ignore,
+            unit_energy=tech.research_unit_energy,ingredients=ingredients,
             lab={role="utility:lab",unit=lab.unit_number,
-                input=item_rows(lab.get_inventory(defines.inventory.lab_input))},targets=targets}
+                input=stock_rows(lab.get_inventory(defines.inventory.lab_input))},targets=targets}
         end
     end
     local cursor=1;local edge_count=0;local electric={}
