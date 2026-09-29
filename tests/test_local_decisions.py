@@ -925,6 +925,106 @@ def test_native_shaped_recipe_input_transfer_binds_current_recipe_and_owned_furn
     assert missing()
 
 
+def test_sole_current_iron_ore_input_transfer_has_bounded_level_one_benefit_cue():
+    state, data = snapshot(inventory={'iron-ore': 6}, player_position=(0, 0)), catalog()
+    role = 'recipe:iron-plate'
+    state.factory['entities'][role] = machine(unit_number=2547, fuel={'coal': 2},
+                                               input={}, output={}, crafting=False)
+    state.factory['production_sites'] = {
+        'protocol': 1, 'session_id': state.session_id, 'tick': state.tick,
+        'sources': {role: {'state': 'owned', 'source_unit': 2547}}}
+    state.factory['input_routes'] = {'protocol': 1, 'session_id': state.session_id,
+                                     'tick': state.tick, 'sources': {}}
+    state.factory['output_buffers'] = {'protocol': 1, 'session_id': state.session_id,
+                                       'tick': state.tick, 'sources': {}}
+    planner = InputRoutePlanner(data, state, 'rocket_launch')
+    planner._set_focus('lab', 1)
+    plan = planner._production(data.recipes['iron-plate'], role, 6,
+                               ('item:lab', 'item:electronic-circuit', 'item:iron-plate'))
+    assert plan.steps[0].action == 'factory_insert', plan
+    assert plan.steps[0].parameters == {
+        'role': role, 'item': 'iron-ore', 'quantity': 6,
+        'receipt': f'{state.tick}:factory_insert:{role}:iron-ore'}
+    support = scheduling_context(state, data, [plan], 'rocket_launch')
+    evidence = support['candidate_evidence'][plan.id]
+    start = evidence['recipe_input_transfer_start_evidence']
+    assert start['planner_item_path'] == [
+        'lab', 'electronic-circuit', 'iron-plate', 'iron-ore']
+    assert start['owned_source_unit'] == 2547
+    assert start['ingredient_in_inventory_now'] == start['paid_quantity_to_transfer'] == 6
+    assert start['burner_fuel_coal_now'] == 2
+    cue = ('This sole same-tick, bounded transfer would supply a useful recipe '
+           'input if its paid receipt verifies (level 1)')
+
+    def instructions(rows=support, offered=(plan,)):
+        context, questions, selected = question_batch(
+            {'facts': state.for_jev(), **rows}, list(offered))
+        assert selected == list(offered)
+        assert len(json.dumps({'state': context, 'questions': questions},
+                              ensure_ascii=False, allow_nan=False).encode('utf-8')) <= 32000
+        return questions[plan.id + '/benefit']['instructions']
+
+    assert cue in instructions()
+    assert 'independent current blocker fact' in instructions()
+    assert 'native transfer receipt and later output still require verification' in instructions()
+    direct_planner = InputRoutePlanner(data, state, 'rocket_launch')
+    direct_planner._set_focus('iron-plate', 6)
+    direct = direct_planner._production(data.recipes['iron-plate'], role, 6,
+                                        ('item:iron-plate',))
+    direct_support = scheduling_context(state, data, [direct], 'rocket_launch')
+    assert direct_support['candidate_evidence'][direct.id][
+        'recipe_input_transfer_start_evidence']['planner_item_path'] == [
+            'iron-plate', 'iron-ore']
+    _, direct_questions, _ = question_batch(
+        {'facts': state.for_jev(), **direct_support}, [direct])
+    assert cue in direct_questions[direct.id + '/benefit']['instructions']
+
+    def absent(mutator):
+        changed = deepcopy(support)
+        mutator(changed['candidate_evidence'][plan.id])
+        assert cue not in instructions(changed)
+
+    absent(lambda row: row['recipe_input_transfer_start_evidence'].update(
+        observed_tick=state.tick - 1))
+    absent(lambda row: row['recipe_input_transfer_start_evidence'].update(
+        planner_item_path=['unrelated', 'iron-plate', 'iron-ore']))
+    absent(lambda row: row.update(local_target={'item': 'unrelated'}))
+    absent(lambda row: row['recipe_input_transfer_start_evidence'].update(
+        owned_source_role='recipe:copper-plate'))
+    absent(lambda row: row['recipe_input_transfer_start_evidence'].update(
+        owned_source_unit=0))
+    absent(lambda row: row['recipe_input_transfer_start_evidence'].update(
+        direct_native_recipe='copper-plate'))
+    absent(lambda row: row['recipe_input_transfer_start_evidence'].update(
+        paid_quantity_to_transfer=7))
+    absent(lambda row: row['recipe_input_transfer_start_evidence'].update(
+        planned_native_receipt_id='stale'))
+    absent(lambda row: row['recipe_input_transfer_start_evidence'].update(
+        native_transfer_and_later_output_require_verification=False))
+    absent(lambda row: row.update(recipe_input_transfer_start_evidence='malformed'))
+    absent(lambda row: row.update(unknowns=['furnace ownership']))
+    absent(lambda row: row.update(reasons=['conflicting queue']))
+    absent(lambda row: row.update(urgency=False))
+    absent(lambda row: row.update(work_scope='lookahead'))
+    absent(lambda row: row.update(research_deadline_tick=state.tick + 1))
+    absent(lambda row: row.update(requires_investment=True))
+    unsupported = deepcopy(support)
+    unsupported['local_objective']['primary_target']['item'] = 'unrelated'
+    assert cue not in instructions(unsupported)
+    other = replace(plan, id=plan.id + ':other')
+    assert cue not in instructions(support, (plan, other))
+    altered = replace(plan, steps=(replace(plan.steps[0], parameters={
+        **plan.steps[0].parameters, 'quantity': 5}),))
+    assert cue not in instructions(support, (altered,))
+    altered = replace(plan, steps=(replace(plan.steps[0], costs={'iron-ore': 5}),))
+    assert cue not in instructions(support, (altered,))
+    altered = replace(plan, steps=(replace(plan.steps[0], item='copper-ore'),))
+    assert cue not in instructions(support, (altered,))
+    with pytest.raises(ValueError, match='Factory batch must be an integer'):
+        replace(plan.steps[0], parameters={
+            **plan.steps[0].parameters, 'quantity': True})
+
+
 def test_ready_owned_output_pickup_has_current_start_facts_without_claiming_transfer():
     state, data = snapshot(inventory={'iron-plate': 0}, player_position=(62, -27)), catalog()
     role = 'recipe:iron-plate'
