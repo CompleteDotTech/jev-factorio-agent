@@ -312,6 +312,54 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 else ""
             )
             shared_bill = row.get('shared_bill_craft')
+            craft_start = row.get('craft_start_evidence')
+            craft_step = plan.steps[0] if len(plan.steps) == 1 else None
+            craft_parameters = craft_step.parameters if craft_step is not None else None
+            bill_output = (craft_start.get('expected_products_after_native_verification')
+                           if isinstance(craft_start, dict) else None)
+            qualified_bill_start = (
+                len(selected) == 1
+                and craft_step is not None and craft_step.action == 'factory_craft_job'
+                and isinstance(craft_step.item, str) and bool(craft_step.item)
+                and isinstance(craft_parameters, dict)
+                and isinstance(craft_parameters.get('receipt'), str)
+                and bool(craft_parameters['receipt'])
+                and isinstance(craft_parameters.get('recipe'), str)
+                and bool(craft_parameters['recipe'])
+                and type(craft_parameters.get('batches')) is int
+                and craft_parameters['batches'] > 0
+                and row.get('work_scope') == 'lookahead'
+                and row.get('unknowns') == [] and row.get('reasons') == []
+                and type(row.get('urgency')) is int and row['urgency'] == 0
+                and row.get('research_deadline_tick') is None
+                and type(tick) is int and isinstance(target, str) and bool(target)
+                and isinstance(shared_bill, dict) and isinstance(craft_start, dict)
+                and shared_bill.get('observed_tick') == tick
+                and craft_start.get('observed_tick') == tick
+                and shared_bill.get('local_target_item') == target
+                and shared_bill.get('craft_item') == craft_step.item
+                and shared_bill.get('basis') ==
+                    'current_catalog_shared_material_bill_and_native_recipe'
+                and shared_bill.get('forecast_is_not_paid_stock_or_completed_output') is True
+                and shared_bill.get('background_overlap_requires_native_admission') is True
+                and type(shared_bill.get('bounded_bill_inventory_target')) is int
+                and type(shared_bill.get('inventory_now')) is int
+                and type(shared_bill.get('unfilled_bill_units')) is int
+                and shared_bill['inventory_now'] >= 0
+                and shared_bill['bounded_bill_inventory_target'] - shared_bill['inventory_now']
+                    == shared_bill['unfilled_bill_units'] > 0
+                and type(shared_bill.get('expected_products_after_native_verification')) is int
+                and shared_bill['expected_products_after_native_verification']
+                    >= shared_bill['unfilled_bill_units']
+                and isinstance(bill_output, dict)
+                and bill_output.get(craft_step.item) ==
+                    shared_bill['expected_products_after_native_verification']
+                and craft_start.get('native_recipe') == craft_parameters.get('recipe')
+                and all(craft_start.get(key) is True for key in (
+                    'input_costs_match_native_recipe', 'inputs_in_inventory_now',
+                    'recipe_unlocked_and_handcraftable', 'player_connected_and_bound',
+                    'crafting_queue_empty', 'craft_job_protocol_ready',
+                    'native_receipt_required_for_completion')))
             bill_craft_hint = (
                 " `shared_bill_craft` ties this ready handcraft to a current "
                 "bounded catalog bill shortfall. It can supply a useful forecast "
@@ -496,6 +544,13 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                        "start observation."
                        if ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get(
                            'craft_start_evidence') else "")
+                    + (" This current bill-linked handcraft has a complete, same-tick "
+                       "catalog shortfall and native actor, queue, recipe, carried-input, "
+                       "and receipt-protocol start evidence. No required start fact is "
+                       "missing from those witnesses; identify a specific contrary "
+                       "current fact before marking observation needed. Future output "
+                       "still needs a native receipt and fresh verification."
+                       if qualified_bill_start else "")
                     + (" For a paid fuel transfer, `fuel_transfer_start_evidence` describes "
                        "the current carried coal, owned burner, and exact receipt. Judge "
                        "start facts from those values; the future transfer outcome is "
