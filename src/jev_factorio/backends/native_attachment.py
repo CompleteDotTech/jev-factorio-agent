@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 from functools import lru_cache
 from importlib.resources import files
 from pathlib import Path
@@ -36,7 +37,8 @@ PINNED_ASSETS = {
     'coal_supply': '3ec3b94b03c86cf963328ef9a6f75551ab285968ccfd50d2e2a25c72e89a242e',
     'successors': '7cd7999d3a4fee0faeb157c81487091b05366d919e17f34ae51a3061274d90ae',
 }
-OPTIONAL_ASSETS = {'coal_manual_journal_v1', 'coal_manual_cycle_v2'}
+OPTIONAL_ASSETS = {'coal_manual_journal_v1', 'coal_manual_cycle_v2',
+                   'connector_observer_bridge_v1'}
 
 LEGACY_OBSERVATION_PROFILE = 'e759-observation-v2-bound-bootstrap-v2'
 LEGACY_OBSERVATION_SHA256 = 'f51ea4aeb66b5c11366dbfe37cb755f2187152fa634928ac8a911f670d746780'
@@ -46,8 +48,10 @@ EXPANDED_OBSERVATION_ASSET = 'observation_v2_anchor_v3.lua'
 WATER_ORIGIN_OBSERVATION_PROFILE = 'e759-observation-v2-water-origin-v4'
 WATER_ORIGIN_OBSERVATION_SHA256 = '3e989a8a6686a964f457a5c9820dc7ad68f1e25dcbd8a8ca3d02218271be6989'
 WATER_ORIGIN_OBSERVATION_ASSET = 'observation_v2_water_origin_v4.lua'
-MANUAL_CYCLE_PROFILE = 'e759-observation-v2-water-origin-v4-manual-cycle-v5'
-CLOSED_WORLD_PROFILE = 'e759-observation-v2-water-origin-v4-manual-cycle-v6'
+LEGACY_MANUAL_CYCLE_PROFILE = 'e759-observation-v2-water-origin-v4-manual-cycle-v5'
+MANUAL_CYCLE_PROFILE = 'e759-observation-v2-water-origin-v4-manual-cycle-v5-connector-observer-v1'
+CLOSED_WORLD_PROFILE = 'e759-observation-v2-water-origin-v4-manual-cycle-v6-connector-observer-v1'
+CONNECTOR_OBSERVER_WITNESS_NAME = 'native-connector-observer-v1.witness.jsonl'
 
 
 def manual_journal_sha256():
@@ -63,6 +67,150 @@ def cycle_journal_sha256():
 def connector_ownership_sha256():
     return hashlib.sha256(files('jev_factorio').joinpath(
         'lua/connector_ownership.lua').read_bytes()).hexdigest()
+
+
+def connector_observer_bridge_sha256():
+    return hashlib.sha256(files('jev_factorio').joinpath(
+        'lua/connector_observer_bridge_v1.lua').read_bytes()).hexdigest()
+
+
+def connector_snapshot_sha256(snapshot: dict) -> str:
+    return hashlib.sha256(json.dumps(
+        snapshot, sort_keys=True, separators=(',', ':'), allow_nan=False
+    ).encode('utf-8')).hexdigest()
+
+
+def connector_snapshot_observation_command(session_id: str, actor_unit: int) -> str:
+    """Build the only native command allowed to qualify the retained observer."""
+    return '/sc ' + (
+        'local rt=assert(jev_fle_runtime);local c=assert(rt.campaign);'
+        'local b=assert(rt.connector_observer_bridge_v1);'
+        'local a=assert(rt.agent_characters and rt.agent_characters[1]);'
+        'assert(rt.jev_session_id==' + json.dumps(session_id)
+        + ' and a.valid and a.unit_number==' + str(actor_unit) + ');'
+        'assert(b.protocol==1 and b.snapshot_qualified~=true);'
+        'local factory=c.observe();local ownership=assert(factory.connector_ownership);'
+        'local direct=c.observe_connector_ownership();'
+        'local function same(x,y) if type(x)~=type(y) then return false end;'
+        'if type(x)~="table" then return x==y end;'
+        'for k,v in pairs(x) do if not same(v,y[k]) then return false end end;'
+        'for k in pairs(y) do if x[k]==nil then return false end end;return true end;'
+        'assert(ownership.protocol==1 and ownership.session_id==rt.jev_session_id '
+        'and ownership.tick==factory.tick and direct.tick==factory.tick '
+        'and same(ownership,direct));'
+        'local function copy(value) if type(value)~="table" then return value end;'
+        'local result={};for key,item in pairs(value) do result[copy(key)]=copy(item) end;'
+        'return result end;'
+        'rcon.print(helpers.table_to_json({schema=1,session_id=rt.jev_session_id,'
+        'actor_unit=a.unit_number,tick=factory.tick,connector_ownership=ownership}));'
+        'b.snapshot_ownership=copy(ownership);b.snapshot_tick=factory.tick;'
+        'b.snapshot_qualified=true'
+    )
+
+
+def _normalize_empty_connector_routes(snapshot):
+    """Normalize Lua's empty table JSON encoding, while rejecting nonempty arrays later."""
+    if isinstance(snapshot, dict) and snapshot.get('routes') == []:
+        snapshot = {**snapshot, 'routes': {}}
+    return snapshot
+
+
+def _private_read(path: Path, *, maximum: int) -> bytes:
+    path = Path(path)
+    if path.is_symlink():
+        raise RuntimeError('Connector snapshot witness is a symlink')
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeError('Private connector evidence cannot be read') from exc
+    try:
+        opened = os.fstat(fd)
+        current = path.stat()
+        if (not stat.S_ISREG(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+                or opened.st_size > maximum
+                or (os.name == 'posix' and (opened.st_uid != os.geteuid()
+                    or stat.S_IMODE(opened.st_mode) != 0o600))):
+            raise RuntimeError('Connector snapshot witness identity or privacy changed')
+        data = os.read(fd, maximum + 1)
+        if len(data) > maximum:
+            raise RuntimeError('Connector snapshot witness exceeds its bound')
+        return data
+    finally:
+        os.close(fd)
+
+
+def _connector_witness(path, result: dict, receipt_path) -> None:
+    if path is None:
+        path = os.environ.get('JEV_NATIVE_CONNECTOR_OBSERVER_WITNESS')
+    if not path or Path(path).name != CONNECTOR_OBSERVER_WITNESS_NAME:
+        raise RuntimeError('Qualified connector snapshot requires its fixed durable witness')
+    if Path(path).is_symlink() or not Path(path).is_file():
+        raise RuntimeError('Qualified connector snapshot requires its fixed durable witness')
+    if not receipt_path:
+        receipt_path = os.environ.get('JEV_NATIVE_ATTACHMENT_RECEIPT')
+    if not receipt_path:
+        raise RuntimeError('Connector snapshot witness requires the original attachment receipt')
+    receipt_sha256 = hashlib.sha256(_private_read(Path(receipt_path), maximum=65536)).hexdigest()
+    raw = _private_read(Path(path), maximum=65536)
+    if not raw.endswith(b'\n'):
+        raise RuntimeError('Connector snapshot witness is incomplete')
+
+    def unique_pairs(pairs):
+        out = {}
+        for key, value in pairs:
+            if key in out:
+                raise ValueError('duplicate key')
+            out[key] = value
+        return out
+
+    try:
+        rows = [json.loads(line.decode('utf-8'), object_pairs_hook=unique_pairs)
+                for line in raw.splitlines()]
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise RuntimeError('Connector snapshot witness requires reconciliation') from exc
+    if (len(rows) not in {2, 3} or not all(isinstance(row, dict) for row in rows)):
+        raise RuntimeError('Connector snapshot witness requires reconciliation')
+    first = rows[0]
+    expected_keys = {'schema', 'phase', 'session_id', 'actor_unit',
+                     'checkpoint_sha256', 'receipt_sha256', 'lock_identity',
+                     'bridge_asset_sha256', 'command_sha256'}
+    if (set(first) != expected_keys
+            or first['schema'] != 'jev.native-connector-observer-witness.v1'
+            or first['phase'] != 'dispatching'
+            or first['session_id'] != result['session_id']
+            or first['actor_unit'] != result['actor_unit']
+            or first['receipt_sha256'] != receipt_sha256
+            or first['bridge_asset_sha256'] != result['native_installation']['assets'].get(
+                'connector_observer_bridge_v1')
+            or first['command_sha256'] != hashlib.sha256(
+                connector_snapshot_observation_command(
+                    result['session_id'], result['actor_unit']).encode('utf-8')).hexdigest()
+            or any(not (isinstance(first[key], str) and len(first[key]) == 64
+                        and all(c in '0123456789abcdef' for c in first[key]))
+                   for key in ('checkpoint_sha256', 'receipt_sha256',
+                               'bridge_asset_sha256', 'command_sha256'))
+            or not isinstance(first['lock_identity'], dict)
+            or set(first['lock_identity']) != {'device', 'inode'}
+            or any(type(value) is not int or value < 0
+                   for value in first['lock_identity'].values())):
+        raise RuntimeError('Connector snapshot witness identity changed')
+    phases = [row.get('phase') for row in rows[1:]]
+    if phases not in (['qualified'], ['unknown', 'qualified']):
+        raise RuntimeError('Connector snapshot witness is not durably qualified')
+    if len(rows) == 3 and (set(rows[1]) != {'phase', 'reason'}
+                           or not isinstance(rows[1]['reason'], str)
+                           or not 1 <= len(rows[1]['reason']) <= 128):
+        raise RuntimeError('Connector snapshot witness ambiguity record is malformed')
+    proof = rows[-1]
+    snapshot = result['connector_snapshot_ownership']
+    if (set(proof) != {'phase', 'snapshot_tick', 'snapshot_sha256'}
+            or type(proof['snapshot_tick']) is not int
+            or proof['snapshot_tick'] != result['connector_snapshot_tick']
+            or not isinstance(snapshot, dict)
+            or proof['snapshot_sha256'] != connector_snapshot_sha256(snapshot)):
+        raise RuntimeError('Connector snapshot witness differs from the emitted native snapshot')
 
 
 def _asset_source(name, profile=False):
@@ -110,11 +258,17 @@ if b then ok=ok and j and l and b.protocol==1 and good(b.observer) and good(b.tr
     and script.get_event_handler(defines.events.on_tick)==b.tick_handler end
 if i then ok=ok and b and i.protocol==1 and i.previous_observe==b.observer
     and i.previous_transfer==b.transfer and good(i.observer) and good(i.transfer) end
-if s then ok=ok and s.protocol==1 and s.implementation_revision==4
+    if s then ok=ok and s.protocol==1 and s.implementation_revision==4
     and s.contract_family=="straight-solid-corridor-v1"
     and s.reservation_contract=="full-corridor-manhattan-v1" and type(s.coal_api)=="table"
     and c.observe==s.observer and c.transfer==s.transfer and c.configure==s.configure
     and i and b and j end
+local bridge=rt and rt.connector_observer_bridge_v1
+if bridge then ok=ok and bridge.protocol==1 and good(bridge.previous_observe)
+    and good(bridge.observer) and bridge.observer==c.observe
+    and good(bridge.previous_solid_observer)
+    and bridge.previous_observe==bridge.previous_solid_observer
+    and s and c.observe==s.observer end
 if q then ok=ok and q.revision==4 and s and s.coal==q
     and c.prepare_coal_source==q.prepare and c.build_coal_source==q.build
     and type(q.admission_evidence)=="boolean" end
@@ -155,17 +309,36 @@ elseif c and i then ok=ok and c.observe==i.observer and c.transfer==i.transfer
 elseif c and b then ok=ok and c.observe==b.observer and c.transfer==b.transfer
 elseif c and j then ok=ok and c.observe==j.observe_wrapper and c.transfer==l.transfer
 elseif c then ok=ok and c.observe==l.observer and c.transfer==l.transfer end
+-- This probe must remain metadata-only. The retained solid-routes observer
+-- updates in-memory route and coal diagnostics, so its emitted snapshot is
+-- qualified by a separate journaled native observation after migration.
+local connector_observer_bridge_qualified=false
+if c and c.connector_ledger and good(c.observe_connector_ownership)
+    and bridge and s and nc then
+    connector_observer_bridge_qualified=bridge.protocol==1
+        and bridge.observer==c.observe and c.observe==s.observer
+        and nc.observe==c.observe
+        and bridge.previous_observe==bridge.previous_solid_observer
+end
+local connector_snapshot_qualified=bridge and bridge.snapshot_qualified==true or false
+local connector_snapshot_tick=bridge and bridge.snapshot_tick or 0
+local connector_snapshot_ownership=bridge and bridge.snapshot_ownership or false
 local modules={fair_actions=true,factory=c~=nil,launch_readiness=l~=nil,
     observation=c and good(c.observation_snapshot) or false,
     observation_v2=c and good(c.observation_snapshot_v2) or false,craft_jobs=j~=nil,
     output_buffers=b~=nil,input_routes=i~=nil,production_sites=p~=nil,
     mining_outposts=o~=nil,solid_routes=s~=nil,coal_supply=q~=nil,
     successors=x~=nil,connector_ownership=c and c.connector_ledger~=nil or false,
-    coal_manual_journal_v1=mj~=nil,coal_manual_cycle_v2=cj~=nil}
+    coal_manual_journal_v1=mj~=nil,coal_manual_cycle_v2=cj~=nil,
+    connector_observer_bridge_v1=bridge~=nil}
 rcon.print(helpers.table_to_json({schema=1,qualified=ok==true,
     session_id=rt and rt.jev_session_id or "",actor_unit=a and a.unit_number or 0,
     modules=modules,solid_intents=s and s.intents or {},coal_targets=q and q.targets or {},
     coal_admission_evidence=q and q.admission_evidence or false,
+    connector_observer_bridge_qualified=connector_observer_bridge_qualified,
+    connector_snapshot_qualified=connector_snapshot_qualified,
+    connector_snapshot_tick=connector_snapshot_tick,
+    connector_snapshot_ownership=connector_snapshot_ownership,
     native_installation=n and {schema=n.schema,session_id=n.session_id,
         actor_unit=n.actor_unit,assets=n.assets,profile=n.profile or false} or false}))'''
 
@@ -193,7 +366,8 @@ CALLBACKS_EXPR = (
 def _installer_scripts():
     """Recognize only exact bundled installers; never mark arbitrary RCON Lua."""
     root = files('jev_factorio').joinpath('lua')
-    names = tuple(PINNED_ASSETS) + ('connector_ownership', 'coal_manual_journal_v1')
+    names = tuple(PINNED_ASSETS) + ('connector_ownership', 'coal_manual_journal_v1',
+                                    'connector_observer_bridge_v1')
     scripts = {}
     for name in names:
         source = _asset_source(name)
@@ -242,13 +416,34 @@ def prepare_install_command(script: str, attachment=None) -> str:
     )
 
 
-def readback(client, *, receipt_path=None):
+def readback(client, *, receipt_path=None, connector_witness_path=None,
+             allow_legacy_manual_cycle_repair=False,
+             allow_unqualified_connector_bridge=False):
     result = decode_native(client.send_command('/sc ' + PROBE))
+    if isinstance(result, dict) and result.get('connector_snapshot_qualified') is True:
+        result['connector_snapshot_ownership'] = _normalize_empty_connector_routes(
+            result.get('connector_snapshot_ownership'))
     if (not isinstance(result, dict) or set(result) != {
             'schema', 'qualified', 'session_id', 'actor_unit', 'modules',
             'solid_intents', 'coal_targets', 'coal_admission_evidence',
-            'native_installation'}
+            'connector_observer_bridge_qualified', 'connector_snapshot_qualified',
+            'connector_snapshot_tick', 'connector_snapshot_ownership', 'native_installation'}
             or result['schema'] != 1 or result['qualified'] is not True
+            or type(result['connector_observer_bridge_qualified']) is not bool
+            or type(result['connector_snapshot_qualified']) is not bool
+            or type(result['connector_snapshot_tick']) is not int
+            or result['connector_snapshot_tick'] < 0
+            or (result['connector_snapshot_qualified'] is False
+                and (result['connector_snapshot_tick'] != 0
+                     or result['connector_snapshot_ownership'] is not False))
+            or (result['connector_snapshot_qualified'] is True
+                and (not isinstance(result['connector_snapshot_ownership'], dict)
+                     or result['connector_snapshot_ownership'].get('protocol') != 1
+                     or result['connector_snapshot_ownership'].get('session_id')
+                        != result['session_id']
+                     or result['connector_snapshot_ownership'].get('tick')
+                        != result['connector_snapshot_tick']
+                     or not isinstance(result['connector_snapshot_ownership'].get('routes'), dict)))
             or not isinstance(result['session_id'], str) or not result['session_id']
             or type(result['actor_unit']) is not int or result['actor_unit'] < 1
             or not isinstance(result['modules'], dict)
@@ -290,6 +485,28 @@ def readback(client, *, receipt_path=None):
                     or result['modules']['successors']
                     or result['modules']['coal_manual_journal_v1'] is not True
                     or result['modules']['coal_manual_cycle_v2'] is not False
+                    or result['modules']['connector_observer_bridge_v1'] is not True
+                    or result['connector_observer_bridge_qualified'] is not True
+                    or native['assets'].get('factory') != PINNED_ASSETS['factory']
+                    or native['assets'].get('observation_v2') != WATER_ORIGIN_OBSERVATION_SHA256
+                    or native['assets'].get('connector_ownership') != connector_ownership_sha256()
+                    or native['assets'].get('coal_manual_journal_v1') != manual_journal_sha256()
+                    or native['assets'].get('connector_observer_bridge_v1') != connector_observer_bridge_sha256()
+                    or any(value != (WATER_ORIGIN_OBSERVATION_SHA256 if name == 'observation_v2'
+                                     else connector_ownership_sha256() if name == 'connector_ownership'
+                                     else manual_journal_sha256() if name == 'coal_manual_journal_v1'
+                                     else connector_observer_bridge_sha256() if name == 'connector_observer_bridge_v1'
+                                     else PINNED_ASSETS.get(name))
+                           for name, value in native['assets'].items())):
+                raise RuntimeError('Manual-cycle migration profile requires reconciliation')
+        elif profile == LEGACY_MANUAL_CYCLE_PROFILE:
+            if (not allow_legacy_manual_cycle_repair
+                    or result['modules']['connector_ownership'] is not True
+                    or result['modules']['successors']
+                    or result['modules']['coal_manual_journal_v1'] is not True
+                    or result['modules']['coal_manual_cycle_v2'] is not False
+                    or result['modules']['connector_observer_bridge_v1'] is not False
+                    or result['connector_observer_bridge_qualified'] is not False
                     or native['assets'].get('factory') != PINNED_ASSETS['factory']
                     or native['assets'].get('observation_v2') != WATER_ORIGIN_OBSERVATION_SHA256
                     or native['assets'].get('connector_ownership') != connector_ownership_sha256()
@@ -299,36 +516,55 @@ def readback(client, *, receipt_path=None):
                                      else manual_journal_sha256() if name == 'coal_manual_journal_v1'
                                      else PINNED_ASSETS.get(name))
                            for name, value in native['assets'].items())):
-                raise RuntimeError('Manual-cycle migration profile requires reconciliation')
+                raise RuntimeError('Legacy v5 observer requires the one-use repair migration')
         elif profile == CLOSED_WORLD_PROFILE:
             if (result['modules']['connector_ownership'] is not True
                     or result['modules']['successors']
                     or result['modules']['coal_manual_journal_v1'] is not True
                     or result['modules']['coal_manual_cycle_v2'] is not True
+                    or result['modules']['connector_observer_bridge_v1'] is not True
+                    or result['connector_observer_bridge_qualified'] is not True
                     or native['assets'].get('factory') != PINNED_ASSETS['factory']
                     or native['assets'].get('observation_v2') != WATER_ORIGIN_OBSERVATION_SHA256
                     or native['assets'].get('connector_ownership') != connector_ownership_sha256()
                     or native['assets'].get('coal_manual_journal_v1') != manual_journal_sha256()
                     or native['assets'].get('coal_manual_cycle_v2') != cycle_journal_sha256()
+                    or native['assets'].get('connector_observer_bridge_v1') != connector_observer_bridge_sha256()
                     or any(value != (WATER_ORIGIN_OBSERVATION_SHA256 if name == 'observation_v2'
                                      else connector_ownership_sha256() if name == 'connector_ownership'
                                      else manual_journal_sha256() if name == 'coal_manual_journal_v1'
                                      else cycle_journal_sha256() if name == 'coal_manual_cycle_v2'
+                                     else connector_observer_bridge_sha256() if name == 'connector_observer_bridge_v1'
                                      else PINNED_ASSETS.get(name))
                            for name, value in native['assets'].items())):
                 raise RuntimeError('Closed-world migration profile requires reconciliation')
         elif profile is not False:
             raise RuntimeError('Unknown native installation profile requires reconciliation')
+        if (result['modules']['connector_ownership']
+                and not (profile == LEGACY_MANUAL_CYCLE_PROFILE
+                         and allow_legacy_manual_cycle_repair)
+                and (result['modules']['connector_observer_bridge_v1'] is not True
+                     or result['connector_observer_bridge_qualified'] is not True)):
+            raise RuntimeError('Connector ownership observer bridge requires reconciliation')
         for name, expected in native['assets'].items():
             source = _asset_source(name, profile)
             if profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE,
                            WATER_ORIGIN_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE,
+                           LEGACY_MANUAL_CYCLE_PROFILE,
                            CLOSED_WORLD_PROFILE} \
                     and name not in {'observation_v2', 'connector_ownership',
-                                     'coal_manual_journal_v1', 'coal_manual_cycle_v2'}:
+                                     'coal_manual_journal_v1', 'coal_manual_cycle_v2',
+                                     'connector_observer_bridge_v1'}:
                 continue  # Exact e759 hash is pinned; retained closure is reused.
             if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
                 raise RuntimeError('Native Lua source differs from installed manifest')
+        if (result['modules']['connector_ownership']
+                and not (profile == LEGACY_MANUAL_CYCLE_PROFILE
+                         and allow_legacy_manual_cycle_repair)
+                and not allow_unqualified_connector_bridge):
+            if result['connector_snapshot_qualified'] is not True:
+                raise RuntimeError('Connector snapshot has not passed its one-use native qualification')
+            _connector_witness(connector_witness_path, result, receipt_path)
         return result
     if result['modules']['connector_ownership']:
         raise RuntimeError('Unversioned connector ownership requires reconciliation')
@@ -371,11 +607,14 @@ def require_asset(attachment, name):
     expected = (manifest['assets'].get(name) if isinstance(manifest, dict)
                 else PINNED_ASSETS.get(name))
     if (isinstance(manifest, dict)
-            and profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE,
-                            WATER_ORIGIN_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE,
-                            CLOSED_WORLD_PROFILE}
-            and name not in {'observation_v2', 'connector_ownership',
-                             'coal_manual_journal_v1', 'coal_manual_cycle_v2'}):
+                and profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE,
+                                WATER_ORIGIN_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE,
+                                LEGACY_MANUAL_CYCLE_PROFILE,
+                                CLOSED_WORLD_PROFILE}
+                and name in PINNED_ASSETS
+                and name not in {'observation_v2', 'connector_ownership',
+                                 'coal_manual_journal_v1', 'coal_manual_cycle_v2',
+                                 'connector_observer_bridge_v1'}):
         if expected != PINNED_ASSETS.get(name):
             raise RuntimeError('Retained native asset differs from the legacy profile')
         return True

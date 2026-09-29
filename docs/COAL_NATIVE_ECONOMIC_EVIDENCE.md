@@ -201,6 +201,22 @@ session, actor, complete module map, source manifests, checkpoint and receipt
 hashes in the intent. This source journal is not a guest-side transaction token;
 the owner must still schedule a quiescent checkpoint and retain the private
 intent and native readback evidence before any opt-in installation.
+
+The original v5 transaction was later found to leave the retained e759
+`campaign.observe` closure unchanged. That closure does not emit
+`connector_ownership`, even though the v5 connector module and callback
+manifest are present. Default reattachment now rejects that exact legacy v5
+profile. The one-use v5 observer repair installs a hash-pinned outer bridge
+that preserves the factory and solid-route closures and adds the session-bound,
+same-tick ledger when the retained observer later emits a factory snapshot.
+Its preflight and post-install checks only compare callback identities and
+source manifests; they never invoke the observer. It runs under the same
+checkpoint lock, requires an empty connector binding and quiescent native
+ledger, records its command in a distinct fsynced intent, and binds that intent
+to the locked file identity. An ambiguous response is reconciled by readback
+only and cannot be replayed. A separate, explicitly journaled native snapshot
+probe must confirm the emitted ledger before controller work resumes. The
+v5-to-v6 candidate requires this bridged v5 profile.
 The query checks the installed source hash, callback identity, journal owner,
 complete bounded gather rows, and current retained coal-transfer receipts in
 the same RPC as the graph, burner and research state. Its decoder binds target

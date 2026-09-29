@@ -173,7 +173,9 @@ class OwnerStepGate:
         if self.native_readback is None:
             from .backends.native_attachment import readback
             native = readback(loop.backend._instance.rcon_client,
-                              receipt_path=self.receipt)
+                              receipt_path=self.receipt,
+                              connector_witness_path=self.checkpoint.with_name(
+                                  'native-connector-observer-v1.witness.jsonl'))
         else:
             native = self.native_readback(loop)
         if (native.get("qualified") is not True

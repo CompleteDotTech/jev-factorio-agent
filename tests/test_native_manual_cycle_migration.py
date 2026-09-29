@@ -9,7 +9,8 @@ import pytest
 from jev_factorio.backends.native_attachment import (
     MANUAL_CYCLE_PROFILE, PROBE, WATER_ORIGIN_OBSERVATION_PROFILE,
     PINNED_ASSETS, PINNED_SOURCE_COMMIT, PINNED_SOURCE_TREE,
-    connector_ownership_sha256, manual_journal_sha256, readback, require_asset,
+    connector_observer_bridge_sha256, connector_ownership_sha256,
+    manual_journal_sha256, readback, require_asset,
 )
 from jev_factorio.backends.native_manual_cycle_migration import (
     SENTINEL, _command, _manifest, _no_open_investment, _intent_events,
@@ -34,17 +35,23 @@ def test_v5_adds_only_exact_source_qualified_journal_and_v4_remains_closed():
     assert proposed['assets'] == {
         **row['native_installation']['assets'],
         'connector_ownership': connector_ownership_sha256(),
-        'coal_manual_journal_v1': manual_journal_sha256()}
+        'coal_manual_journal_v1': manual_journal_sha256(),
+        'connector_observer_bridge_v1': connector_observer_bridge_sha256()}
     row['modules']['connector_ownership'] = True
     row['modules']['coal_manual_journal_v1'] = True
+    row['modules']['connector_observer_bridge_v1'] = True
     row['native_installation'] = proposed
+    row['connector_observer_bridge_qualified'] = True
 
     class Client:
         def send_command(self, command):
             assert command == '/sc ' + PROBE
             return json.dumps(row)
 
-    assert readback(Client())['native_installation']['profile'] == MANUAL_CYCLE_PROFILE
+    with pytest.raises(RuntimeError, match='one-use native qualification'):
+        readback(Client())
+    assert readback(Client(), allow_unqualified_connector_bridge=True)[
+        'native_installation']['profile'] == MANUAL_CYCLE_PROFILE
     assert require_asset(row, 'connector_ownership') is True
     assert require_asset(row, 'coal_manual_journal_v1') is True
     row['native_installation']['assets']['coal_manual_journal_v1'] = '0' * 64
@@ -88,12 +95,15 @@ def test_v5_lua_transaction_rolls_back_handler_and_manifest_on_failure():
     player = runtime.fair.actor()
     player.index = 1
     player.get_item_count = lambda _: 0
+    runtime.campaign.observe = lua.eval('function() return {tick=0} end')
+    runtime.solid_routes = lua.table_from({'observer': runtime.campaign.observe})
     runtime.coal_supply = lua.table_from({'revision': 4, 'committed': False,
                                           'rows': lua.table_from({})})
     lua.globals().script = lua.table_from({})
     lua.execute('script.on_nth_tick=function(n,handler) assert(n==1); script.registered=handler end')
     runtime.native_installation = lua.table_from(row['native_installation'], recursive=True)
-    runtime.native_installation.callbacks = lua.table_from({})
+    runtime.native_installation.callbacks = lua.table_from(
+        {'observe': runtime.campaign.observe})
     lua.globals().prior_callbacks = runtime.native_installation.callbacks
     command = _command(row)
     assert callable(lua.eval('load')(command[4:]))
@@ -105,6 +115,7 @@ def test_v5_lua_transaction_rolls_back_handler_and_manifest_on_failure():
     assert runtime.campaign.connector_ledger is None
     assert runtime.campaign.connector_begin is None
     assert runtime.fair.connector_place is None
+    assert lua.eval('jev_fle_runtime.campaign.observe==jev_fle_runtime.solid_routes.observer')
     assert lua.eval('script.registered==nil')
     assert runtime.native_installation.profile == WATER_ORIGIN_OBSERVATION_PROFILE
     assert lua.eval('jev_fle_runtime.native_installation.callbacks==prior_callbacks')
@@ -122,6 +133,7 @@ def test_v5_lua_transaction_rolls_back_handler_and_manifest_on_failure():
     assert runtime.native_installation.profile == WATER_ORIGIN_OBSERVATION_PROFILE
     assert runtime.native_installation.assets.coal_manual_journal_v1 is None
     assert runtime.native_installation.assets.connector_ownership is None
+    assert runtime.native_installation.assets.connector_observer_bridge_v1 is None
     assert {name: runtime.native_installation.assets[name]
             for name in row['native_installation']['assets']} == row['native_installation']['assets']
     assert lua.eval('jev_fle_runtime.native_installation.callbacks==prior_callbacks')
@@ -142,6 +154,8 @@ def test_v5_lua_transaction_rolls_back_handler_and_manifest_on_failure():
     assert runtime.native_installation.assets.coal_manual_journal_v1 == manual_journal_sha256()
     assert runtime.native_installation.assets.connector_ownership == connector_ownership_sha256()
     assert runtime.campaign.connector_ledger.protocol == 1
+    assert lua.eval('jev_fle_runtime.campaign.observe==jev_fle_runtime.solid_routes.observer')
+    assert runtime.connector_observer_bridge_v1.protocol == 1
     assert runtime.campaign.connector_begin is not None
     assert runtime.fair.connector_place is not None
     assert lua.eval('script.registered==jev_fle_runtime.coal_manual_journal_v1.tick_handler')
@@ -186,6 +200,8 @@ def test_v5_owner_locked_migration_reconciles_ambiguous_response(tmp_path, outco
             proposed = _manifest(self.row)
             self.row['modules']['connector_ownership'] = True
             self.row['modules']['coal_manual_journal_v1'] = True
+            self.row['modules']['connector_observer_bridge_v1'] = True
+            self.row['connector_observer_bridge_qualified'] = True
             self.row['native_installation'] = proposed
             return '' if outcome == 'missing_ack_v5' else SENTINEL
 

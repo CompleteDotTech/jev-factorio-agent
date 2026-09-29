@@ -3,7 +3,7 @@
     local installation=rt.native_installation
     local cycle=rt.coal_manual_cycle_v2
     need(installation and installation.profile==
-        "e759-observation-v2-water-origin-v4-manual-cycle-v6"
+        "e759-observation-v2-water-origin-v4-manual-cycle-v6-connector-observer-v1"
         and installation.assets and installation.assets.coal_manual_cycle_v2==
             "__CYCLE_ASSET_SHA256__"
         and installation.callbacks and cycle and cycle.protocol==2

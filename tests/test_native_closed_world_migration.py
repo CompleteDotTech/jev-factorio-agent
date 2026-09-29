@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from jev_factorio.backends.native_attachment import (
-    CLOSED_WORLD_PROFILE, MANUAL_CYCLE_PROFILE, PINNED_ASSETS,
+    CLOSED_WORLD_PROFILE, CONNECTOR_OBSERVER_WITNESS_NAME, MANUAL_CYCLE_PROFILE, PINNED_ASSETS,
     PINNED_SOURCE_COMMIT, PINNED_SOURCE_TREE, PROBE,
     cycle_journal_sha256, readback, require_asset,
 )
@@ -39,10 +39,12 @@ def installed_v5():
     row['native_installation'] = v5_manifest(row)
     row['modules']['connector_ownership'] = True
     row['modules']['coal_manual_journal_v1'] = True
+    row['modules']['connector_observer_bridge_v1'] = True
+    row['connector_observer_bridge_qualified'] = True
     return row
 
 
-def test_exact_v6_profile_adds_only_cycle_asset_and_v5_stays_closed():
+def test_exact_v6_profile_adds_only_cycle_asset_and_v5_stays_closed(tmp_path):
     row = installed_v5()
     proposed = _manifest(row)
     assert proposed['profile'] == CLOSED_WORLD_PROFILE
@@ -61,12 +63,14 @@ def test_exact_v6_profile_adds_only_cycle_asset_and_v5_stays_closed():
             assert command == '/sc ' + PROBE
             return json.dumps(row)
 
-    observed = readback(Client())
+    from native_connector_witness_helpers import write_snapshot_witness
+    receipt, witness = write_snapshot_witness(tmp_path, row)
+    observed = readback(Client(), receipt_path=receipt, connector_witness_path=witness)
     assert observed['native_installation']['profile'] == CLOSED_WORLD_PROFILE
     assert require_asset(observed, 'coal_manual_cycle_v2') is True
     row['native_installation']['assets']['coal_manual_cycle_v2'] = '0' * 64
     with pytest.raises(RuntimeError):
-        readback(Client())
+        readback(Client(), receipt_path=receipt, connector_witness_path=witness)
     with pytest.raises(RuntimeError):
         require_asset(row, 'coal_manual_cycle_v2')
 
@@ -116,13 +120,16 @@ def test_v6_lua_install_rolls_back_new_slot_without_touching_v5_slot():
     player = runtime.fair.actor()
     player.index = 1
     player.get_item_count = lambda _: 0
+    runtime.campaign.observe = lua.eval('function() return {tick=0} end')
+    runtime.solid_routes = lua.table_from({'observer': runtime.campaign.observe})
     runtime.coal_supply = lua.table_from({'revision': 4, 'committed': False,
                                           'rows': lua.table_from({})})
     lua.globals().script = lua.table_from({})
     lua.execute('script.slots={};script.on_nth_tick=function(n,handler) '
                 'assert(n==1 or n==2);script.slots[n]=handler end')
     runtime.native_installation = lua.table_from(row['native_installation'], recursive=True)
-    runtime.native_installation.callbacks = lua.table_from({})
+    runtime.native_installation.callbacks = lua.table_from(
+        {'observe': runtime.campaign.observe})
     from jev_factorio.backends.native_manual_cycle_migration import _command as v5_command
     lua.execute(v5_command(row)[4:])
     assert lua.eval('script.slots[1]==jev_fle_runtime.coal_manual_journal_v1.tick_handler')
@@ -210,6 +217,8 @@ def test_owner_locked_v6_install_is_one_use_and_reconciles(tmp_path, outcome):
                   expected_checkpoint_sha256=hashlib.sha256(checkpoint_bytes).hexdigest(),
                   expected_receipt_sha256=hashlib.sha256(receipt_bytes).hexdigest())
     client = Client()
+    from native_connector_witness_helpers import write_snapshot_witness
+    write_snapshot_witness(tmp_path, client.row, receipt_path=receipt)
     if outcome in {'ack_v6', 'rcon_ack_v6'}:
         assert migrate_closed_world_v6(client, **kwargs)['native_installation']['profile'] == CLOSED_WORLD_PROFILE
     else:

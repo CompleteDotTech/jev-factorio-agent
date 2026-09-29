@@ -24,7 +24,7 @@ def connector_binding(session):
         'external': 0, 'owned': True, 'pending': None,
         'cells': [{'index': 1, 'position': {'x': .5, 'y': 1.5},
                    'unit_number': 22, 'paid': True, 'external': False}]}}}
-def fixture(monkeypatch, *, v5=False):
+def fixture(monkeypatch, *, v5=False, tmp_path=None):
     raw = {'epoch': {'session_id': 'synthetic-projection', 'tick': 10000,
                      'actor_index': 1, 'actor_unit': 321, 'surface_index': 2,
                      'force_index': 3}}
@@ -48,8 +48,11 @@ def fixture(monkeypatch, *, v5=False):
         row['native_installation'] = _manifest(row)
         row['modules']['connector_ownership'] = True
         row['modules']['coal_manual_journal_v1'] = True
+        row['modules']['connector_observer_bridge_v1'] = True
+        row['connector_observer_bridge_qualified'] = True
         backend._native_attachment = readback(SimpleNamespace(
-            send_command=lambda query: json.dumps(row) if query == '/sc ' + PROBE else None))
+            send_command=lambda query: json.dumps(row) if query == '/sc ' + PROBE else None),
+            **_witness_kwargs(tmp_path, row))
     adapter.native = SimpleNamespace(command=command, backend=backend)
     snapshot = SimpleNamespace(session_id=raw['epoch']['session_id'], tick=raw['epoch']['tick'],
         factory={'acceptance_runtime': {'session_id': raw['epoch']['session_id'],
@@ -84,6 +87,14 @@ def fixture(monkeypatch, *, v5=False):
     return adapter, snapshot, raw, calls, received_connectors
 
 
+def _witness_kwargs(tmp_path, row):
+    from native_connector_witness_helpers import write_snapshot_witness
+    if tmp_path is None:
+        raise AssertionError('A native connector fixture requires a witness directory')
+    receipt, witness = write_snapshot_witness(tmp_path, row)
+    return {'receipt_path': receipt, 'connector_witness_path': witness}
+
+
 def test_fresh_native_query_decodes_bound_unpaid_graph(monkeypatch):
     adapter, snapshot, raw, calls, received = fixture(monkeypatch)
     result = adapter.economic_projection(snapshot, snapshot.memory)
@@ -97,23 +108,23 @@ def test_fresh_native_query_decodes_bound_unpaid_graph(monkeypatch):
     assert len(result['query_sha256']) == len(result['response_sha256']) == 64
 
 
-def test_qualified_v5_connector_and_journal_reach_read_only_projection(monkeypatch):
-    adapter, snapshot, _, calls, _ = fixture(monkeypatch, v5=True)
+def test_qualified_v5_connector_and_journal_reach_read_only_projection(monkeypatch, tmp_path):
+    adapter, snapshot, _, calls, _ = fixture(monkeypatch, v5=True, tmp_path=tmp_path)
     result = adapter.economic_projection(snapshot, snapshot.memory)
     assert len(calls) == 1
     assert result['native'].mutation_authorized is False
 
 
-def test_changed_v5_journal_source_refuses_query(monkeypatch):
-    adapter, snapshot, _, calls, _ = fixture(monkeypatch, v5=True)
+def test_changed_v5_journal_source_refuses_query(monkeypatch, tmp_path):
+    adapter, snapshot, _, calls, _ = fixture(monkeypatch, v5=True, tmp_path=tmp_path)
     adapter.native.backend._native_attachment['native_installation']['assets']['coal_manual_journal_v1'] = '0' * 64
     with pytest.raises(RuntimeError, match='verified installed revision'):
         adapter.economic_projection(snapshot, snapshot.memory)
     assert calls == []
 
 
-def test_v6_query_requires_exact_versioned_attachment_and_never_grants_payment(monkeypatch):
-    adapter, snapshot, raw, calls, _ = fixture(monkeypatch, v5=True)
+def test_v6_query_requires_exact_versioned_attachment_and_never_grants_payment(monkeypatch, tmp_path):
+    adapter, snapshot, raw, calls, _ = fixture(monkeypatch, v5=True, tmp_path=tmp_path)
     with pytest.raises(RuntimeError, match='qualified native installation'):
         adapter.economic_projection_v6(snapshot, snapshot.memory)
     assert calls == []
@@ -124,7 +135,8 @@ def test_v6_query_requires_exact_versioned_attachment_and_never_grants_payment(m
     row['native_installation'] = v6_manifest(row)
     row['modules']['coal_manual_cycle_v2'] = True
     adapter.native.backend._native_attachment = readback(SimpleNamespace(
-        send_command=lambda query: json.dumps(row) if query == '/sc ' + PROBE else None))
+        send_command=lambda query: json.dumps(row) if query == '/sc ' + PROBE else None),
+        **_witness_kwargs(tmp_path, row))
 
     def decoded(value, **kwargs):
         assert value == raw

@@ -12,8 +12,8 @@ from ..iteration_timing import decode_native
 from ..memory import load_checkpoint
 from .native_attachment import (
     CALLBACKS_EXPR, CLOSED_WORLD_PROFILE, MANUAL_CYCLE_PROFILE, NATIVE_SCHEMA,
-    PINNED_ASSETS, WATER_ORIGIN_OBSERVATION_SHA256,
-    connector_ownership_sha256, cycle_journal_sha256,
+    CONNECTOR_OBSERVER_WITNESS_NAME, PINNED_ASSETS, WATER_ORIGIN_OBSERVATION_SHA256,
+    connector_observer_bridge_sha256, connector_ownership_sha256, cycle_journal_sha256,
     manual_journal_sha256, readback,
 )
 from .native_manual_cycle_migration import (
@@ -87,7 +87,8 @@ def _manifest(attachment: dict) -> dict:
                 for name, enabled in modules.items()
                 if enabled and name in PINNED_ASSETS}
     expected.update(connector_ownership=connector_ownership_sha256(),
-                    coal_manual_journal_v1=manual_journal_sha256())
+                    coal_manual_journal_v1=manual_journal_sha256(),
+                    connector_observer_bridge_v1=connector_observer_bridge_sha256())
     if assets != expected:
         raise RuntimeError('Installed v5 assets require reconciliation')
     return {**native, 'profile': CLOSED_WORLD_PROFILE,
@@ -195,7 +196,9 @@ def migrate_closed_world_v6(
         binding = validate_binding(memory.connector_ownership, expected_session_id)
         if binding['routes']:
             raise RuntimeError('Closed-world migration requires empty connector checkpoint')
-        attachment = readback(client, receipt_path=receipt_path)
+        attachment = readback(client, receipt_path=receipt_path,
+                              connector_witness_path=checkpoint_path.with_name(
+                                  CONNECTOR_OBSERVER_WITNESS_NAME))
         if (attachment['session_id'] != expected_session_id
                 or attachment['actor_unit'] != expected_actor_unit):
             raise RuntimeError('Closed-world migration session or actor changed')
@@ -223,7 +226,9 @@ def migrate_closed_world_v6(
                         or len(acknowledgement) > 1024
                         or not acknowledgement.strip().endswith(SENTINEL)):
                     raise RuntimeError('Closed-world migration acknowledgement ambiguous')
-                after = readback(client, receipt_path=receipt_path)
+                after = readback(client, receipt_path=receipt_path,
+                                 connector_witness_path=checkpoint_path.with_name(
+                                     CONNECTOR_OBSERVER_WITNESS_NAME))
                 if (after['native_installation'] != proposed
                         or after['modules'] != {**attachment['modules'],
                                                'coal_manual_cycle_v2': True}
@@ -309,7 +314,9 @@ def reconcile_closed_world_v6(
         if (_digest(_private_bytes(checkpoint_path)) != first['checkpoint_sha256']
                 or _digest(_private_bytes(Path(receipt_path))) != first['receipt_sha256']):
             raise RuntimeError('Closed-world evidence hash changed')
-        observed = readback(client, receipt_path=receipt_path)
+        observed = readback(client, receipt_path=receipt_path,
+                            connector_witness_path=checkpoint_path.with_name(
+                                CONNECTOR_OBSERVER_WITNESS_NAME))
         if (_digest(_private_bytes(checkpoint_path)) != first['checkpoint_sha256']
                 or _digest(_private_bytes(Path(receipt_path))) != first['receipt_sha256']
                 or observed['session_id'] != first['session_id']

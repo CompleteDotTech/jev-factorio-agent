@@ -123,7 +123,7 @@ class FleBackend:
         return session_id
 
     def start(self, resume: bool = False, adopt_session: bool = False,
-              setup_timing=None) -> None:
+              setup_timing=None, connector_witness_path=None) -> None:
         if adopt_session and not resume:
             raise ValueError("Session adoption requires resume; never initializes a world")
         if setup_timing:
@@ -195,7 +195,10 @@ class FleBackend:
             )
             if (existing_campaign or "").strip() == "true":
                 from .native_attachment import readback
-                self._native_attachment = readback(self._instance.rcon_client)
+                self._native_attachment = readback(
+                    self._instance.rcon_client,
+                    receipt_path=os.environ.get('JEV_NATIVE_ATTACHMENT_RECEIPT'),
+                    connector_witness_path=connector_witness_path)
             elif (existing_campaign or "").strip() == "false":
                 partial = self._instance.rcon_client.send_command(
                     "/sc rcon.print(jev_fle_runtime ~= nil and "
