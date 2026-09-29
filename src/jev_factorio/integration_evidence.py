@@ -34,6 +34,7 @@ from .telemetry import validate_phase
 SCHEMA = 'jev-factorio.integration-evidence.v1'
 TRIAL_SCHEMA = 'jev-factorio.integration-trial.v1'
 TRIAL_SCHEMA_V2 = 'jev-factorio.integration-trial.v2'
+TRIAL_SCHEMA_V3 = 'jev-factorio.integration-trial.v3'
 TRIAL_KEYS = {
     'schema', 'evidence_kind', 'arm', 'comparison_axis', 'experiment_sha256',
     'workload_sha256', 'initial_save_sha256', 'capacity_profile_sha256',
@@ -92,6 +93,11 @@ def _names(values, maximum=32):
             and len(set(values)) == len(values))
 
 
+def _chain_text(value, maximum=128):
+    return (isinstance(value, str) and 1 <= len(value) <= maximum
+            and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9:_.-]*', value) is not None)
+
+
 def _valid_mods(value):
     return (isinstance(value, dict) and 1 <= len(value) <= 1024
             and all(type(name) is str and type(version) is str
@@ -113,11 +119,12 @@ def _retains_prefix(before, after):
 
 
 def validate_trial(trial: dict) -> None:
-    if not isinstance(trial, dict) or trial.get('schema') not in {TRIAL_SCHEMA, TRIAL_SCHEMA_V2}:
+    if not isinstance(trial, dict) or trial.get('schema') not in {TRIAL_SCHEMA, TRIAL_SCHEMA_V2, TRIAL_SCHEMA_V3}:
         raise ValueError('Invalid integration trial schema')
-    complete = trial['schema'] == TRIAL_SCHEMA_V2
+    complete = trial['schema'] in {TRIAL_SCHEMA_V2, TRIAL_SCHEMA_V3}
     if set(trial) != TRIAL_KEYS | ({'coal_targets', 'treatment_sha256', 'initial_checkpoint_sha256',
-                                   'vm_uuid', 'production_vm_uuid'} if complete else set()):
+                                   'vm_uuid', 'production_vm_uuid'} if complete else set()) | (
+                                       {'downstream_chain'} if trial['schema'] == TRIAL_SCHEMA_V3 else set()):
         raise ValueError('Invalid integration trial fields')
     if (trial['evidence_kind'] not in {'fixture', 'native_isolated', 'native_campaign'}
             or trial['arm'] not in {'baseline', 'treatment'}
@@ -185,6 +192,21 @@ def validate_trial(trial: dict) -> None:
     if (not _names(trial['science_packs'], len(SCIENCE)) or not set(trial['science_packs']) <= SCIENCE
             or not _names([trial['research_goal']], 1) or not _names(trial['downstream_recipes'])):
         raise ValueError('Invalid predeclared science dependency')
+    if trial['schema'] == TRIAL_SCHEMA_V3:
+        chains = trial['downstream_chain']
+        required = {'route', 'producer_role', 'producer_recipe', 'product_item', 'consumer_role',
+                    'consumer_unit', 'science_pack'}
+        if (not isinstance(chains, list) or not 1 <= len(chains) <= 16
+                or any(not isinstance(chain, dict) or set(chain) != required
+                       or any(not _chain_text(chain[key]) for key in
+                              ('producer_role', 'producer_recipe', 'product_item', 'consumer_role', 'science_pack'))
+                       or not _chain_text(chain['route'], 256)
+                       or not _integer(chain['consumer_unit'], 1)
+                       or chain['producer_recipe'] not in trial['downstream_recipes']
+                       or chain['science_pack'] not in trial['science_packs']
+                       for chain in chains)
+                or len({chain['route'] for chain in chains}) != len(chains)):
+            raise ValueError('Invalid predeclared downstream chain diagnostic')
     limits = trial['regression_limits']
     if (not isinstance(limits, dict) or set(limits) != {'max_iteration_p95_ratio', 'min_science_rate_ratio'}
             or not _number(limits['max_iteration_p95_ratio'], 0.01, 10)
@@ -228,6 +250,102 @@ def _identity(row):
              'acceptance_configuration', 'campaign_treatment')}
 
 
+def _downstream_chain_diagnostic(chains, rows, routes, receipts, lab_unit, integrity_valid=True):
+    """Report bounded paid-transfer correlation, never provenance or acceptance.
+
+    A transfer receipt identifies one entity and the actor, not the source of
+    the transferred stock. In particular, a matching extract/insert pair cannot
+    establish that the routed ingredient became the later science pack.
+    """
+    if chains is None:
+        return None
+    if (not integrity_valid or not isinstance(rows, list) or not rows
+            or not isinstance(routes, dict) or not isinstance(receipts, dict)):
+        return {'schema': 'jev-factorio.downstream-chain-diagnostic.v1',
+                'predeclared_chains': len(chains),
+                'status_by_declared_order': ['input_integrity_failed'] * len(chains),
+                'correlated_sequences': 0, 'intermediate_provenance_qualified': False,
+                'scope': 'Analyzer integrity checks failed; no chain diagnostic qualified.'}
+    observed = []
+    def after_factory(row):
+        state = row.get('after_state') if isinstance(row, dict) else None
+        factory = state.get('factory') if isinstance(state, dict) else None
+        return factory if isinstance(factory, dict) else {}
+
+    events = sorted((receipt for receipt in receipts.values() if isinstance(receipt, dict)
+                     and _integer(receipt.get('tick')) and _integer(receipt.get('quantity'), 1, 200)),
+                    key=lambda receipt: receipt['tick'])
+    for chain in chains:
+        route = routes.get(chain['route'])
+        if (not isinstance(route, dict) or route.get('kind') != 'downstream'
+                or not _integer(route.get('target_unit'), 1) or not _chain_text(route.get('recipe'))
+                or not _integer(route.get('attributed_positive_boundaries'), 3)
+                or not _integer(route.get('attributed_received'), 1)
+                or not _integer(route.get('first_positive_tick'))
+                or not _integer(route.get('target_first_products'))
+                or not _integer(route.get('target_last_products'))
+                or route['target_last_products'] <= route['target_first_products']):
+            observed.append('routed_producer_not_qualified')
+            continue
+        observed_routes = []
+        for row in rows:
+            solid = after_factory(row).get('solid_routes')
+            mapping = solid.get('routes') if isinstance(solid, dict) else None
+            if isinstance(mapping, dict) and chain['route'] in mapping:
+                observed_routes.append(mapping[chain['route']])
+        if (len(observed_routes) != len(rows)
+                or any(not isinstance(value, dict) or not isinstance(value.get('target'), dict)
+                       or value['target'].get('role') != chain['producer_role']
+                       or value['target'].get('unit_number') != route['target_unit']
+                       for value in observed_routes)
+                or route['recipe'] != chain['producer_recipe']
+                or route['recipe'] == chain['science_pack']):
+            observed.append('producer_binding_mismatch')
+            continue
+        consumers = []
+        for row in rows:
+            entities = after_factory(row).get('entities')
+            consumers.append(entities.get(chain['consumer_role']) if isinstance(entities, dict) else None)
+        if (any(not isinstance(entity, dict) or entity.get('unit_number') != chain['consumer_unit']
+                or entity.get('recipe') != chain['science_pack']
+                or not _integer(entity.get('products_finished')) for entity in consumers)
+                or consumers[-1]['products_finished'] <= consumers[0]['products_finished']):
+            observed.append('owned_science_consumer_not_qualified')
+            continue
+        product_extracts = {}
+        product_inserted_tick = None
+        science_extracts = {}
+        complete = False
+        for receipt in events:
+            tick, quantity = receipt['tick'], receipt['quantity']
+            role, unit, item, extracting = (receipt.get('role'), receipt.get('unit_number'),
+                                             receipt.get('item'), receipt.get('extracting'))
+            if tick < route['first_positive_tick'] or type(extracting) is not bool:
+                continue
+            if (role == chain['producer_role'] and unit == route['target_unit']
+                    and item == chain['product_item'] and extracting):
+                product_extracts.setdefault(quantity, tick)
+            elif (role == chain['consumer_role'] and unit == chain['consumer_unit']
+                    and item == chain['product_item'] and not extracting
+                    and quantity in product_extracts and tick > product_extracts[quantity]):
+                product_inserted_tick = tick
+            elif (product_inserted_tick is not None and tick > product_inserted_tick
+                  and role == chain['consumer_role'] and unit == chain['consumer_unit']
+                  and item == chain['science_pack'] and extracting):
+                science_extracts.setdefault(quantity, tick)
+            elif (role == 'utility:lab' and unit == lab_unit and item == chain['science_pack']
+                  and not extracting and quantity in science_extracts
+                  and tick > science_extracts[quantity]):
+                complete = True
+                break
+        observed.append('correlated_paid_transfer_sequence' if complete else 'paid_transfer_sequence_missing')
+    return {'schema': 'jev-factorio.downstream-chain-diagnostic.v1',
+            'predeclared_chains': len(chains), 'status_by_declared_order': observed,
+            'correlated_sequences': observed.count('correlated_paid_transfer_sequence'),
+            'intermediate_provenance_qualified': False,
+            'scope': 'Observed paid transfers and production counters; stock provenance and recipe graph are unproven.'}
+
+
 def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> dict:
     """Check internal consistency. A passing result is never acceptance or authority.
 
@@ -265,7 +383,7 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                or 'solid_science_policy' not in cp or type(cp.get('solid_science_policy')) is not bool
                or cp['solid_science_policy'] is not trial['configuration']['solid_science_policy'],
                'checkpoint_treatment_mismatch')
-        if trial['schema'] == TRIAL_SCHEMA_V2:
+        if trial['schema'] in {TRIAL_SCHEMA_V2, TRIAL_SCHEMA_V3}:
             reject(cp.get('coal_targets') != trial['coal_targets']
                    or cp.get('coal_kit_policy') is not trial['configuration']['coal_kit_policy']
                    or cp.get('coal_supply_schema') != (2 if trial['configuration'].get('coal_economic_admission', False) else 1)
@@ -279,7 +397,7 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
     for field in ('output_commitments', 'input_commitments', 'outpost_commitments', 'successor_receipts'):
         reject(not _retains_prefix(initial.get(field, {}), final.get(field, {})),
                'composed_ownership_regressed')
-    if trial['schema'] == TRIAL_SCHEMA_V2:
+    if trial['schema'] in {TRIAL_SCHEMA_V2, TRIAL_SCHEMA_V3}:
         reject(not _retains_prefix(initial.get('coal_commitments', {}),
                                    final.get('coal_commitments', {})),
                'coal_ownership_regressed')
@@ -295,7 +413,7 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
     evidence_hash = hashlib.sha256()
     previous_tick = previous_time = None
     first_time = first_tick = last_time = last_tick = None
-    received_receipts, receipt_values = set(), {}
+    received_receipts, receipt_values, window_receipts = set(), {}, {}
     deliveries, consumptions = Counter(), Counter()
     first_consumed = previous_consumed = observed_consumed = None
     observed_research = set()
@@ -368,7 +486,8 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                'decision_model_call_mismatch')
         reject(type(record.get('status')) is not str or record.get('status') not in {'running', 'completed'}
                or record.get('solid_route_fault') is not False
-               or trial['schema'] == TRIAL_SCHEMA_V2 and record.get('coal_supply_fault') is not False,
+               or trial['schema'] in {TRIAL_SCHEMA_V2, TRIAL_SCHEMA_V3}
+               and record.get('coal_supply_fault') is not False,
                'controller_or_route_failure')
         reject(terminal_seen, 'records_after_terminal_completion')
         terminal_seen = record.get('status') == 'completed'
@@ -575,6 +694,9 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                             issues.add('unbound_science_delivery')
                         else:
                             deliveries[receipt['item']] += receipt['quantity']
+                if (receipt_id not in received_receipts and index > 0
+                        and _integer(receipt.get('tick')) and first_tick < receipt['tick'] <= tick):
+                    window_receipts[receipt_id] = deepcopy(receipt)
                 received_receipts.add(receipt_id)
             consumed = _counter(factory.get('consumed'))
             if first_consumed is None:
@@ -627,13 +749,15 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                         if (flow['positive_samples'] > old['flow']['positive_samples']
                                 and flow['last_positive_tick'] > old['flow']['last_positive_tick']):
                             stats['attributed_positive_boundaries'] += 1
+                            if stats['first_positive_tick'] is None:
+                                stats['first_positive_tick'] = flow['last_positive_tick']
                         else:
                             issues.add('route_positive_sample_history_mismatch')
                         stats['attributed_received'] = attributable
                 else:
-                    route_statistics[key] = {'sent': 0, 'received': 0, 'positive_samples': 0,
+                    route_statistics[key] = {'route': key, 'sent': 0, 'received': 0, 'positive_samples': 0,
                         'baseline_sent': flow['sent'], 'attributed_received': 0,
-                        'attributed_positive_boundaries': 0,
+                        'attributed_positive_boundaries': 0, 'first_positive_tick': None,
                         'kind': 'coal' if route['target']['inventory'] == 'fuel' else 'downstream',
                         'target_unit': route['target']['unit_number'], 'source_unit': route['source']['unit_number'],
                         'recipe': route['target']['recipe'], 'item': route['item'],
@@ -776,6 +900,9 @@ def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> d
                       'coal_inventory_delivery_lower_bound': sum(v['attributed_received'] for v in coal),
                       'downstream_routes_with_flow_and_production': len(downstream),
                       'downstream_delivery_units': sum(v['attributed_received'] for v in downstream),
+                      'intermediate_chain_diagnostic': _downstream_chain_diagnostic(
+                          trial['downstream_chain'] if trial['schema'] == TRIAL_SCHEMA_V3 else None,
+                          rows, route_statistics, window_receipts, initial_lab_unit, not issues),
                       'mined_coal_provenance_verified': False,
                       'source_note': 'Stocked chests and corridor flow do not prove paid coal mining or bootstrap.'},
         'model_calls': model_calls,
@@ -795,7 +922,7 @@ def analyze(gameplay: Path, trial_path: Path, initial_checkpoint: Path, final_ch
     captured = {'gameplay': stable_read(gameplay, MAX_LOG), 'trial': stable_read(trial_path, MAX_JSON),
                 'initial_checkpoint': stable_read(initial_checkpoint), 'final_checkpoint': stable_read(final_checkpoint)}
     trial = load_json(captured['trial'])
-    if (trial.get('schema') == TRIAL_SCHEMA_V2
+    if (trial.get('schema') in {TRIAL_SCHEMA_V2, TRIAL_SCHEMA_V3}
             and sha256(captured['initial_checkpoint']) != trial.get('initial_checkpoint_sha256')):
         raise ValueError('Predeclared checkpoint differs from analyzed input')
     initial = load_json(captured['initial_checkpoint'])
@@ -832,9 +959,12 @@ def compare(baseline: dict, treatment: dict, baseline_trial: dict, treatment_tri
                   'max_no_science_progress_seconds', 'minimum_timing_samples', 'regression_limits'}
     if baseline_trial['schema'] != treatment_trial['schema']:
         issues.add('uncontrolled_trial_schema')
-    if baseline_trial['schema'] == treatment_trial['schema'] == TRIAL_SCHEMA_V2:
+    if (baseline_trial['schema'] == treatment_trial['schema']
+            and baseline_trial['schema'] in {TRIAL_SCHEMA_V2, TRIAL_SCHEMA_V3}):
         controlled.update(('coal_targets', 'treatment_sha256', 'initial_checkpoint_sha256',
                            'vm_uuid', 'production_vm_uuid'))
+        if baseline_trial['schema'] == TRIAL_SCHEMA_V3:
+            controlled.add('downstream_chain')
     controlled |= {'capacity_profile_sha256'} if axis == 'algorithm' else {'expected_commit', 'expected_source_sha256'}
     if any(baseline_trial[k] != treatment_trial[k] for k in controlled):
         issues.add('uncontrolled_pair_difference')

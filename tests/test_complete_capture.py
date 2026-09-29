@@ -8,7 +8,7 @@ from jev_factorio.complete_capture import (capture, project_record, verify,
                                            checked_checkpoint_progress, checked_economic_binding)
 from jev_factorio.acceptance_io import canonical
 from jev_factorio.coal_supply import intents
-from jev_factorio.integration_evidence import TRIAL_SCHEMA_V2, analyze_rows
+from jev_factorio.integration_evidence import TRIAL_SCHEMA_V2, TRIAL_SCHEMA_V3, analyze_rows
 from jev_factorio.treatment import SCHEMA, SCHEMA_V2, digest
 from jev_factorio.research_log import Redactor
 from integration_evidence_fixtures import evidence
@@ -167,6 +167,21 @@ def test_complete_capture_roundtrip_retains_coal_and_rejects_tamper(tmp_path):
     (output / 'gameplay.jsonl.gz').write_bytes(b'corrupt')
     with pytest.raises(ValueError, match='checksum'):
         verify(output)
+    # V3 is the same complete capture with an additional, explicitly
+    # diagnostic-only predeclared intermediate chain. No route is promoted.
+    trial['schema'] = TRIAL_SCHEMA_V3
+    trial['downstream_recipes'].append('iron-plate')
+    trial['downstream_chain'] = [{'route': 'solid:1:2:iron-ore:input',
+        'producer_role': 'recipe:iron-plate', 'producer_recipe': 'iron-plate',
+        'product_item': 'iron-plate', 'consumer_role': 'recipe:automation-science-pack',
+        'consumer_unit': 123, 'science_pack': 'automation-science-pack'}]
+    paths['trial'].write_bytes(canonical(trial))
+    later = tmp_path / 'capture-v3'
+    capture(gameplay=gameplay, trial_path=paths['trial'],
+            initial_checkpoint=paths['initial'], final_checkpoint=paths['final'],
+            save=save, preflight_path=preflight, output=later)
+    checked_v3 = verify(later)
+    assert checked_v3['manifest']['native_acceptance'] == 'not_accepted'
 
 
 def test_complete_capture_v2_admission_roundtrip(tmp_path):

@@ -92,6 +92,9 @@ analysis prefer `analyze` so stable-read checks and input-byte digests are retai
 `examples/integration_trial.fixture.json` is a fully parseable, **fabricated**
 example; its hashes, clock window, source and models are not native evidence.
 Do not reuse its values for a campaign. Unknown or missing top-level keys fail.
+The table describes v1 common fields; v2 adds the complete coal/checkpoint/VM
+bindings. V3 retains every v2 binding and requires `downstream_chain`. Existing
+v1/v2 trial meaning and same-pack downstream qualification are unchanged.
 
 | Field | Contract |
 | --- | --- |
@@ -113,6 +116,7 @@ Do not reuse its values for a campaign. Unknown or missing top-level keys fail.
 | `science_packs` | Nonempty unique list from the existing science-pack whitelist |
 | `research_goal` | Declared currently feasible research milestone |
 | `downstream_recipes` | Nonempty unique bounded recipe-name list for observed science dependencies; a route counts toward integrated downstream flow only if its target recipe names a declared science pack also newly observed in owned-lab delivery and consumption. This is correlated evidence, not proof that those exact lab units came from that target. An intermediate-only route needs a separate validated dependency-chain witness. |
+| `downstream_chain` (v3 only) | One to 16 predeclared route, producer role/recipe/product item, and owned science consumer role/unit/pack identities. The analyzer reports an intermediate-chain diagnostic only when it observes new ordered paid extract and insert receipts at both entities and the lab, positive routed flow, and rising production counters. The diagnostic is explicitly correlated-only: receipts do not establish stock provenance or a validated native recipe graph. It never qualifies the downstream acceptance count or closes the science-flow gate. |
 | `minimum_timing_samples` | Integer 2–50000, chosen before inspecting outcomes |
 | `regression_limits` | `max_iteration_p95_ratio` in 0.01–10 and `min_science_rate_ratio` in 0–10 |
 
