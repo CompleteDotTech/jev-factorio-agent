@@ -153,6 +153,29 @@ can install the exact connector ledger and unchanged v1 journal sources and
 extend the native manifest only from an exact, quiescent v4 installation with
 an explicitly empty connector checkpoint. The migration creates an empty ledger
 and registers the journal callback; it does not create or pay for a route.
+An older retained v4 checkpoint can instead have `connector_ownership=null`.
+That is not an empty protocol-1 binding, and v5 resume refuses to adopt a
+native ledger from it. The owner must first run the separate, one-use
+`prepare_legacy_empty_connector_checkpoint` transaction while v4 is still
+installed. It requires the original single-writer lock, exact checkpoint and
+attachment-receipt hashes, a quiescent controller with no open investment or
+successor project, exact v4 installed assets, and a read-only native check that
+connector handlers and ledger are absent and the actor is idle. It changes
+only the saved null field to `{protocol: 1, session_id: ..., routes: {}}` with
+the normal fsynced checkpoint writer. A fixed, private intent and original
+checkpoint backup are durable before that write; the preparation cannot be
+reused. An interrupted or ambiguous result must be classified by
+`reconcile_legacy_empty_connector_checkpoint` against the original backup,
+receipt and exact expected new bytes. Even an old-checkpoint result consumes
+the one-use attempt and requires a separately reviewed recovery. The v5
+installer remains strict and must be separately reviewed against the new
+checkpoint hash; this preparation never installs an asset or authorizes an
+actor action.
+The prepared checkpoint is deliberately incompatible with continuing the
+old v4 controller: v4 has no native connector ledger to reconcile against the
+new empty binding. The owner must keep gameplay paused between preparation
+and a separately qualified v5 installation; a failed install requires a new
+reviewed recovery plan, not a v4 controller restart.
 This source change does not execute that migration. The connector asset also
 makes native connector actions available under v5, so separate owner review is
 required before any live opt-in.
