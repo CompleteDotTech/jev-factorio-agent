@@ -5,7 +5,8 @@ import pytest
 
 from jev_factorio.coal_economic_observation import NativeEconomicsUnavailable, UNIT_QUALIFICATION
 from jev_factorio.coal_economic_v6 import (
-    CYCLE_SOURCE_SHA256, SCHEMA, decode_v6, fixed_query, query_sha256,
+    CYCLE_SOURCE_SHA256, SCHEMA, decode_v6, diagnostic_stock_upper_bounds,
+    fixed_query, query_sha256,
 )
 from jev_factorio.backends.native_attachment import (
     connector_observer_bridge_sha256, manual_journal_sha256)
@@ -91,6 +92,44 @@ def test_composed_query_uses_entire_graph_and_bounded_material_census():
     assert len(result.census.entities) == len(raw['registry'])
     assert result.native_payback_proven is False
     assert result.mutation_authorized is False
+
+
+def test_stock_upper_bound_counts_overlapping_views_without_spend_authority():
+    raw, bundle = projected()
+    # Actor main and furnace fuel can each reappear among indexed inventory
+    # views. Count every copy: a later deficit may be understated, never inflated.
+    coal = [{'name': 'coal', 'count': 4}]
+    raw['material_scope']['actor_items'] = coal
+    raw['material_census']['actor_items'] = coal
+    raw['material_census']['actor_inventories'][0]['items'] = coal
+    raw['material_census']['entities'][0]['inventories'] = [
+        {'index': 1, 'items': [{'name': 'coal', 'count': 10}]}]
+    result = diagnostic_stock_upper_bounds(checked(raw, bundle), ('coal', 'iron-plate'))
+    assert result['upper_counts'] == {'coal': 38, 'iron-plate': 0}
+    assert result['native_raw_sha256'] == checked(raw, bundle).raw_sha256
+    assert result['goal_demand_proven'] is False
+    assert result['native_payback_proven'] is False
+    assert result['mutation_authorized'] is False
+
+
+@pytest.mark.parametrize('names', [(), ('coal', 'coal'), ('iron-plate', 'coal'),
+                                   ('coal', True), ('',), ('coal',) * 33])
+def test_stock_upper_bound_rejects_unqualified_item_sets(names):
+    raw, bundle = projected()
+    with pytest.raises(ValueError):
+        diagnostic_stock_upper_bounds(checked(raw, bundle), names)
+
+
+def test_stock_upper_bound_rejects_claimed_authority_or_incomplete_census():
+    from dataclasses import replace
+    raw, bundle = projected()
+    facts = checked(raw, bundle)
+    for changed in (replace(facts, mutation_authorized=True),
+                    replace(facts, native_payback_proven=True),
+                    replace(facts, census=replace(
+                        facts.census, owned_surface_coverage_complete=False))):
+        with pytest.raises(ValueError):
+            diagnostic_stock_upper_bounds(changed, ('coal',))
 
 
 CYCLE_ROWS = '''
