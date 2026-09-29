@@ -52,6 +52,19 @@ def _integer(value, minimum=1, maximum=9007199254740991) -> bool:
     return type(value) is int and minimum <= value <= maximum
 
 
+def _same_typed(left, right) -> bool:
+    """Compare JSON values without Python's bool/int/float equality coercions."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _same_typed(left[key], right[key]) for key in left)
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _same_typed(a, b) for a, b in zip(left, right))
+    return left == right
+
+
 def _attachment(attachment: dict) -> None:
     _need(isinstance(attachment, dict) and isinstance(attachment.get('modules'), dict),
           'invalid_attachment')
@@ -100,7 +113,7 @@ def decode(raw: dict, *, request: dict, expected_epoch: dict,
     _attachment(attachment)
     _need(isinstance(raw, dict) and set(raw) == ROOT_KEYS and raw['schema'] == SCHEMA
           and raw['base_version'] == '2.0.77'
-          and raw['request'] == request
+          and _same_typed(raw['request'], request)
           and raw['stock_provenance_qualified'] is False
           and raw['mutation_authorized'] is False, 'invalid_witness')
     if raw['status'] == 'unqualified':
@@ -111,34 +124,45 @@ def decode(raw: dict, *, request: dict, expected_epoch: dict,
     _need(raw['status'] == 'observed' and raw['reason'] == 'none'
           and raw['recipe_dependency_verified'] is True, 'invalid_observed_witness')
     epoch = raw['epoch']
-    _need(isinstance(expected_epoch, dict) and set(expected_epoch) == EPOCH_KEYS - {'tick'}
+    identity_keys = EPOCH_KEYS - {'tick'}
+    _need(isinstance(expected_epoch, dict) and set(expected_epoch) == identity_keys
           | {'min_tick', 'max_tick'} and isinstance(epoch, dict)
           and set(epoch) == EPOCH_KEYS
-          and all(epoch[key] == expected_epoch[key] for key in EPOCH_KEYS - {'tick'})
+          and _name(expected_epoch.get('session_id'))
+          and all(_integer(expected_epoch.get(key)) for key in
+                  ('actor_index', 'actor_unit', 'surface_index', 'force_index'))
+          and _integer(expected_epoch.get('min_tick'), 0)
+          and _integer(expected_epoch.get('max_tick'), 0)
+          and _name(epoch.get('session_id'))
+          and all(_integer(epoch.get(key)) for key in
+                  ('actor_index', 'actor_unit', 'surface_index', 'force_index'))
+          and _same_typed({key: epoch[key] for key in identity_keys},
+                          {key: expected_epoch[key] for key in identity_keys})
           and epoch['session_id'] == attachment['session_id']
           and epoch['actor_unit'] == attachment['actor_unit']
           and _integer(epoch['tick'], 0)
-          and _integer(expected_epoch['min_tick'], 0)
-          and _integer(expected_epoch['max_tick'], 0)
           and expected_epoch['min_tick'] <= epoch['tick'] <= expected_epoch['max_tick']
           and expected_epoch['max_tick'] - expected_epoch['min_tick'] <= 120,
           'epoch_mismatch')
     route = raw['route']
     _need(isinstance(expected_route, dict) and set(expected_route) == ROUTE_KEYS
           and isinstance(route, dict) and set(route) == ROUTE_KEYS
-          and route == expected_route
+          and _same_typed(route, expected_route)
           and route['id'] == request['route']
           and _name(route['item']) and _name(route['source_role'])
           and _integer(route['source_unit'])
           and route['target_role'] == request['producer_role']
+          and _integer(route['target_unit'])
           and route['target_unit'] == request['producer_unit']
           and _integer(route['paid_parts'], 1, 128), 'route_mismatch')
     producer, consumer = raw['producer'], raw['consumer']
     _need(isinstance(producer, dict) and set(producer) == {'role', 'unit', 'recipe'}
           and producer['role'] == request['producer_role']
+          and _integer(producer['unit'])
           and producer['unit'] == request['producer_unit']
           and isinstance(consumer, dict) and set(consumer) == {'role', 'unit', 'recipe'}
           and consumer['role'] == request['consumer_role']
+          and _integer(consumer['unit'])
           and consumer['unit'] == request['consumer_unit'], 'entity_mismatch')
     _recipe(producer['recipe'], request['product_item'])
     _recipe(consumer['recipe'], request['science_pack'])
@@ -194,9 +218,9 @@ def decode_capture_bundle(value: dict, *, request: dict,
     request = validate_request(request)
     _need(isinstance(value, dict) and set(value) == CAPTURE_KEYS
           and value['schema'] == CAPTURE_SCHEMA
-          and value['request'] == request
-          and value['expected_epoch'] == expected_epoch
-          and value['expected_route'] == expected_route,
+          and _same_typed(value['request'], request)
+          and _same_typed(value['expected_epoch'], expected_epoch)
+          and _same_typed(value['expected_route'], expected_route),
           'invalid_capture_binding')
     attachment = value['attachment']
     _need(isinstance(attachment, dict)

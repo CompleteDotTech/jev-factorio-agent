@@ -113,6 +113,42 @@ def test_changed_epoch_binding_bill_or_authority_fails_closed(change):
         check(row)
 
 
+@pytest.mark.parametrize('change', [
+    lambda row: row['request'].update(producer_unit=2.0),
+    lambda row: row['request'].update(producer_unit=True),
+    lambda row: row['epoch'].update(actor_index=1.0),
+    lambda row: row['epoch'].update(actor_index=True),
+    lambda row: row['epoch'].update(actor_unit=9.0),
+    lambda row: row['epoch'].update(actor_unit=True),
+    lambda row: row['epoch'].update(surface_index=1.0),
+    lambda row: row['epoch'].update(surface_index=True),
+    lambda row: row['epoch'].update(force_index=1.0),
+    lambda row: row['epoch'].update(force_index=True),
+    lambda row: row['route'].update(target_unit=2.0),
+    lambda row: row['route'].update(target_unit=True),
+    lambda row: row['producer'].update(unit=2.0),
+    lambda row: row['producer'].update(unit=True),
+    lambda row: row['consumer'].update(unit=3.0),
+    lambda row: row['consumer'].update(unit=True),
+])
+def test_float_and_bool_echoed_identity_fields_fail_closed(change):
+    row = result()
+    change(row)
+    with pytest.raises(ValueError):
+        check(row)
+
+
+@pytest.mark.parametrize('field', [
+    'actor_index', 'actor_unit', 'surface_index', 'force_index',
+])
+@pytest.mark.parametrize('value', [1.0, True])
+def test_expected_epoch_identity_rejects_float_and_bool(field, value):
+    expected = {**EPOCH, field: value}
+    with pytest.raises(ValueError):
+        decode(result(), request=REQUEST, expected_epoch=expected,
+               expected_route=ROUTE, attachment=ATTACHMENT)
+
+
 def test_unqualified_native_version_or_missing_asset_never_qualifies():
     row = result()
     row.update(status='unqualified', reason='native_version',

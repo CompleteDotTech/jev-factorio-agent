@@ -447,8 +447,12 @@ def _recipe_witness_statuses(chains, rows):
         for bundle in captures:
             request = bundle.get('request') if isinstance(bundle, dict) else None
             route = request.get('route') if isinstance(request, dict) else None
-            if isinstance(route, str) and route in by_route:
-                by_route[route].append((record, bundle))
+            if not isinstance(route, str) or route not in by_route:
+                # An unassociated member could hide or conflict with a declared
+                # route's witness, so no positive conclusion may survive it.
+                malformed.add(row_index)
+                continue
+            by_route[route].append((record, bundle))
     if total > 2 * len(chains):
         return ['recipe_dependency_witness_budget_exceeded'] * len(chains)
 
@@ -463,8 +467,8 @@ def _recipe_witness_statuses(chains, rows):
             record, bundle = candidates[0]
             result.append(_recipe_witness_status(chain, record, bundle))
     if malformed and result:
-        # A malformed optional list cannot be associated with a declared route;
-        # it may hide a duplicate even when another record has a valid capture.
+        # A malformed optional list/member cannot be associated with a declared
+        # route; it may hide a duplicate even when another record is valid.
         result = ['recipe_dependency_witness_unqualified'
                   if status in {'recipe_dependency_witness_missing',
                                 'recipe_dependency_observed'} else status

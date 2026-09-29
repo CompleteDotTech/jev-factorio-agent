@@ -135,7 +135,8 @@ binding bundle for one such query; attach it to the matching complete gameplay
 record under `recipe_dependency_witnesses` for offline analysis. The analyzer
 replays the strict decoder and binds the request, route, actor/session identity
 and query tick to the predeclared chain and an owned observation within 120 native
-ticks. Duplicate or malformed capture lists cannot qualify a witness. When
+ticks. Duplicate captures, malformed lists, and malformed or unassociated list
+members cannot qualify a witness. When
 present, this current recipe edge is composed with the separate paid-transfer
 and fresh-stock/recipe-counter diagnostics. The combined label remains
 correlation only: it does not show that the transferred units caused the recipe
