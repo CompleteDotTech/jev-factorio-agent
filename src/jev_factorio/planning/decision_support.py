@@ -770,6 +770,87 @@ def ranking_key(row: dict) -> tuple:
             row['compiler_order'])
 
 
+def defer_gather_until_bill_craft(plans, support: dict, snapshot, memory):
+    """Defer one independent raw gather until a complete paid craft can start.
+
+    This changes only the JEV choice frontier. Native craft admission, its
+    output lock, and a fresh observation still own any later gathering.
+    """
+    if (len(plans) != 2 or memory.status != 'running'
+            or any(getattr(memory, name, None) is not None for name in (
+                'pending', 'attempt', 'active_plan', 'transfer_recovery',
+                'background_job', 'background_attempt', 'capital_investment',
+                'solid_funding', 'coal_funding'))
+            or any(getattr(memory, name, None) for name in (
+                'reservations', 'solid_commitments', 'coal_commitments',
+                'output_commitments', 'input_commitments', 'outpost_commitments',
+                'successor_projects'))):
+        return plans, None
+    connector = getattr(memory, 'connector_ownership', None)
+    if connector is not None and (not isinstance(connector, dict)
+                                  or connector.get('routes') != {}):
+        return plans, None
+    from ..craft_jobs import permits_locked_outputs
+
+    rows = support.get('candidate_evidence', {})
+    crafts = [p for p in plans if len(p.steps) == 1
+              and p.steps[0].action == 'factory_craft_job']
+    gathers = [p for p in plans if len(p.steps) == 1
+               and p.steps[0].action == 'factory_gather']
+    if len(crafts) != 1 or len(gathers) != 1:
+        return plans, None
+    craft, gather = crafts[0], gathers[0]
+    craft_row, gather_row = rows.get(craft.id), rows.get(gather.id)
+    if not isinstance(craft_row, dict) or not isinstance(gather_row, dict):
+        return plans, None
+    bill, start = craft_row.get('shared_bill_craft'), craft_row.get('craft_start_evidence')
+    raw, gather_start = gather_row.get('raw_prerequisite'), gather_row.get('gather_start_evidence')
+    if not all(isinstance(value, dict) for value in (bill, start, raw, gather_start)):
+        return plans, None
+    craft_step, gather_step = craft.steps[0], gather.steps[0]
+    path = raw.get('planner_item_path')
+    needed, produced = bill.get('unfilled_bill_units'), bill.get('expected_products_after_native_verification')
+    outputs = start.get('expected_products_after_native_verification')
+    if (craft_row.get('work_scope') != 'lookahead'
+            or gather_row.get('work_scope') != 'immediate'
+            or any(row.get('unknowns') != [] or type(row.get('urgency')) is not int
+                   or row['urgency'] != 0 or row.get('research_deadline_tick') is not None
+                   for row in (craft_row, gather_row))
+            or bill.get('observed_tick') != snapshot.tick
+            or bill.get('forecast_is_not_paid_stock_or_completed_output') is not True
+            or bill.get('background_overlap_requires_native_admission') is not True
+            or not isinstance(bill.get('local_target_item'), str)
+            or not bill['local_target_item']
+            or bill.get('craft_item') != craft_step.item
+            or type(needed) is not int or needed <= 0
+            or type(produced) is not int or produced < needed
+            or not isinstance(outputs, dict) or not 1 <= len(outputs) <= 32
+            or outputs.get(craft_step.item) != produced
+            or any(not isinstance(item, str) or not item or type(count) is not int
+                   or count <= 0 for item, count in outputs.items())
+            or start.get('observed_tick') != snapshot.tick
+            or start.get('native_recipe') != (craft_step.parameters or {}).get('recipe')
+            or not all(start.get(key) is True for key in (
+                'input_costs_match_native_recipe', 'inputs_in_inventory_now',
+                'recipe_unlocked_and_handcraftable', 'player_connected_and_bound',
+                'crafting_queue_empty', 'craft_job_protocol_ready',
+                'native_receipt_required_for_completion'))
+            or not isinstance((craft_step.parameters or {}).get('receipt'), str)
+            or not craft_step.parameters['receipt']
+            or raw.get('observed_tick') != snapshot.tick
+            or not isinstance(path, list) or not 2 <= len(path) <= 32
+            or path[0] != bill['local_target_item']
+            or path[-1] != (gather_step.parameters or {}).get('resource')
+            or gather_start.get('resource_in_current_observation') is not True
+            or gather_start.get('fair_target_identity_observed') is not True
+            or gather_start.get('target_inventory_after_this_step') != gather_step.threshold
+            or not craft_step.allowed(snapshot) or craft_step.satisfied(snapshot)
+            or not gather_step.allowed(snapshot) or gather_step.satisfied(snapshot)
+            or not permits_locked_outputs(gather_step, set(outputs))):
+        return plans, None
+    return [craft], 'complete_current_bill_craft_before_independent_raw_gather'
+
+
 def scheduling_context(snapshot, catalog, plans, goal: str) -> dict:
     evidence = candidate_evidence(snapshot, catalog, plans)
     primary = (plans[0].materials or {}).get('local_objective') if plans else None
