@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 from importlib.resources import files
 from pathlib import Path
 
@@ -23,6 +24,77 @@ from .native_observation_water_origin_migration import (
 )
 
 SENTINEL = 'JEV_NATIVE_MANUAL_CYCLE_MIGRATED|5'
+
+
+def _new_intent(path: Path, event: dict) -> int:
+    """Durably reserve this migration attempt before the first mutating RPC."""
+    path = Path(path)
+    parent = path.parent
+    stat = parent.stat()
+    if (parent.is_symlink() or stat.st_uid != os.geteuid()
+            or stat.st_mode & 0o077):
+        raise RuntimeError('Migration intent directory must be private and owned')
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.open(path, flags, 0o600)
+    try:
+        _append_intent(fd, event)
+        directory = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _append_intent(fd: int, event: dict) -> None:
+    payload = (json.dumps(event, sort_keys=True, separators=(',', ':')) + '\n').encode('ascii')
+    while payload:
+        written = os.write(fd, payload)
+        if written < 1:
+            raise RuntimeError('Migration intent write failed')
+        payload = payload[written:]
+    os.fsync(fd)
+
+
+def _intent_events(path: Path) -> list[dict]:
+    data = _private_bytes(Path(path))
+    if not data.endswith(b'\n') or len(data) > 32768:
+        raise RuntimeError('Migration intent requires reconciliation')
+    def unique_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('Duplicate migration intent key')
+            result[key] = value
+        return result
+    def reject_constant(_):
+        raise ValueError('Nonfinite migration intent value')
+    try:
+        rows = [json.loads(line, object_pairs_hook=unique_pairs,
+                           parse_constant=reject_constant)
+                for line in data.splitlines()]
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise RuntimeError('Migration intent requires reconciliation') from exc
+    if not rows or not all(isinstance(row, dict) for row in rows):
+        raise RuntimeError('Migration intent requires reconciliation')
+    return rows
+
+
+def _sha256_text(value) -> bool:
+    return (isinstance(value, str) and len(value) == 64
+            and all(c in '0123456789abcdef' for c in value))
+
+
+def _valid_followup(row: dict) -> bool:
+    if row.get('phase') == 'unknown':
+        return (set(row) == {'phase', 'reason'} and isinstance(row['reason'], str)
+                and 1 <= len(row['reason']) <= 128)
+    if row.get('phase') == 'qualified':
+        return set(row) == {'phase', 'readback_sha256'} and _sha256_text(row['readback_sha256'])
+    return row == {'phase': 'reconciled_v5'}
 
 
 def _no_open_investment(memory) -> None:
@@ -120,6 +192,7 @@ def _command(attachment: dict) -> str:
 
 def migrate_manual_cycle_v5(
     client, *, checkpoint_path: Path, receipt_path: Path, lock_path: Path,
+    intent_path: Path,
     expected_session_id: str, expected_actor_unit: int, expected_target: str,
     expected_checkpoint_sha256: str, expected_receipt_sha256: str,
 ) -> dict:
@@ -128,6 +201,12 @@ def migrate_manual_cycle_v5(
         raise RuntimeError('Native migration requires the POSIX owner-lock host')
     import fcntl
 
+    intent_path = Path(intent_path)
+    checkpoint_path = Path(checkpoint_path)
+    if intent_path != checkpoint_path.with_name('native-manual-cycle-v5.intent.jsonl'):
+        raise RuntimeError('Migration intent must use the checkpoint-bound fixed path')
+    if intent_path.exists() or intent_path.is_symlink():
+        raise RuntimeError('Migration intent already exists; reconcile read-only, never retry')
     lock_path = Path(lock_path)
     if lock_path.is_symlink() or not lock_path.is_file():
         raise RuntimeError('Existing single-writer lock is required')
@@ -155,25 +234,139 @@ def migrate_manual_cycle_v5(
                 or attachment['actor_unit'] != expected_actor_unit):
             raise RuntimeError('Native session or actor changed')
         proposed = _manifest(attachment)
+        command = _command(attachment)
         if (_digest(_private_bytes(checkpoint_path)) != expected_checkpoint_sha256
                 or _digest(_private_bytes(receipt_path)) != expected_receipt_sha256):
             raise RuntimeError('Migration evidence changed during preflight')
         _lock_identity(lock_path, lock)
+        intent_fd = _new_intent(intent_path, {
+            'schema': 'jev.native-manual-cycle-intent.v1',
+            'phase': 'dispatching',
+            'session_id': expected_session_id,
+            'actor_unit': expected_actor_unit,
+            'target': expected_target,
+            'checkpoint_sha256': expected_checkpoint_sha256,
+            'receipt_sha256': expected_receipt_sha256,
+            'before': attachment['native_installation'],
+            'after': proposed,
+            'before_modules': attachment['modules'],
+            'after_modules': {**attachment['modules'], 'connector_ownership': True,
+                              'coal_manual_journal_v1': True},
+            'command_sha256': hashlib.sha256(command.encode('utf-8')).hexdigest(),
+        })
         try:
-            response = client.send_command(_command(attachment))
-        except Exception as exc:
-            raise RuntimeError('Migration outcome unknown; inspect native manifest read-only, never retry') from exc
-        if not isinstance(response, str) or not response.strip().endswith(SENTINEL):
-            raise RuntimeError('Migration acknowledgement absent; inspect native manifest read-only')
-        after = readback(client)
-        expected_modules = {**attachment['modules'], 'connector_ownership': True,
-                            'coal_manual_journal_v1': True}
-        if (after['session_id'] != expected_session_id
-                or after['actor_unit'] != expected_actor_unit
-                or after['modules'] != expected_modules
-                or after['native_installation'] != proposed):
-            raise RuntimeError('Migration postcondition failed; stop dispatch')
-        if (_digest(_private_bytes(checkpoint_path)) != expected_checkpoint_sha256
-                or _digest(_private_bytes(receipt_path)) != expected_receipt_sha256):
-            raise RuntimeError('Migration evidence changed after native transaction')
-        return after
+            try:
+                response = client.send_command(command)
+                if not isinstance(response, str) or not response.strip().endswith(SENTINEL):
+                    raise RuntimeError('Migration acknowledgement absent')
+                after = readback(client)
+                expected_modules = {**attachment['modules'], 'connector_ownership': True,
+                                    'coal_manual_journal_v1': True}
+                if (after['session_id'] != expected_session_id
+                        or after['actor_unit'] != expected_actor_unit
+                        or after['modules'] != expected_modules
+                        or after['native_installation'] != proposed):
+                    raise RuntimeError('Migration postcondition failed')
+                if (_digest(_private_bytes(checkpoint_path)) != expected_checkpoint_sha256
+                        or _digest(_private_bytes(receipt_path)) != expected_receipt_sha256):
+                    raise RuntimeError('Migration evidence changed after native transaction')
+                _append_intent(intent_fd, {'phase': 'qualified',
+                    'readback_sha256': hashlib.sha256(json.dumps(
+                        after, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()})
+                return after
+            except Exception as exc:
+                _append_intent(intent_fd, {'phase': 'unknown', 'reason': type(exc).__name__})
+                raise RuntimeError('Migration outcome unknown; inspect native manifest read-only, never retry') from exc
+        finally:
+            os.close(intent_fd)
+
+
+def reconcile_manual_cycle_v5(
+    client, *, intent_path: Path, lock_path: Path,
+    checkpoint_path: Path, receipt_path: Path,
+) -> str:
+    """Classify an existing one-use attempt by readback; never redispatch it."""
+    if os.name != 'posix':
+        raise RuntimeError('Native reconciliation requires the POSIX owner-lock host')
+    import fcntl
+
+    intent_path, checkpoint_path = Path(intent_path), Path(checkpoint_path)
+    if intent_path != checkpoint_path.with_name('native-manual-cycle-v5.intent.jsonl'):
+        raise RuntimeError('Migration intent must use the checkpoint-bound fixed path')
+    lock_path = Path(lock_path)
+    if lock_path.is_symlink() or not lock_path.is_file():
+        raise RuntimeError('Existing single-writer lock is required')
+    fd = os.open(lock_path, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(fd, 'r+b') as lock:
+        _lock_identity(lock_path, lock)
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_identity(lock_path, lock)
+        rows = _intent_events(intent_path)
+        first = rows[0]
+        if (set(first) != {'schema', 'phase', 'session_id', 'actor_unit', 'target',
+                           'checkpoint_sha256', 'receipt_sha256', 'before', 'after',
+                           'before_modules', 'after_modules', 'command_sha256'}
+                or first['schema'] != 'jev.native-manual-cycle-intent.v1'
+                or first['phase'] != 'dispatching'
+                or not isinstance(first['session_id'], str) or not first['session_id']
+                or type(first['actor_unit']) is not int or first['actor_unit'] < 1
+                or not isinstance(first['target'], str) or not first['target']
+                or any(not _sha256_text(first[name])
+                       for name in ('checkpoint_sha256', 'receipt_sha256', 'command_sha256'))
+                or not isinstance(first['before'], dict)
+                or not isinstance(first['after'], dict)
+                or not isinstance(first['before_modules'], dict)
+                or not isinstance(first['after_modules'], dict)
+                or set(first['before_modules']) != set(first['after_modules'])
+                or any(type(value) is not bool for value in first['before_modules'].values())
+                or any(type(value) is not bool for value in first['after_modules'].values())
+                or first['after_modules'] != {**first['before_modules'],
+                    'connector_ownership': True, 'coal_manual_journal_v1': True}
+                or [row.get('phase') for row in rows[1:]] not in (
+                    [], ['unknown'], ['qualified'], ['unknown', 'reconciled_v5'])
+                or any(not _valid_followup(row) for row in rows[1:])):
+            raise RuntimeError('Migration intent requires reconciliation')
+        if (first['before'].get('session_id') != first['session_id']
+                or first['before'].get('actor_unit') != first['actor_unit']
+                or first['after'].get('session_id') != first['session_id']
+                or first['after'].get('actor_unit') != first['actor_unit']):
+            raise RuntimeError('Migration intent identity requires reconciliation')
+        try:
+            expected_after = _manifest({
+                'native_installation': first['before'],
+                'modules': first['before_modules'],
+                'session_id': first['session_id'],
+                'actor_unit': first['actor_unit'],
+            })
+        except RuntimeError as exc:
+            raise RuntimeError('Migration intent profile requires reconciliation') from exc
+        if first['after'] != expected_after:
+            raise RuntimeError('Migration intent profile requires reconciliation')
+        if (_digest(_private_bytes(checkpoint_path)) != first['checkpoint_sha256']
+                or _digest(_private_bytes(Path(receipt_path))) != first['receipt_sha256']):
+            raise RuntimeError('Migration evidence changed; stop dispatch')
+        observed = readback(client)
+        if (_digest(_private_bytes(checkpoint_path)) != first['checkpoint_sha256']
+                or _digest(_private_bytes(Path(receipt_path))) != first['receipt_sha256']):
+            raise RuntimeError('Migration evidence changed during readback; stop dispatch')
+        if (observed['session_id'] != first['session_id']
+                or observed['actor_unit'] != first['actor_unit']):
+            raise RuntimeError('Migration session/actor changed; stop dispatch')
+        profile = observed['native_installation']
+        if profile == first['after']:
+            if observed['modules'] != first['after_modules']:
+                raise RuntimeError('Migration v5 modules mismatch; stop dispatch')
+            if rows[-1]['phase'] not in {'qualified', 'reconciled_v5'}:
+                append_fd = os.open(intent_path, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC)
+                try:
+                    _append_intent(append_fd, {'phase': 'reconciled_v5'})
+                finally:
+                    os.close(append_fd)
+            return 'v5_installed'
+        if profile == first['before']:
+            if rows[-1]['phase'] in {'qualified', 'reconciled_v5'}:
+                raise RuntimeError('Migration journal success contradicts v4 readback; stop dispatch')
+            if observed['modules'] != first['before_modules']:
+                raise RuntimeError('Migration v4 modules mismatch; stop dispatch')
+            return 'v4_observed_attempt_consumed'
+        raise RuntimeError('Migration profile ambiguous; stop dispatch')
