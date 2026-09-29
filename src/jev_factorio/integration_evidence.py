@@ -250,6 +250,78 @@ def _identity(row):
              'acceptance_configuration', 'campaign_treatment')}
 
 
+def _receipt_stock_consumption(chain, rows, receipts):
+    """Correlate one new paid insert with fresh stock and later recipe work.
+
+    Items are fungible, so even this strict sequence cannot certify that the
+    inserted units were the units consumed. Never promote it to acceptance.
+    """
+    item = chain['product_item']
+    role, unit = chain['consumer_role'], chain['consumer_unit']
+    producer_role = chain['producer_role']
+    observations = []
+    for row in rows:
+        for label in ('state', 'after_state'):
+            state = row.get(label)
+            factory = state.get('factory') if isinstance(state, dict) else None
+            entities = factory.get('entities') if isinstance(factory, dict) else None
+            entity = entities.get(role) if isinstance(entities, dict) else None
+            all_receipts = factory.get('receipts') if isinstance(factory, dict) else None
+            stock = entity.get('input') if isinstance(entity, dict) else None
+            if (not isinstance(state, dict) or not _integer(state.get('tick'))
+                    or not isinstance(entity, dict) or entity.get('unit_number') != unit
+                    or entity.get('recipe') != chain['science_pack']
+                    or not isinstance(stock, dict) or len(stock) > 128
+                    or any(not _chain_text(name) or not _integer(amount, 1, 1000000)
+                           for name, amount in stock.items())
+                    or not _integer(entity.get('products_finished'))
+                    or not isinstance(all_receipts, dict)):
+                return 'stock_observation_unqualified'
+            observations.append((state['tick'], stock.get(item, 0),
+                                 entity['products_finished'], all_receipts))
+    inserts = [(key, value) for key, value in receipts.items()
+               if isinstance(value, dict) and value.get('role') == role
+               and value.get('unit_number') == unit and value.get('item') == item
+               and value.get('extracting') is False]
+    extracts = [(key, value) for key, value in receipts.items()
+                if isinstance(value, dict) and value.get('role') == producer_role
+                and value.get('item') == item and value.get('extracting') is True]
+    if len(inserts) != 1 or len(extracts) != 1:
+        return 'unique_paid_transfer_missing'
+    insert_id, insert = inserts[0]
+    _, extract = extracts[0]
+    quantity = insert.get('quantity')
+    if (not _integer(quantity, 1, 200) or extract.get('quantity') != quantity
+            or not _integer(insert.get('tick')) or not _integer(extract.get('tick'))
+            or extract['tick'] >= insert['tick']):
+        return 'paid_transfer_mismatch'
+    first = next((index for index, (_, _, _, seen) in enumerate(observations)
+                  if insert_id in seen), None)
+    if first is None or first == 0:
+        return 'fresh_receipt_boundary_missing'
+    before = observations[first - 1]
+    after = observations[first]
+    if (any(insert_id in seen for _, _, _, seen in observations[:first])
+            or after[3].get(insert_id) != insert
+            or before[0] > insert['tick'] or after[0] < insert['tick']
+            or before[1] != 0 or after[1] != quantity
+            or after[2] != before[2]):
+        return 'receipt_stock_boundary_mismatch'
+    for tick, stock, completed, seen in observations[first + 1:]:
+        if (completed < after[2] or stock > quantity
+                or seen.get(insert_id) != insert):
+            return 'later_stock_or_receipt_ambiguous'
+        if tick <= after[0]:
+            continue
+        if stock < quantity and completed == after[2]:
+            return 'stock_drawdown_without_recipe_work'
+        if completed > after[2] and stock == quantity:
+            return 'recipe_work_without_stock_drawdown'
+        if completed > after[2] and stock < quantity:
+            return 'paid_insert_stock_and_recipe_work_correlated'
+    return 'later_recipe_consumption_not_observed'
+
+
 def _downstream_chain_diagnostic(chains, rows, routes, receipts, lab_unit, integrity_valid=True):
     """Report bounded paid-transfer correlation, never provenance or acceptance.
 
@@ -265,6 +337,9 @@ def _downstream_chain_diagnostic(chains, rows, routes, receipts, lab_unit, integ
                 'predeclared_chains': len(chains),
                 'status_by_declared_order': ['input_integrity_failed'] * len(chains),
                 'correlated_sequences': 0, 'intermediate_provenance_qualified': False,
+                'receipt_stock_recipe_status_by_declared_order': [
+                    'input_integrity_failed'] * len(chains),
+                'receipt_stock_recipe_correlations': 0,
                 'scope': 'Analyzer integrity checks failed; no chain diagnostic qualified.'}
     observed = []
     def after_factory(row):
@@ -339,11 +414,19 @@ def _downstream_chain_diagnostic(chains, rows, routes, receipts, lab_unit, integ
                 complete = True
                 break
         observed.append('correlated_paid_transfer_sequence' if complete else 'paid_transfer_sequence_missing')
+    stock_sequences = [
+        _receipt_stock_consumption(chain, rows, receipts)
+        if status == 'correlated_paid_transfer_sequence' else 'chain_not_qualified'
+        for chain, status in zip(chains, observed)
+    ]
     return {'schema': 'jev-factorio.downstream-chain-diagnostic.v1',
             'predeclared_chains': len(chains), 'status_by_declared_order': observed,
             'correlated_sequences': observed.count('correlated_paid_transfer_sequence'),
+            'receipt_stock_recipe_status_by_declared_order': stock_sequences,
+            'receipt_stock_recipe_correlations': stock_sequences.count(
+                'paid_insert_stock_and_recipe_work_correlated'),
             'intermediate_provenance_qualified': False,
-            'scope': 'Observed paid transfers and production counters; stock provenance and recipe graph are unproven.'}
+            'scope': 'Paid receipt, fresh stock, and later recipe work may correlate; fungible stock provenance and native recipe graph remain unproven.'}
 
 
 def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> dict:
