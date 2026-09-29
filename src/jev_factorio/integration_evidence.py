@@ -18,7 +18,8 @@ import re
 import tempfile
 from types import SimpleNamespace
 
-from . import input_routes, mining_outposts, solid_routes, coal_supply, treatment
+from . import (input_routes, mining_outposts, solid_routes, coal_supply, treatment,
+               downstream_recipe_witness)
 from .acceptance_io import MAX_JSON, MAX_LOG, canonical, load_json, records, sha256, stable_read, write_new
 from .acceptance_boundaries import (final_successor_issues, project_history_issues,
                                     successor_history_issues)
@@ -322,6 +323,155 @@ def _receipt_stock_consumption(chain, rows, receipts):
     return 'later_recipe_consumption_not_observed'
 
 
+def _recipe_witness_route(route):
+    """Project a captured owned route into the strict witness route contract."""
+    if not isinstance(route, dict):
+        return None
+    source, target, steps = route.get('source'), route.get('target'), route.get('steps')
+    if (not isinstance(source, dict) or not isinstance(target, dict)
+            or not isinstance(steps, list) or not 1 <= len(steps) <= 128
+            or not _chain_text(route.get('route'), 256) or not _chain_text(route.get('item'))
+            or not _chain_text(source.get('role')) or not _integer(source.get('unit_number'), 1)
+            or not _chain_text(target.get('role')) or not _integer(target.get('unit_number'), 1)):
+        return None
+    return {'id': route['route'], 'item': route['item'],
+            'source_role': source['role'], 'source_unit': source['unit_number'],
+            'target_role': target['role'], 'target_unit': target['unit_number'],
+            'paid_parts': len(steps)}
+
+
+def _recipe_witness_status(chain, record, bundle):
+    """Bind one read-only recipe witness to the declared chain and captured state."""
+    if not isinstance(bundle, dict):
+        return 'recipe_dependency_witness_unqualified'
+    result = bundle.get('result')
+    epoch = result.get('epoch') if isinstance(result, dict) else None
+    if (not isinstance(epoch, dict) or not _integer(epoch.get('tick'), 0)
+            or result.get('status') != 'observed'
+            or result.get('recipe_dependency_verified') is not True):
+        return 'recipe_dependency_query_unqualified'
+
+    candidates = []
+    for label in ('state', 'after_state'):
+        state = record.get(label) if isinstance(record, dict) else None
+        if not isinstance(state, dict) or not _integer(state.get('tick')):
+            continue
+        if abs(state['tick'] - epoch['tick']) > 120:
+            continue
+        factory = state.get('factory')
+        if not isinstance(factory, dict):
+            continue
+        runtime = factory.get('acceptance_runtime')
+        routes = factory.get('solid_routes', {}).get('routes') if isinstance(
+            factory.get('solid_routes'), dict) else None
+        route = routes.get(chain['route']) if isinstance(routes, dict) else None
+        route_binding = _recipe_witness_route(route)
+        entities = factory.get('entities')
+        producer = entities.get(chain['producer_role']) if isinstance(entities, dict) else None
+        consumer = entities.get(chain['consumer_role']) if isinstance(entities, dict) else None
+        if (not isinstance(runtime, dict) or not isinstance(consumer, dict)
+                or not _integer(runtime.get('schema'), 1, 1)
+                or runtime.get('session_id') != state['session_id']
+                or route_binding is None
+                or not isinstance(producer, dict)
+                or producer.get('unit_number') != route_binding['target_unit']
+                or producer.get('recipe') != chain['producer_recipe']
+                or not isinstance(state.get('session_id'), str)
+                or consumer.get('unit_number') != chain['consumer_unit']
+                or consumer.get('recipe') != chain['science_pack']
+                or route_binding['id'] != chain['route']
+                or route_binding['target_role'] != chain['producer_role']
+                or route is None or route.get('target', {}).get('recipe') != chain['producer_recipe']
+                or route.get('target', {}).get('inventory') != 'input'):
+            continue
+        identity = {'session_id': state['session_id'],
+                    'actor_index': runtime.get('player_index'),
+                    'actor_unit': runtime.get('actor_unit'),
+                    'surface_index': runtime.get('surface_index'),
+                    'force_index': runtime.get('force_index')}
+        if any(not _integer(identity[key], 1) for key in
+               ('actor_index', 'actor_unit', 'surface_index', 'force_index')):
+            continue
+        candidates.append((state['tick'], identity, route_binding))
+    if not candidates:
+        return 'recipe_dependency_observation_not_bound'
+    # Both sides of one gameplay record may have the same tick. Distinct route
+    # or actor bindings at that tick are ambiguous and must not be combined.
+    if len({(tuple(sorted(identity.items())), tuple(sorted(route.items())))
+            for _, identity, route in candidates}) != 1:
+        return 'recipe_dependency_observation_ambiguous'
+    observation_tick, identity, expected_route = min(
+        candidates, key=lambda value: abs(value[0] - epoch['tick']))
+    request = {'route': chain['route'], 'producer_role': chain['producer_role'],
+               'producer_unit': expected_route['target_unit'],
+               'product_item': chain['product_item'],
+               'consumer_role': chain['consumer_role'],
+               'consumer_unit': chain['consumer_unit'],
+               'science_pack': chain['science_pack']}
+    expected_epoch = bundle.get('expected_epoch')
+    if (not isinstance(expected_epoch, dict)
+            or any(expected_epoch.get(key) != value for key, value in identity.items())
+            or not _integer(expected_epoch.get('min_tick'), 0)
+            or not _integer(expected_epoch.get('max_tick'), 0)
+            or expected_epoch['min_tick'] > epoch['tick']
+            or expected_epoch['max_tick'] < epoch['tick']
+            or expected_epoch['max_tick'] - expected_epoch['min_tick'] > 120
+            or expected_epoch['min_tick'] < observation_tick - 120
+            or expected_epoch['max_tick'] > observation_tick + 120):
+        return 'recipe_dependency_capture_binding_mismatch'
+    try:
+        decoded = downstream_recipe_witness.decode_capture_bundle(
+            bundle, request=request, expected_epoch=expected_epoch,
+            expected_route=expected_route)
+    except (ValueError, RuntimeError, KeyError, TypeError, AttributeError):
+        return 'recipe_dependency_capture_binding_mismatch'
+    if (decoded.get('status') != 'observed'
+            or decoded.get('recipe_dependency_verified') is not True):
+        return 'recipe_dependency_query_unqualified'
+    return 'recipe_dependency_observed'
+
+
+def _recipe_witness_statuses(chains, rows):
+    """Consume at most one private witness bundle per predeclared route."""
+    by_route = {chain['route']: [] for chain in chains}
+    malformed = set()
+    total = 0
+    for row_index, record in enumerate(rows):
+        captures = record.get('recipe_dependency_witnesses') if isinstance(record, dict) else None
+        if captures is None:
+            continue
+        if not isinstance(captures, list) or len(captures) > 16:
+            malformed.add(row_index)
+            continue
+        total += len(captures)
+        for bundle in captures:
+            request = bundle.get('request') if isinstance(bundle, dict) else None
+            route = request.get('route') if isinstance(request, dict) else None
+            if isinstance(route, str) and route in by_route:
+                by_route[route].append((record, bundle))
+    if total > 2 * len(chains):
+        return ['recipe_dependency_witness_budget_exceeded'] * len(chains)
+
+    result = []
+    for chain in chains:
+        candidates = by_route[chain['route']]
+        if len(candidates) > 1:
+            result.append('recipe_dependency_witness_ambiguous')
+        elif not candidates:
+            result.append('recipe_dependency_witness_missing')
+        else:
+            record, bundle = candidates[0]
+            result.append(_recipe_witness_status(chain, record, bundle))
+    if malformed and result:
+        # A malformed optional list cannot be associated with a declared route;
+        # it may hide a duplicate even when another record has a valid capture.
+        result = ['recipe_dependency_witness_unqualified'
+                  if status in {'recipe_dependency_witness_missing',
+                                'recipe_dependency_observed'} else status
+                  for status in result]
+    return result
+
+
 def _downstream_chain_diagnostic(chains, rows, routes, receipts, lab_unit, integrity_valid=True):
     """Report bounded paid-transfer correlation, never provenance or acceptance.
 
@@ -340,6 +490,11 @@ def _downstream_chain_diagnostic(chains, rows, routes, receipts, lab_unit, integ
                 'receipt_stock_recipe_status_by_declared_order': [
                     'input_integrity_failed'] * len(chains),
                 'receipt_stock_recipe_correlations': 0,
+                'recipe_dependency_status_by_declared_order': [
+                    'input_integrity_failed'] * len(chains),
+                'current_recipe_dependency_matches': 0,
+                'receipt_stock_recipe_dependency_correlations': 0,
+                'composed_status_by_declared_order': ['input_integrity_failed'] * len(chains),
                 'scope': 'Analyzer integrity checks failed; no chain diagnostic qualified.'}
     observed = []
     def after_factory(row):
@@ -419,14 +574,35 @@ def _downstream_chain_diagnostic(chains, rows, routes, receipts, lab_unit, integ
         if status == 'correlated_paid_transfer_sequence' else 'chain_not_qualified'
         for chain, status in zip(chains, observed)
     ]
+    recipe_statuses = _recipe_witness_statuses(chains, rows)
+    composed = []
+    for sequence, stock, recipe in zip(observed, stock_sequences, recipe_statuses):
+        if (sequence == 'correlated_paid_transfer_sequence'
+                and stock == 'paid_insert_stock_and_recipe_work_correlated'
+                and recipe == 'recipe_dependency_observed'):
+            composed.append('paid_stock_recipe_dependency_correlated')
+        elif recipe == 'recipe_dependency_observed':
+            composed.append('recipe_dependency_only')
+        elif stock == 'paid_insert_stock_and_recipe_work_correlated':
+            composed.append('receipt_stock_recipe_only')
+        else:
+            composed.append('not_composed')
     return {'schema': 'jev-factorio.downstream-chain-diagnostic.v1',
             'predeclared_chains': len(chains), 'status_by_declared_order': observed,
             'correlated_sequences': observed.count('correlated_paid_transfer_sequence'),
             'receipt_stock_recipe_status_by_declared_order': stock_sequences,
             'receipt_stock_recipe_correlations': stock_sequences.count(
                 'paid_insert_stock_and_recipe_work_correlated'),
+            'recipe_dependency_status_by_declared_order': recipe_statuses,
+            'current_recipe_dependency_matches': recipe_statuses.count(
+                'recipe_dependency_observed'),
+            'receipt_stock_recipe_dependency_correlations': composed.count(
+                'paid_stock_recipe_dependency_correlated'),
+            'composed_status_by_declared_order': composed,
             'intermediate_provenance_qualified': False,
-            'scope': 'Paid receipt, fresh stock, and later recipe work may correlate; fungible stock provenance and native recipe graph remain unproven.'}
+            'scope': ('A bound current recipe edge may align with separate paid-transfer, stock, and recipe-counter '
+                      'observations. This remains correlation only: exact-unit provenance, causal science use, '
+                      'evidence authenticity, and native acceptance are not proven.')}
 
 
 def analyze_rows(rows: list[dict], trial: dict, initial: dict, final: dict) -> dict:

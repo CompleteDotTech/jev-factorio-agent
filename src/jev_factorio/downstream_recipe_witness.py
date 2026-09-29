@@ -15,6 +15,7 @@ from .backends.native_attachment import (
 from .iteration_timing import decode_native
 
 SCHEMA = 'jev.downstream-recipe-witness.v1'
+CAPTURE_SCHEMA = 'jev.downstream-recipe-witness-capture.v1'
 SOURCE = 'lua/downstream_recipe_witness.lua'
 REQUEST_KEYS = frozenset({'route', 'producer_role', 'producer_unit', 'product_item',
                           'consumer_role', 'consumer_unit', 'science_pack'})
@@ -33,6 +34,8 @@ PACKS = frozenset({'automation-science-pack', 'logistic-science-pack',
 REASONS = frozenset({'unsupported', 'malformed', 'bound', 'request', 'native_version',
                      'installed_source', 'actor', 'epoch', 'route', 'identity',
                      'producer', 'recipe', 'dependency'})
+CAPTURE_KEYS = frozenset({'schema', 'request', 'expected_epoch', 'expected_route',
+                          'attachment', 'result'})
 _NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9:_.-]*\Z')
 
 
@@ -148,6 +151,67 @@ def decode_response(response: str, **kwargs) -> dict:
     return decode(decode_native(response), **kwargs)
 
 
+def _capture_attachment(attachment: dict) -> dict:
+    """Keep only the private fields needed to revalidate a captured witness."""
+    _attachment(attachment)
+    manifest = attachment['native_installation']
+    assets = manifest.get('assets')
+    _need(isinstance(assets, dict) and 'solid_routes' in assets, 'invalid_attachment')
+    return {
+        'session_id': attachment['session_id'],
+        'actor_unit': attachment['actor_unit'],
+        'modules': {'solid_routes': True},
+        'native_installation': {
+            'profile': manifest['profile'],
+            'assets': {'solid_routes': assets['solid_routes']},
+        },
+    }
+
+
+def capture_bundle(raw: dict, *, request: dict, expected_epoch: dict,
+                   expected_route: dict, attachment: dict) -> dict:
+    """Return a private, replayable binding for one already-read-only witness.
+
+    Callers may append this object to the matching gameplay JSONL record under
+    ``recipe_dependency_witnesses``. It carries no action authority.
+    """
+    request = validate_request(request)
+    result = decode(raw, request=request, expected_epoch=expected_epoch,
+                    expected_route=expected_route, attachment=attachment)
+    return {
+        'schema': CAPTURE_SCHEMA,
+        'request': request,
+        'expected_epoch': dict(expected_epoch),
+        'expected_route': dict(expected_route),
+        'attachment': _capture_attachment(attachment),
+        'result': result,
+    }
+
+
+def decode_capture_bundle(value: dict, *, request: dict,
+                          expected_epoch: dict, expected_route: dict) -> dict:
+    """Revalidate a private capture bundle against independently derived bounds."""
+    request = validate_request(request)
+    _need(isinstance(value, dict) and set(value) == CAPTURE_KEYS
+          and value['schema'] == CAPTURE_SCHEMA
+          and value['request'] == request
+          and value['expected_epoch'] == expected_epoch
+          and value['expected_route'] == expected_route,
+          'invalid_capture_binding')
+    attachment = value['attachment']
+    _need(isinstance(attachment, dict)
+          and set(attachment) == {'session_id', 'actor_unit', 'modules', 'native_installation'}
+          and isinstance(attachment.get('modules'), dict)
+          and set(attachment['modules']) == {'solid_routes'}
+          and isinstance(attachment.get('native_installation'), dict)
+          and set(attachment['native_installation']) == {'profile', 'assets'}
+          and isinstance(attachment['native_installation'].get('assets'), dict)
+          and set(attachment['native_installation']['assets']) == {'solid_routes'},
+          'invalid_capture_attachment')
+    return decode(value['result'], request=request, expected_epoch=expected_epoch,
+                  expected_route=expected_route, attachment=attachment)
+
+
 def observe(client, *, request: dict, expected_epoch: dict,
             expected_route: dict, receipt_path=None) -> dict:
     """Perform ordered qualified readback and one read-only native query.
@@ -159,3 +223,13 @@ def observe(client, *, request: dict, expected_epoch: dict,
     response = client.send_command(command(request, attachment))
     return decode_response(response, request=request, expected_epoch=expected_epoch,
                            expected_route=expected_route, attachment=attachment)
+
+
+def observe_capture(client, *, request: dict, expected_epoch: dict,
+                    expected_route: dict, receipt_path=None) -> dict:
+    """Capture one private binding bundle after qualified readback and one query."""
+    attachment = readback(client, receipt_path=receipt_path)
+    response = client.send_command(command(request, attachment))
+    return capture_bundle(decode_native(response), request=request,
+                          expected_epoch=expected_epoch, expected_route=expected_route,
+                          attachment=attachment)

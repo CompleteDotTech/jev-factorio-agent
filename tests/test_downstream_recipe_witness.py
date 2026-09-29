@@ -10,7 +10,8 @@ from jev_factorio.backends.native_attachment import (
     PINNED_ASSETS, WATER_ORIGIN_OBSERVATION_PROFILE,
 )
 from jev_factorio.downstream_recipe_witness import (
-    command, decode, validate_request,
+    CAPTURE_SCHEMA, capture_bundle, command, decode, decode_capture_bundle,
+    observe_capture, validate_request,
 )
 
 
@@ -64,6 +65,31 @@ def test_native_shaped_recipe_edge_is_dependency_only():
     source = command(REQUEST, ATTACHMENT)
     assert source.startswith('/sc local request=helpers.json_to_table(')
     assert '-- Fixed read-only recipe dependency witness.' in source
+
+
+def test_capture_bundle_is_replayable_and_strips_unneeded_attachment_fields():
+    attachment = deepcopy(ATTACHMENT)
+    attachment.update(qualified=True, coal_targets=[{'private': 'do not retain'}],
+                      connector_snapshot_ownership={'private': 'do not retain'})
+    bundle = capture_bundle(result(), request=REQUEST, expected_epoch=EPOCH,
+                            expected_route=ROUTE, attachment=attachment)
+    assert bundle['schema'] == CAPTURE_SCHEMA
+    assert set(bundle) == {'schema', 'request', 'expected_epoch', 'expected_route',
+                           'attachment', 'result'}
+    assert bundle['attachment'] == ATTACHMENT
+    assert 'coal_targets' not in bundle['attachment']
+    assert decode_capture_bundle(bundle, request=REQUEST, expected_epoch=EPOCH,
+                                 expected_route=ROUTE)['recipe_dependency_verified'] is True
+
+    changed = deepcopy(bundle)
+    changed['result']['consumer']['recipe']['ingredients'].pop('iron-gear-wheel')
+    with pytest.raises(ValueError):
+        decode_capture_bundle(changed, request=REQUEST, expected_epoch=EPOCH,
+                              expected_route=ROUTE)
+
+    with pytest.raises(ValueError, match='invalid_capture_binding'):
+        decode_capture_bundle(bundle, request={**REQUEST, 'consumer_unit': 99},
+                              expected_epoch=EPOCH, expected_route=ROUTE)
 
 
 @pytest.mark.parametrize('change', [
@@ -134,6 +160,30 @@ def test_observer_qualifies_attachment_before_one_ordered_read_only_query(monkey
     row = witness.observe(Client(), request=REQUEST, expected_epoch=EPOCH,
                           expected_route=ROUTE)
     assert row['recipe_dependency_verified'] is True
+    assert calls == ['readback', 'query']
+
+
+def test_observer_capture_keeps_the_same_ordered_readback_and_query(monkeypatch):
+    calls = []
+    attachment = deepcopy(ATTACHMENT)
+    attachment.update(qualified=True, solid_intents=[{'private': 'do not retain'}])
+
+    def qualified(client, *, receipt_path=None):
+        calls.append('readback')
+        return deepcopy(attachment)
+
+    class Client:
+        def send_command(self, source):
+            calls.append('query')
+            assert source == command(REQUEST, attachment)
+            return json.dumps(result())
+
+    monkeypatch.setattr(witness, 'readback', qualified)
+    bundle = observe_capture(Client(), request=REQUEST, expected_epoch=EPOCH,
+                             expected_route=ROUTE)
+    assert decode_capture_bundle(bundle, request=REQUEST, expected_epoch=EPOCH,
+                                 expected_route=ROUTE)['recipe_dependency_verified'] is True
+    assert 'solid_intents' not in bundle['attachment']
     assert calls == ['readback', 'query']
 
 

@@ -8,6 +8,10 @@ from jev_factorio import integration_evidence as evidence
 from jev_factorio.coal_supply import intents
 from jev_factorio.solid_routes import commitment, current
 from jev_factorio.treatment import SCHEMA, digest
+from jev_factorio.backends.native_attachment import (
+    PINNED_ASSETS, WATER_ORIGIN_OBSERVATION_PROFILE,
+)
+from jev_factorio.downstream_recipe_witness import capture_bundle
 from integration_evidence_fixtures import evidence as fixture
 
 
@@ -92,13 +96,25 @@ def stock_chain_inputs():
     receipts['extract-pack']['tick'] = 15
     receipts['insert-lab']['tick'] = 16
     item, role = CHAIN['product_item'], CHAIN['consumer_role']
-    route = {'target': {'role': CHAIN['producer_role'], 'unit_number': 11}}
+    route = {'route': CHAIN['route'], 'item': 'iron-ore',
+             'source': {'role': 'buffer:iron-ore', 'unit_number': 10},
+             'target': {'role': CHAIN['producer_role'], 'unit_number': 11,
+                        'inventory': 'input', 'recipe': CHAIN['producer_recipe']},
+             'steps': [{'part': 'receive'}, {'part': 'send'}]}
     def state(tick, stock, products, seen):
-        return {'tick': tick, 'factory': {
+        return {'tick': tick, 'session_id': 'witness-session', 'factory': {
+            'tick': tick,
+            'acceptance_runtime': {'schema': 1, 'session_id': 'witness-session',
+                'actor_unit': 9, 'player_index': 1, 'surface_index': 1,
+                'force_index': 1, 'mods': {'base': '2.0.77'}},
             'solid_routes': {'routes': {CHAIN['route']: deepcopy(route)}},
-            'entities': {role: {'unit_number': 22, 'recipe': CHAIN['science_pack'],
-                                'products_finished': products,
-                                'input': {item: stock} if stock else {}}},
+            'entities': {
+                CHAIN['producer_role']: {'unit_number': 11,
+                    'recipe': CHAIN['producer_recipe'], 'products_finished': products},
+                role: {'unit_number': 22, 'recipe': CHAIN['science_pack'],
+                       'products_finished': products,
+                       'input': {item: stock} if stock else {}},
+            },
             'receipts': {key: deepcopy(receipts[key]) for key in seen}}}
     rows = [
         {'state': state(10, 0, 0, ()), 'after_state': state(10, 0, 0, ())},
@@ -112,11 +128,126 @@ def stock_chain_inputs():
     return rows, routes, receipts
 
 
+def recipe_witness_capture(chain, record, tick):
+    state = record['after_state']
+    factory = state['factory']
+    route = factory['solid_routes']['routes'][chain['route']]
+    runtime = factory['acceptance_runtime']
+    route_binding = evidence._recipe_witness_route(route)
+    request = {'route': chain['route'], 'producer_role': chain['producer_role'],
+        'producer_unit': route['target']['unit_number'], 'product_item': chain['product_item'],
+        'consumer_role': chain['consumer_role'], 'consumer_unit': chain['consumer_unit'],
+        'science_pack': chain['science_pack']}
+    epoch = {'session_id': state['session_id'], 'tick': tick,
+        'actor_index': runtime['player_index'], 'actor_unit': runtime['actor_unit'],
+        'surface_index': runtime['surface_index'], 'force_index': runtime['force_index']}
+    expected_epoch = {key: value for key, value in epoch.items() if key != 'tick'}
+    expected_epoch.update(min_tick=tick, max_tick=tick)
+    result = {'schema': 'jev.downstream-recipe-witness.v1', 'status': 'observed',
+        'reason': 'none', 'base_version': '2.0.77', 'epoch': epoch, 'request': request,
+        'route': route_binding,
+        'producer': {'role': chain['producer_role'], 'unit': request['producer_unit'],
+            'recipe': {'name': chain['producer_recipe'], 'product': chain['product_item'],
+                'product_amount': 1, 'ingredients': {route['item']: 1}}},
+        'consumer': {'role': chain['consumer_role'], 'unit': chain['consumer_unit'],
+            'recipe': {'name': chain['science_pack'], 'product': chain['science_pack'],
+                'product_amount': 1, 'ingredients': {chain['product_item']: 1}}},
+        'recipe_dependency_verified': True,
+        'stock_provenance_qualified': False, 'mutation_authorized': False}
+    attachment = {'session_id': state['session_id'], 'actor_unit': runtime['actor_unit'],
+        'modules': {'solid_routes': True},
+        'native_installation': {'profile': WATER_ORIGIN_OBSERVATION_PROFILE,
+            'assets': {'solid_routes': PINNED_ASSETS['solid_routes']}}}
+    return capture_bundle(result, request=request, expected_epoch=expected_epoch,
+        expected_route=route_binding, attachment=attachment)
+
+
 def test_paid_receipt_fresh_stock_and_later_recipe_work_are_correlated_only():
     value = diagnose(*stock_chain_inputs())
     assert value['receipt_stock_recipe_status_by_declared_order'] == [
         'paid_insert_stock_and_recipe_work_correlated']
     assert value['receipt_stock_recipe_correlations'] == 1
+    assert value['intermediate_provenance_qualified'] is False
+
+
+def test_recipe_witness_composes_with_receipt_stock_correlation_without_qualifying_provenance():
+    rows, routes, receipts = stock_chain_inputs()
+    rows[1]['recipe_dependency_witnesses'] = [recipe_witness_capture(CHAIN, rows[1], 12)]
+    value = diagnose(rows, routes, receipts)
+    assert value['status_by_declared_order'] == ['correlated_paid_transfer_sequence']
+    assert value['receipt_stock_recipe_status_by_declared_order'] == [
+        'paid_insert_stock_and_recipe_work_correlated']
+    assert value['recipe_dependency_status_by_declared_order'] == [
+        'recipe_dependency_observed']
+    assert value['current_recipe_dependency_matches'] == 1
+    assert value['composed_status_by_declared_order'] == [
+        'paid_stock_recipe_dependency_correlated']
+    assert value['receipt_stock_recipe_dependency_correlations'] == 1
+    assert value['intermediate_provenance_qualified'] is False
+    assert 'exact-unit provenance' in value['scope']
+
+
+@pytest.mark.parametrize('damage', [
+    lambda bundle: bundle['expected_route'].update(target_unit=99),
+    lambda bundle: bundle['attachment'].update(session_id='foreign-session'),
+    lambda bundle: bundle['expected_epoch'].update(actor_index=2),
+    lambda bundle: bundle['result']['consumer']['recipe']['ingredients'].clear(),
+    lambda bundle: bundle['result']['epoch'].update(tick=999),
+])
+def test_mismatched_recipe_witness_cannot_upgrade_receipt_stock_correlation(damage):
+    rows, routes, receipts = stock_chain_inputs()
+    bundle = recipe_witness_capture(CHAIN, rows[1], 12)
+    damage(bundle)
+    rows[1]['recipe_dependency_witnesses'] = [bundle]
+    value = diagnose(rows, routes, receipts)
+    assert value['receipt_stock_recipe_correlations'] == 1
+    assert value['current_recipe_dependency_matches'] == 0
+    assert value['receipt_stock_recipe_dependency_correlations'] == 0
+    assert value['intermediate_provenance_qualified'] is False
+
+
+@pytest.mark.parametrize('mutate_observation', [
+    lambda record: record['after_state']['factory']['acceptance_runtime'].update(
+        session_id='foreign-session'),
+    lambda record: record['after_state']['factory']['entities'][CHAIN['producer_role']].update(
+        unit_number=99),
+    lambda record: record['after_state']['factory']['entities'][CHAIN['producer_role']].update(
+        recipe='steel-plate'),
+])
+def test_recipe_witness_must_match_observed_runtime_and_producer(mutate_observation):
+    rows, routes, receipts = stock_chain_inputs()
+    rows[1]['recipe_dependency_witnesses'] = [recipe_witness_capture(CHAIN, rows[1], 12)]
+    for label in ('state', 'after_state'):
+        mutate_observation({'after_state': rows[1][label]})
+    value = diagnose(rows, routes, receipts)
+    assert value['recipe_dependency_status_by_declared_order'] == [
+        'recipe_dependency_observation_not_bound']
+    assert value['current_recipe_dependency_matches'] == 0
+    assert value['receipt_stock_recipe_dependency_correlations'] == 0
+    assert value['intermediate_provenance_qualified'] is False
+
+
+def test_duplicate_recipe_witnesses_are_ambiguous_not_additional_support():
+    rows, routes, receipts = stock_chain_inputs()
+    bundle = recipe_witness_capture(CHAIN, rows[1], 12)
+    rows[1]['recipe_dependency_witnesses'] = [bundle, deepcopy(bundle)]
+    value = diagnose(rows, routes, receipts)
+    assert value['recipe_dependency_status_by_declared_order'] == [
+        'recipe_dependency_witness_ambiguous']
+    assert value['current_recipe_dependency_matches'] == 0
+    assert value['receipt_stock_recipe_dependency_correlations'] == 0
+    assert value['intermediate_provenance_qualified'] is False
+
+
+def test_malformed_capture_list_cannot_be_hidden_by_a_separate_valid_witness():
+    rows, routes, receipts = stock_chain_inputs()
+    rows[1]['recipe_dependency_witnesses'] = [recipe_witness_capture(CHAIN, rows[1], 12)]
+    rows[-1]['recipe_dependency_witnesses'] = {'malformed': 'capture list'}
+    value = diagnose(rows, routes, receipts)
+    assert value['recipe_dependency_status_by_declared_order'] == [
+        'recipe_dependency_witness_unqualified']
+    assert value['current_recipe_dependency_matches'] == 0
+    assert value['receipt_stock_recipe_dependency_correlations'] == 0
     assert value['intermediate_provenance_qualified'] is False
 
 
@@ -243,13 +374,20 @@ def test_analyzer_keeps_intermediate_route_unqualified_with_sequence():
             view = SimpleNamespace(factory=state['factory'])
             for key, value in state['factory']['solid_routes']['routes'].items():
                 assert current(value, view), (label, state['tick'], key)
+    rows[0]['recipe_dependency_witnesses'] = [recipe_witness_capture(
+        chain, rows[0], rows[0]['after_state']['tick'])]
     result = evidence.analyze_rows(rows, trial, initial, final)
     assert result['integrity_checks_passed'], result['issues']
     diagnostic = result['transport']['intermediate_chain_diagnostic']
     assert diagnostic['correlated_sequences'] == 1, diagnostic
+    assert diagnostic['recipe_dependency_status_by_declared_order'] == [
+        'recipe_dependency_observed']
+    assert diagnostic['composed_status_by_declared_order'] == ['recipe_dependency_only']
     assert diagnostic['intermediate_provenance_qualified'] is False
     assert result['transport']['downstream_routes_with_flow_and_production'] == 0
     assert 'downstream_flow_and_production_not_measured' in result['outcome_gaps']
+    assert result['native_acceptance'] == 'not_accepted'
+    assert result['deployment_authorized'] is False
 
 
 @pytest.mark.parametrize('break_witness', [
