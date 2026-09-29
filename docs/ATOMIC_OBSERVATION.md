@@ -95,7 +95,8 @@ PYTHONPATH=src python benchmarks/benchmark_atomic_observation.py --samples 100
 ```
 
 The benchmark drives the actual Python adapter paths with fixed fake transport,
-checks equal game facts (excluding new protocol/bounds diagnostics), and records
+checks equal game facts (excluding versioned protocol/bounds/anchor diagnostics),
+reports the anchor diagnostics separately, and records
 logical RPC/helper counts, response envelope bytes, CPU/wall distributions and
 source hashes. It excludes real server work/network/FLE conversions, so its timing
 is not native latency or a speedup estimate. Native Lua fixtures separately cover
