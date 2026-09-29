@@ -50,6 +50,9 @@ def benchmark(samples: int = 100) -> dict:
             payload['targets'] = {'iron-ore':{'name':'iron-ore','position':{'x':6,'y':8},'surface_index':1}}
             payload['anchors'] = {'water':{'name':'water','position':{'x':3,'y':6},'surface_index':1},
                 'crude-oil':{'name':'crude-oil','position':{'x':5,'y':4},'surface_index':1}}
+            # The oil witness is two tiles from the actor: the first 256-tile
+            # query succeeds, so the encoded search diagnostic must say 256.
+            payload['anchor_diagnostics']['oil']['radius'] = 256
             payload['bootstrap'] = {'placed_entities':['burner-mining-drill','wooden-chest'],
                 'drill':{'name':'burner-mining-drill','unit_number':51,'position':{'x':0,'y':0},
                     'drop_position':{'x':2,'y':0},'fuel':{'coal':3},'status':'working'},
@@ -110,7 +113,7 @@ def benchmark(samples: int = 100) -> dict:
             'diagnostics_excluded_from_fact_equality':list(WIRE_ONLY_DIAGNOSTICS),
             'source_sha256':{p:hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in paths},
             'native_speedup_inferred':False,'native_game_executed':False,
-            'limitation':'Preencoded fake envelopes; no server, network, entity conversion or dynamic world workload. Native v2 adds protocol/query-bound diagnostics.'}
+            'limitation':'Preencoded fake envelopes; no server, network, entity conversion or dynamic world workload. Native v2 adds protocol/query-bound/anchor diagnostics.'}
     finally:
         if old is None: sys.modules.pop('fle.env',None)
         else: sys.modules['fle.env']=old
