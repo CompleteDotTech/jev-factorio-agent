@@ -216,6 +216,29 @@ def test_fresh_versioned_installation_uses_expanded_wire(monkeypatch):
         backend.observe()
 
 
+@pytest.mark.parametrize('profile_name', ['MANUAL_CYCLE_PROFILE', 'CLOSED_WORLD_PROFILE'])
+def test_resumed_manual_cycle_profiles_keep_expanded_atomic_bounds(monkeypatch, profile_name):
+    from jev_factorio.backends import native_attachment
+
+    backend, native, payload, calls = setup(monkeypatch)
+    backend._native_attachment = {'native_installation': {
+        'profile': getattr(native_attachment, profile_name)}}
+    assert backend.observe().tick == 10
+    assert len(calls) == 1
+    payload['bounds']['anchor_radius'] = 256
+    with pytest.raises(ValueError, match='query bounds'):
+        backend.observe()
+
+
+def test_unknown_resumed_atomic_profile_is_rejected_before_native_query(monkeypatch):
+    backend, native, payload, calls = setup(monkeypatch)
+    backend._native_attachment = {'native_installation': {
+        'profile': 'unknown-observation-profile'}}
+    with pytest.raises(ValueError, match='Unqualified atomic observer profile'):
+        backend.observe()
+    assert calls == []
+
+
 @pytest.mark.parametrize('bad', [
     {'selection': 'globally_nearest'},
     {'oil': {'radius': 2048, 'saturated': False}},
@@ -281,13 +304,15 @@ def test_native_water_anchor_names_are_explicitly_supported(monkeypatch,name):
     assert backend.observe().nearby_resources['water']==2
 
 
-def test_water_origin_profile_rejects_half_tile_without_replacing_prior_view(monkeypatch):
-    from jev_factorio.backends.native_attachment import (
-        EXPANDED_OBSERVATION_PROFILE, WATER_ORIGIN_OBSERVATION_PROFILE,
-    )
+@pytest.mark.parametrize('profile_name', [
+    'WATER_ORIGIN_OBSERVATION_PROFILE', 'MANUAL_CYCLE_PROFILE', 'CLOSED_WORLD_PROFILE',
+])
+def test_water_origin_profiles_reject_half_tile_without_replacing_prior_view(monkeypatch, profile_name):
+    from jev_factorio.backends import native_attachment
+
     backend, native, payload, _ = setup(monkeypatch)
     backend._native_attachment = {
-        'native_installation': {'profile': WATER_ORIGIN_OBSERVATION_PROFILE}}
+        'native_installation': {'profile': getattr(native_attachment, profile_name)}}
     payload['anchors'] = {'water': {'name': 'water', 'surface_index': 1,
                                     'position': {'x': 3, 'y': 6}}}
     prior = backend.observe()
@@ -295,7 +320,8 @@ def test_water_origin_profile_rejects_half_tile_without_replacing_prior_view(mon
     with pytest.raises(ValueError, match='non-tile anchor'):
         backend.observe()
     assert backend._resources['water'].x == 3
-    backend._native_attachment['native_installation']['profile'] = EXPANDED_OBSERVATION_PROFILE
+    backend._native_attachment['native_installation']['profile'] = (
+        native_attachment.EXPANDED_OBSERVATION_PROFILE)
     assert backend.observe().nearby_resources['water'] > prior.nearby_resources['water']
 
 

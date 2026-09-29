@@ -84,7 +84,8 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
     """Read and validate one v2 snapshot before exposing any of its native facts."""
     from fle.env import Position
     from .native_attachment import (
-        EXPANDED_OBSERVATION_PROFILE, LEGACY_OBSERVATION_PROFILE,
+        CLOSED_WORLD_PROFILE, EXPANDED_OBSERVATION_PROFILE,
+        LEGACY_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE,
         WATER_ORIGIN_OBSERVATION_PROFILE,
     )
 
@@ -97,7 +98,8 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
         profile = installed.get('profile') if isinstance(installed, dict) else None
         if profile == LEGACY_OBSERVATION_PROFILE:
             expected_bounds = BOUNDS
-        elif profile in {EXPANDED_OBSERVATION_PROFILE, WATER_ORIGIN_OBSERVATION_PROFILE} or (
+        elif profile in {EXPANDED_OBSERVATION_PROFILE, WATER_ORIGIN_OBSERVATION_PROFILE,
+                         MANUAL_CYCLE_PROFILE, CLOSED_WORLD_PROFILE} or (
                 profile is False and isinstance(installed, dict)):
             expected_bounds = EXPANDED_ANCHOR_BOUNDS
         else:
@@ -257,7 +259,9 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
                 raise ValueError('Invalid atomic discovery identity')
             x, y = _position(value.get('position'))
             if (group == 'anchors' and item == 'water'
-                    and (attachment is None or profile == WATER_ORIGIN_OBSERVATION_PROFILE
+                    and (attachment is None or profile in {
+                         WATER_ORIGIN_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE,
+                         CLOSED_WORLD_PROFILE}
                          or profile is False)
                     and (x != math.floor(x) or y != math.floor(y))):
                 raise ValueError('Water-origin observer returned a non-tile anchor')
