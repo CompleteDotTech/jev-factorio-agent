@@ -1,11 +1,12 @@
 -- Fixed read-only native economics projection, never admission or actuation.
 -- No runtime callbacks, storage writes, handlers, grants or connector creation.
-local out={schema="jev.coal-native-economics.v3",base_version=script.active_mods.base,
+local out={schema="jev.coal-native-economics.v4",base_version=script.active_mods.base,
     mods=script.active_mods,query_status="unsupported",reason="unqualified",
     epoch={},registry={},connector_routes={},prototypes={},buffer_witnesses={},poles={},supply_surveys={},electric_members={},
     fluid_members={},fuel_targets={},sources={},
     research_work={status="unavailable",reason="no_current_research",technology="",
-        progress=0,lab={},targets={}},
+        progress=0,unit_count=0,cost_multiplier=0,ignore_cost_multiplier=false,
+        ingredients={},lab={},targets={}},
     manual_cycle={status="unavailable",reason="journal_not_installed",
         journal_asset_sha256="",gathers={},deliveries={}}}
 local function need(ok,code) if not ok then error(code,0) end end
@@ -318,7 +319,9 @@ local ok,reason=pcall(function()
         if not lab or not lab.valid or lab.name~="lab"
             or owned[lab.unit_number]~="utility:lab" then
             out.research_work={status="unavailable",reason="research_lab_unowned",
-                technology=tech.name,progress=progress,lab={},targets={}}
+                technology=tech.name,progress=progress,unit_count=0,
+                cost_multiplier=0,ignore_cost_multiplier=false,
+                ingredients={},lab={},targets={}}
         else
         local function item_rows(inv)
             need(inv and inv.valid,"research_inventory_unavailable")
@@ -335,6 +338,36 @@ local ok,reason=pcall(function()
             return values
         end
         local targets={}
+        local function bill_rows(items,allow_untyped)
+            sequence(items,8)
+            need(#items>=1,"research_bill_empty")
+            local values={}
+            for _,item in ipairs(items) do
+                need(item.type=="item" or allow_untyped and item.type==nil,
+                    "research_bill_kind")
+                need(text(item.name) and integer(item.amount,1,1000)
+                    and (item.probability==nil or item.probability==1)
+                    and (item.independent_probability==nil
+                        or item.independent_probability==1)
+                    and item.shared_probability==nil
+                    and (item.extra_count_fraction==nil or item.extra_count_fraction==0)
+                    and item.percent_spoiled==nil and item.amount_min==nil
+                    and item.amount_max==nil and item.quality_min==nil
+                    and item.quality_max==nil and item.quality_change==nil,
+                    "research_bill_unsupported")
+                values[#values+1]={name=item.name,amount=item.amount}
+            end
+            sorted(values,"name")
+            for i=2,#values do need(values[i-1].name~=values[i].name,
+                "research_bill_alias") end
+            return values
+        end
+        need(integer(tech.research_unit_count,1,1000000),"research_unit_count")
+        local multiplier=game.difficulty_settings and game.difficulty_settings.technology_price_multiplier
+        local ignore=tech.prototype and tech.prototype.ignore_tech_cost_multiplier
+        need(finite(multiplier,.001,100000) and type(ignore)=="boolean",
+            "research_cost_setting")
+        local ingredients=bill_rows(tech.research_unit_ingredients,true)
         for target in pairs(q.rows) do
             local e=c.entities[target]
             if e and e.name=="stone-furnace" then
@@ -347,13 +380,16 @@ local ok,reason=pcall(function()
                 targets[#targets+1]={role=target,unit=e.unit_number,
                     recipe=recipe and recipe.name or "",crafting=e.is_crafting(),
                     crafting_progress=e.crafting_progress or 0,burning=burning_name,
-                    input=item_rows(e.get_inventory(defines.inventory.furnace_source))}
+                    input=item_rows(e.get_inventory(defines.inventory.furnace_source)),
+                    recipe_ingredients=recipe and bill_rows(recipe.ingredients,false) or {},
+                    recipe_products=recipe and bill_rows(recipe.products,false) or {}}
                 need(#targets<=3,"research_target_bound")
             end
         end
         sorted(targets,"role")
         out.research_work={status="observed",reason="current_research_activity",
-            technology=tech.name,progress=progress,
+            technology=tech.name,progress=progress,unit_count=tech.research_unit_count,
+            cost_multiplier=multiplier,ignore_cost_multiplier=ignore,ingredients=ingredients,
             lab={role="utility:lab",unit=lab.unit_number,
                 input=item_rows(lab.get_inventory(defines.inventory.lab_input))},targets=targets}
         end
