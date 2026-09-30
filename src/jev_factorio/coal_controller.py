@@ -20,7 +20,7 @@ from .planning.demand import SupplyLedger
 from .research_log import RunConfiguration, ResearchLogError
 from .skills import Plan
 from .solid_controller import UNBOUND_FAULT as SOLID_UNBOUND
-from .telemetry import phase
+from .telemetry import fingerprint, phase
 
 CHECKPOINT_FIELDS = {"coal_supply_schema", "coal_targets", "coal_epoch", "coal_commitments"}
 UNBOUND_FAULT = "Coal-source epoch unbound; native reconciliation required"
@@ -219,6 +219,75 @@ class CoalSupplyMixin:
         self._coal_admission_cache_key = cache_key
         return self._coal_admission_evidence.get("eligible") is True
 
+    def _coal_prepared_first_payment_retry(self, step, snapshot):
+        """Allow only the exact prepared first-payment retry to reach Lua.
+
+        A fresh read-only v7 projection intentionally describes unpaid proposals
+        and cannot authorize an already committed/prepared native transaction.
+        For that one exact write-ahead attempt, the fixed same-RPC Lua guard is
+        still the payment authority: it checks the current economics, owned
+        builder, pending source identity, and one-use admission journal before
+        performing the debit. Unknown/paid journal rows or any paid source
+        prefix are rejected there and are never replayed here.
+        """
+        if not self._coal_economic_admission or step.action != coal.COMMAND:
+            return False
+        pending = self.memory.pending
+        attempt = self.memory.attempt
+        if (not isinstance(pending, dict)
+                or pending.get("dispatch") not in {"prepared", "ambiguous"}
+                or type(pending.get("polls")) is not int or pending["polls"] != 0
+                or pending.get("action") != coal.COMMAND
+                or type(pending.get("started_tick")) is not int
+                or pending["started_tick"] > snapshot.tick
+                or self.memory.session_id != snapshot.session_id
+                or self.memory.last_tick != snapshot.tick
+                or self.memory.coal_economic_admission is not True
+                or self.memory.coal_kit_policy is not True
+                or not isinstance(attempt, dict)
+                or not isinstance(self.memory.active_plan, dict)):
+            return False
+        try:
+            plan = Plan.from_dict(self.memory.active_plan)
+            index = self.memory.step_index
+            if not 0 <= index < len(plan.steps):
+                return False
+            bound_step = plan.steps[index]
+            if bound_step != step:
+                return False
+            parameters = bound_step.parameters or {}
+            coal.validate(parameters)
+            if parameters["part"] != "chest":
+                return False
+            if (attempt.get("action") != coal.COMMAND
+                    or attempt.get("plan_id") != plan.id
+                    or attempt.get("step_index") != index
+                    or attempt.get("step_sha256") != fingerprint(
+                        self.memory.active_plan["steps"][index])
+                    or attempt.get("started_tick") != pending["started_tick"]
+                    or attempt.get("receipt") != parameters["receipt"]):
+                return False
+            rows = coal.sources(snapshot)
+            row = rows.get(parameters["target"])
+            expected = {"part": "chest", "receipt": parameters["receipt"],
+                        "phase": "prepared"}
+            if (not row or row["layout"] != parameters["layout"]
+                    or row["pending"] != expected
+                    or any(other["parts"] or other["manual_pending"]
+                           or other["state"] == "fault"
+                           or (other["pending"] and other is not row)
+                           for other in rows.values())
+                    or not snapshot.factory["coal_supply"]["committed"]):
+                return False
+            return True
+        except (ValueError, KeyError, TypeError, AttributeError, IndexError):
+            return False
+
+    def _coal_step_admitted(self, step, snapshot):
+        """Check new-start policy or the exact Lua-revalidated prepared retry."""
+        return (self._coal_prepared_first_payment_retry(step, snapshot)
+                or self._coal_admission_allows_start(snapshot))
+
     def _step_allowed(self, step, snapshot):
         if (self._execution_barrier(snapshot) or self._coal_job_conflict(step)
                 or not coal.permits(step.action, step.parameters or {}, snapshot)):
@@ -226,7 +295,7 @@ class CoalSupplyMixin:
         try:
             rows = coal.sources(snapshot)
             network = step.action == coal.COMMAND or (step.action == solid.COMMAND and coal.is_network_route(step.parameters, snapshot))
-            if network and not self._coal_admission_allows_start(snapshot):
+            if network and not self._coal_step_admitted(step, snapshot):
                 return False
             bill = Counter(coal.remaining_kit(rows, snapshot)) if network or self.memory.coal_commitments else Counter()
             own = (step.parameters or {}).get("route") if step.action == solid.COMMAND else None
@@ -442,7 +511,7 @@ class CoalSupplyMixin:
         if (step.action == coal.COMMAND
                 or step.action == solid.COMMAND and coal.is_network_route(step.parameters, snapshot)):
             try:
-                if not self._coal_admission_allows_start(snapshot):
+                if not self._coal_step_admitted(step, snapshot):
                     return False
             except (ValueError, KeyError, TypeError, AttributeError):
                 return False
