@@ -209,6 +209,18 @@ failure path. The mode requires resumed live FLE Jev control, a supervisor-pinne
 source revision, the existing external single-owner lock, and an operator-owned
 run window; it does not extend that window.
 
+The persistent attempt checkpoint keeps a bounded active tail of 1,024
+fingerprints. At a quiescent decision boundary, older rows are written unchanged
+to immutable, content-addressed segments in the checkpoint's sibling archive
+directory; the checkpoint pointer and hash chain remain the authority for
+which segments are committed. Startup validates the referenced chain before
+backend attachment, and each duplicate lookup rechecks archive-directory and
+segment identities before consulting its bounded disk index. Missing, changed,
+or unreadable archive data stops recovery rather than dropping history or
+resetting the attempt budget. Rotation uses the existing one-gigabyte storage
+reserve and preserves pending outcomes as ambiguous, so an archived request is
+never replayed just because the active tail was rotated.
+
 The route-cache regression tests replay the exact decision-fingerprint paths.
 Offline review also replayed a captured 15-event request slice. That slice is partial and not a
 sealed campaign report; it cannot establish total-run call reduction or gameplay

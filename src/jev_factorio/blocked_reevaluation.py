@@ -123,7 +123,8 @@ def validate_source_revision(blocked_source_revision: str,
 def validate_checkpoint_capture(raw: bytes, expected_sha256: str,
                                 memory_type, target: str,
                                 max_stalled_decisions: int = 4,
-                                decision_contract_sha256: str | None = None):
+                                decision_contract_sha256: str | None = None,
+                                checkpoint_path: Path | None = None):
     """Bind one exact checkpoint capture to a quiescent eligible blocked state."""
     validate_checkpoint_digest(raw, expected_sha256)
     try:
@@ -133,6 +134,9 @@ def validate_checkpoint_capture(raw: bytes, expected_sha256: str,
     if not isinstance(data, dict) or type(data.get("session_id")) is not str or not data["session_id"]:
         raise ValueError("Blocked decision checkpoint has no session identity")
     memory = memory_type.from_bytes(raw, data["session_id"], target)
+    if checkpoint_path is not None and memory.blocked_recovery_archive is not None:
+        from .blocked_recovery_archive import build_index
+        memory._blocked_recovery_archive_index = build_index(checkpoint_path, memory)
     validate_blocked_memory(memory, max_stalled_decisions)
     if (decision_contract_sha256 is not None
             and any(entry["decision_contract_sha256"] == decision_contract_sha256

@@ -33,6 +33,7 @@ _VOLATILE_KEYS = frozenset({
 })
 _SYSTEM_HISTORY_EVENTS = frozenset({
     "blocked_decision_reevaluation_consumed", "blocked_recovery_attempt", "blocked_recovery_wait",
+    "blocked_recovery_archive_committed",
 })
 
 
@@ -282,8 +283,13 @@ def ensure_state(memory, source_revision: dict, *, allow_source_change: bool = F
 
 
 def was_attempted(memory, source_revision: dict, input_sha256: str, *,
-                  allow_source_change: bool = False) -> bool:
+                  allow_source_change: bool = False, archive_index=None) -> bool:
     source = _source(source_revision)
+    if memory.blocked_recovery_archive is not None and archive_index is None:
+        raise ValueError("Blocked-recovery archive index is required for fingerprint lookup")
+    if archive_index is not None and archive_index.find(
+            source, input_sha256, memory=memory) is not None:
+        return True
     current = memory.blocked_recovery
     if (allow_source_change and current is not None
             and current.get("source_revision") != source):
@@ -295,24 +301,31 @@ def was_attempted(memory, source_revision: dict, input_sha256: str, *,
                and row["decision_input_sha256"] == input_sha256 for row in state["attempts"])
 
 
-def find_attempt(memory, source_revision: dict, input_sha256: str) -> dict | None:
+def find_attempt(memory, source_revision: dict, input_sha256: str, *, archive_index=None) -> dict | None:
     """Return a copy of one exact source-bound ledger row, if present."""
-    if memory.blocked_recovery is None:
-        return None
     source = _source(source_revision)
-    state = _validate_state(memory.blocked_recovery, memory.session_id)
-    if state["source_revision"] != source:
-        return None
-    for row in state["attempts"]:
-        if row["source_revision"] == source and row["decision_input_sha256"] == input_sha256:
-            result = deepcopy(row)
-            result.setdefault("outcome", "pending")
-            return result
-    return None
+    if memory.blocked_recovery_archive is not None and archive_index is None:
+        raise ValueError("Blocked-recovery archive index is required for fingerprint lookup")
+    # Consult the verified archive index first so its checkpoint binding and
+    # immutable files are revalidated on every lookup. The index also contains
+    # a startup snapshot of the active tail for duplicate detection, but those
+    # rows are mutable: their pending outcome may have been finalized since
+    # index construction. Prefer the current checkpoint memory for active rows.
+    archived = (archive_index.find(source, input_sha256, memory=memory)
+                if archive_index is not None else None)
+    if memory.blocked_recovery is not None:
+        state = _validate_state(memory.blocked_recovery, memory.session_id)
+        for row in state["attempts"]:
+            if row["source_revision"] == source and row["decision_input_sha256"] == input_sha256:
+                result = deepcopy(row)
+                result.setdefault("outcome", "pending")
+                return result
+    return archived
 
 
 def record_attempt(memory, source_revision: dict, input_sha256: str,
-                   reason: str | None, tick: int, *, allow_source_change: bool = False) -> None:
+                   reason: str | None, tick: int, *, allow_source_change: bool = False,
+                   archive_index=None) -> None:
     if (reason is not None and (type(reason) is not str or reason not in RECOVERABLE_REASONS)
             or not _SHA256.fullmatch(input_sha256)
             or type(tick) is not int or tick < 0):
@@ -321,7 +334,7 @@ def record_attempt(memory, source_revision: dict, input_sha256: str,
     if len(state["attempts"]) >= MAX_ATTEMPTS:
         raise ValueError("Persistent blocked-recovery attempt ledger is full")
     if was_attempted(memory, source_revision, input_sha256,
-                     allow_source_change=allow_source_change):
+                     allow_source_change=allow_source_change, archive_index=archive_index):
         raise ValueError("Persistent blocked-recovery input was already attempted")
     state["attempts"].append({"source_revision": _source(source_revision),
                               "decision_input_sha256": input_sha256,
@@ -331,11 +344,12 @@ def record_attempt(memory, source_revision: dict, input_sha256: str,
 
 
 def finish_attempt(memory, source_revision: dict, input_sha256: str, outcome: str,
-                   reason: str | None = None) -> None:
+                   reason: str | None = None, *, archive_index=None) -> None:
     if (outcome not in {"rejected", "selected", "provider_blocked", "failed", "frontier"}
             or reason is not None and (type(reason) is not str or reason not in RECOVERABLE_REASONS)):
         raise ValueError("Invalid persistent blocked-recovery attempt outcome")
-    row = find_attempt(memory, source_revision, input_sha256)
+    row = find_attempt(memory, source_revision, input_sha256,
+                       archive_index=archive_index)
     if row is None or row.get("outcome") != "pending":
         raise ValueError("Persistent blocked-recovery attempt is not pending")
     for stored in memory.blocked_recovery["attempts"]:
