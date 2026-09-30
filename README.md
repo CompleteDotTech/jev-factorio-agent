@@ -173,19 +173,30 @@ Unexpected API, observation, dispatch, and persistence failures still propagate
 through the existing recovery guards. No retry policy is added. The default
 step limit and `--duration-hours` mode remain bounded.
 
-For a checkpoint blocked specifically by `Candidate evidence insufficient`,
-`--reevaluate-blocked-once` authorizes one fresh decision after the decision
-contract changes. It also requires `--resume --resume-controller`, the exact
-checkpoint SHA-256, and the full source revision that recorded the block. The
-source revision is an explicit checkpoint-owner pin; a legacy checkpoint does
-not contain enough metadata to infer it. The pinned source must be an ancestor
-of the clean current checkout, whose decision-contract content must have changed. This
-authorization is consumed durably before model selection and cannot be replayed
-for the same contract. If a plan is selected, the requested run mode continues
-normally, including `--until-complete`; a rejected decision remains blocked and
-increments the existing streak. It does not clear the block, reset counters, or
-authorize a second controller. Do not combine it with reconcile-only or
-owner-step gating.
+For a checkpoint blocked specifically by `Candidate evidence insufficient` or
+`low choice confidence`, `--reevaluate-blocked-once` authorizes one fresh
+decision after the decision contract changes. No other blocked reason is
+eligible. It also requires `--resume --resume-controller`, the exact checkpoint
+SHA-256, and the full source revision that recorded the block. The source
+revision is an explicit checkpoint-owner pin; a legacy checkpoint does not
+contain enough metadata to infer it. The pinned source must be an ancestor of
+the clean current checkout, whose decision-contract content must have changed.
+This authorization is consumed durably before model selection and cannot be
+replayed for the same contract. The existing stalled-decision counter, block
+history, and failure history are preserved. If a plan is selected, the
+requested run mode continues normally, including `--until-complete`; a rejected
+decision remains blocked and increments the existing streak. It does not clear
+the block, reset counters, or authorize a second controller. Do not combine it
+with reconcile-only or owner-step gating.
+
+When current research planning identifies a paid `utility:lab` placement as the
+immediate prerequisite for a capability technology, the decision evidence
+binds that prerequisite to the current technology plan, carried lab, absent lab
+role, and connected, bound, idle actor. It does not claim a clear placement
+site, successful travel or arrival, lab power, or completed research. The
+existing placement action performs a bounded native site search and fresh build
+checks at dispatch; only its native result and a fresh role observation can
+verify placement. Power and research need later native verification.
 
 **Experimental: no complete native rocket-launch playthrough is verified.**
 Native hand-crafting requires a connected viewer controlling the agent character.
