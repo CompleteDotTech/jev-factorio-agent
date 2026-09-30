@@ -51,7 +51,24 @@ Decision records and canonical decision events distinguish model abstention,
 low choice confidence, missing start evidence, low benefit/disruption confidence,
 malformed answers, invalid provider payloads, transient provider failures, request
 rejection before dispatch, and byte/count-pruned candidate IDs. Confidence floors
-and answer-distribution validation are unchanged. A failed JSON decode after a
+and answer-distribution validation are unchanged.
+
+The benefit floor is applied to the validated answer distribution rather than
+to the model's reported level confidence. Rubric level 0 is "no demonstrated
+contribution" and every higher level is a positive contribution of some
+degree, so `benefit_gate` computes `support = 1 - P(level 0)` and rejects the
+candidate as `low_benefit_confidence` when support is below the floor or when
+level 0 is at least as probable as the strongest positive level. A distribution
+split between two positive levels (for example 0.42 / 0.57 with reported
+confidence 0.32) is sign-certain and passes; a distribution whose most probable
+level is 0 fails however confident the report. Each decision records
+`diagnostics.benefit_gate[plan_id]` with the support, level-0 mass, reported
+confidence and floor so the gate can be audited. The choice-confidence,
+disruption-confidence and `needs_observation` gates are unchanged, and passing
+the gate still grants no execution: native precondition, payment, receipt,
+capacity and postcondition checks decide whether the step counts.
+
+A failed JSON decode after a
 provider call remains attributed as a model call. A skipped call cannot inherit
 usage or resolved-model metadata from an earlier request.
 

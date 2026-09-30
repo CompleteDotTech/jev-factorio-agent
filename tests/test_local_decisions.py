@@ -627,7 +627,11 @@ def test_native_direct_target_gather_is_only_conditional_inventory_closure():
     class LowBenefitConfidence(MockJevClient):
         def evaluate(self, context, questions):
             answers = super().evaluate(context, questions)
-            answers[plan.id + '/benefit']['confidence'] = 0.44
+            # Level 0 ("no demonstrated contribution") is the most probable
+            # level; a confident report cannot rescue the candidate.
+            answers[plan.id + '/benefit'].update(
+                probabilities={'0': 0.6, '1': 0.4, '2': 0.0}, score=0.4,
+                confidence=0.95)
             return answers
 
     decision = select_plan(LowBenefitConfidence(), context, [plan])
@@ -810,7 +814,11 @@ def test_qualified_target_evidence_does_not_bypass_benefit_confidence_floor():
     class LowBenefitConfidence(MockJevClient):
         def evaluate(self, context, questions):
             answers = super().evaluate(context, questions)
-            answers[plan.id + '/benefit']['confidence'] = 0.44
+            # Level 0 ("no demonstrated contribution") is the most probable
+            # level; a confident report cannot rescue the candidate.
+            answers[plan.id + '/benefit'].update(
+                probabilities={'0': 0.6, '1': 0.4, '2': 0.0}, score=0.4,
+                confidence=0.95)
             return answers
 
     decision = select_plan(LowBenefitConfidence(), support, [plan])
@@ -1563,6 +1571,12 @@ def test_distinct_failure_causes_are_auditable_without_lowering_confidence(cause
                 for plan in plans:
                     if cause == 'missing':
                         answers[plan.id + '/needs_observation']['noul'] = 0.8
+                    elif cause == 'benefit':
+                        # The benefit gate judges the distribution: level 0
+                        # ("no demonstrated contribution") dominant rejects.
+                        answers[plan.id + '/benefit'].update(
+                            probabilities={'0': 0.6, '1': 0.4, '2': 0.0},
+                            score=0.4, confidence=0.95)
                     else:
                         answers[plan.id + '/' + cause]['confidence'] = 0.1
             return answers

@@ -1459,6 +1459,31 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
     raise ValueError("Decision request exceeds byte budget or has no candidates")
 
 
+def benefit_gate(answer: dict, confidence_floor: float) -> dict:
+    """Judge a validated benefit score by its support for any contribution.
+
+    The rubric's level 0 is "no demonstrated contribution"; every higher level
+    is a positive contribution of some degree. The floor therefore applies to
+    the probability that the action contributes at all, ``1 - P(level 0)``,
+    not to the model's confidence in the exact level. A distribution split
+    between two positive levels is sign-certain and passes; a distribution
+    whose most probable level is 0, or whose positive support is below the
+    floor, fails. The reported confidence is retained for audit only.
+    """
+    probabilities = answer["probabilities"]
+    level0 = float(probabilities["0"])
+    positive = {key: float(value) for key, value in probabilities.items() if key != "0"}
+    support = max(0.0, min(1.0, 1.0 - level0))
+    strongest_positive = max(positive.values()) if positive else 0.0
+    return {
+        "support": support,
+        "level0": level0,
+        "reported_confidence": float(answer["confidence"]),
+        "floor": float(confidence_floor),
+        "passed": bool(support >= confidence_floor and level0 < strongest_positive),
+    }
+
+
 def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float = 0.45,
                 max_bytes: int = 32000) -> Decision:
     _number(confidence_floor)
@@ -1502,13 +1527,16 @@ def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float 
                         context, questions, answers, model_called=True,
                         diagnostics={**diagnostics, "outcome": outcome})
     utilities = {}
+    diagnostics["benefit_gate"] = {}
     for plan in offered:
         benefit = answers[plan.id + "/benefit"]
         disruption = answers[plan.id + "/disruption"]
+        gate = benefit_gate(benefit, confidence_floor)
+        diagnostics["benefit_gate"][plan.id] = gate
         rejected = []
         if answers[plan.id + "/needs_observation"]["noul"] >= 0.5:
             rejected.append("missing_start_evidence")
-        if benefit["confidence"] < confidence_floor:
+        if not gate["passed"]:
             rejected.append("low_benefit_confidence")
         if disruption["confidence"] < confidence_floor:
             rejected.append("low_disruption_confidence")
