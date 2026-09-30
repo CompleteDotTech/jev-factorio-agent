@@ -280,14 +280,32 @@ def test_io_counters_roundtrip_without_inventing_legacy_measurement(tmp_path):
 
 def test_snapshot_excludes_transient_verification_counters(tmp_path):
     from dataclasses import asdict
+    from jev_factorio.checkpoint_io import checkpoint_data
     memory = CampaignMemory('fixture', 'rocket_launch')
     path = tmp_path / 'state.json'
     memory.save(path)
     persisted = json.loads(path.read_bytes())
     expected = asdict(memory)
     expected.pop('capital_investment', None)
-    assert persisted == expected
+    expected.pop('blocked_recovery', None)
+    assert persisted == expected == checkpoint_data(memory)
     assert not any('verification' in key or 'sync_calls' in key for key in persisted)
+
+
+def test_snapshot_preserves_nonempty_blocked_recovery_ledger(tmp_path):
+    from jev_factorio.blocked_persistence import record_attempt
+    from jev_factorio.checkpoint_io import checkpoint_data
+    memory = CampaignMemory('fixture', 'rocket_launch', status='blocked',
+                            reason='low choice confidence', last_tick=0)
+    source = {'commit': 'a' * 40, 'source_sha256': 'b' * 64}
+    record_attempt(memory, source, 'c' * 64, memory.reason, 0)
+    path = tmp_path / 'state.json'
+    memory.save(path)
+    persisted = json.loads(path.read_bytes())
+    assert persisted == checkpoint_data(memory)
+    assert persisted['blocked_recovery'] == memory.blocked_recovery
+    restored = CampaignMemory.load(path, 'fixture', 'rocket_launch')
+    assert restored.blocked_recovery == memory.blocked_recovery
 
 @pytest.mark.parametrize('changed', [False, True])
 def test_windows_sharing_branch_closes_temp_before_replace_and_checks_reopened_identity(

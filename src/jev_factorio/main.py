@@ -114,6 +114,8 @@ def cli() -> None:
                    help="Exact starting controller checkpoint SHA-256 for blocked re-evaluation")
     p.add_argument("--blocked-source-revision",
                    help="Full Git commit supplied by the checkpoint owner for the blocked decision")
+    p.add_argument("--persist-recoverable-blocks", action="store_true",
+                   help="Opt in to observation-only waits and changed-evidence retries for exact recoverable blocks")
     p.add_argument("--adopt-session", action="store_true",
                    help="Explicitly identify an older live FLE session without resetting it")
     args = p.parse_args()
@@ -145,6 +147,49 @@ def cli() -> None:
     ):
         p.error("--reconcile-only requires resumed hierarchical FLE background-work, "
                 "ready-work scheduling, and a checkpoint")
+    persistent_checkpoint_capture = None
+    if args.persist_recoverable_blocks:
+        if (not args.until_complete or args.backend != "fle" or args.controller != "hierarchical"
+                or args.policy != "jev" or args.mock_model or not args.resume
+                or not args.resume_controller or not args.checkpoint or args.reconcile_only
+                or args.owner_step_gate_dir is not None or args.owner_step_lock_path is not None
+                or args.owner_step_lock_fd is not None):
+            p.error("--persist-recoverable-blocks requires until-complete resumed live FLE Jev control, "
+                    "a controller checkpoint, and no reconcile-only or owner-step gate")
+        if not args.reevaluate_blocked_once:
+            # A resumed block with no persistent ledger can only enter this mode
+            # through the existing exact-checkpoint, changed-contract gate.
+            try:
+                import json
+                from .blocked_persistence import RECOVERABLE_REASONS
+                raw = Path(args.checkpoint).read_bytes()
+                checkpoint_data = json.loads(raw.decode("utf-8"))
+                if (not isinstance(checkpoint_data, dict)
+                        or checkpoint_data.get("status") == "blocked"
+                        and checkpoint_data.get("reason") in RECOVERABLE_REASONS
+                        and checkpoint_data.get("blocked_recovery") is None):
+                    raise ValueError("first blocked recovery requires --reevaluate-blocked-once")
+            except (OSError, UnicodeError, ValueError, TypeError) as error:
+                p.error(f"Persistent recovery checkpoint preflight failed: {error}")
+        try:
+            import json
+            from .blocked_persistence import validate_checkpoint_metadata
+            from .provenance import gameplay_context
+            revision = gameplay_context().get("code_revision")
+            if not isinstance(revision, dict):
+                raise ValueError("a supervisor-pinned source revision is required")
+            persistent_checkpoint_capture = Path(args.checkpoint).read_bytes()
+            checkpoint_data = json.loads(persistent_checkpoint_capture.decode("utf-8"))
+            validate_checkpoint_metadata(
+                checkpoint_data, revision,
+                allow_source_change=args.reevaluate_blocked_once)
+            if (args.reevaluate_blocked_once
+                    and (checkpoint_data.get("status") != "blocked"
+                         or checkpoint_data.get("reason") not in {
+                             "Candidate evidence insufficient", "low choice confidence"})):
+                raise ValueError("source authorization only applies to an eligible blocked checkpoint")
+        except (OSError, UnicodeError, ValueError, TypeError) as error:
+            p.error(f"Persistent recovery source/checkpoint preflight failed: {error}")
     blocked_reevaluation_source = None
     blocked_checkpoint_capture = None
     if args.reevaluate_blocked_once:
@@ -332,6 +377,7 @@ def cli() -> None:
             duration_seconds=args.duration_hours * 3600 if args.duration_hours is not None else None,
             until_complete=args.until_complete, reconcile_only=args.reconcile_only,
             reevaluate_blocked_once=args.reevaluate_blocked_once,
+            persist_recoverable_blocks=args.persist_recoverable_blocks,
             exact_checkpoint_sha256=args.exact_checkpoint_sha256,
             blocked_source_revision=args.blocked_source_revision,
             tick_seconds=args.tick_seconds, confidence_floor=args.confidence_floor,
@@ -403,6 +449,8 @@ def cli() -> None:
                     exact_checkpoint_sha256=args.exact_checkpoint_sha256,
                     blocked_source_revision=args.blocked_source_revision,
                 )
+            if args.persist_recoverable_blocks:
+                options["persist_recoverable_blocks"] = True
             loop_type = HierarchicalLoop
             if args.background_work:
                 from .background import BackgroundWorkLoop
@@ -476,6 +524,8 @@ def cli() -> None:
                         raise ValueError('Checkpoint changed during blocked-decision preflight')
                 except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
                     p.error(f'Blocked decision checkpoint preflight failed: {error}')
+            if args.persist_recoverable_blocks and Path(args.checkpoint).read_bytes() != persistent_checkpoint_capture:
+                p.error("Persistent recovery checkpoint changed during pre-backend preflight")
             if setup_timing:
                 setup_timing.mark('preflight_ready')
             if setup_timing:

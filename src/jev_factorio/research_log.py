@@ -48,7 +48,7 @@ _TREATMENT_FIELDS = {"factory_scheduling", "background_work",
 _OPTIONAL_CONFIGURATION_FIELDS = _TREATMENT_FIELDS | {
     "treatment_sha256", "until_complete", "reconcile_only",
     "reevaluate_blocked_once", "exact_checkpoint_sha256", "blocked_source_revision",
-    "profile_latency",
+    "profile_latency", "persist_recoverable_blocks",
 }
 
 
@@ -123,6 +123,7 @@ class RunConfiguration:
     reevaluate_blocked_once: bool = False
     exact_checkpoint_sha256: str | None = None
     blocked_source_revision: str | None = None
+    persist_recoverable_blocks: bool = False
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -406,15 +407,17 @@ def _configuration(configuration: dict) -> None:
         raise ValueError("Run configuration has conflicting limits")
     for key in ("resume", "resume_controller", "adopt_session", "mock_model",
                 "legacy_log_enabled", "checkpoint_enabled", "until_complete", "reconcile_only",
-                "reevaluate_blocked_once"):
+                "reevaluate_blocked_once", "persist_recoverable_blocks"):
         value = (configuration.get(key, False)
-                 if key in {"until_complete", "reconcile_only", "reevaluate_blocked_once"}
+                 if key in {"until_complete", "reconcile_only", "reevaluate_blocked_once",
+                            "persist_recoverable_blocks"}
                  else configuration[key])
         if type(value) is not bool:
             raise ValueError("Invalid run configuration flag")
     until_complete = configuration.get("until_complete", False)
     reconcile_only = configuration.get("reconcile_only", False)
     reevaluate_blocked_once = configuration.get("reevaluate_blocked_once", False)
+    persist_recoverable_blocks = configuration.get("persist_recoverable_blocks", False)
     if until_complete and reconcile_only:
         raise ValueError("Run configuration has conflicting execution modes")
     if (until_complete or reconcile_only) and (
@@ -423,6 +426,14 @@ def _configuration(configuration: dict) -> None:
         raise ValueError("Run configuration mode conflicts with bounded limits")
     if until_complete and configuration["controller"] != "hierarchical":
         raise ValueError("Until-complete requires hierarchical terminal status")
+    if persist_recoverable_blocks and (
+        not until_complete or configuration["backend"] != "fle"
+        or configuration["controller"] != "hierarchical" or configuration["policy"] != "jev"
+        or configuration["mock_model"] or not configuration["resume"]
+        or not configuration["resume_controller"] or not configuration["checkpoint_enabled"]
+        or reconcile_only
+    ):
+        raise ValueError("Persistent blocked recovery requires until-complete resumed native Jev control")
     if reconcile_only and (
         configuration["backend"] != "fle" or configuration["controller"] != "hierarchical"
         or configuration["factory_scheduling"] != "ready-work"

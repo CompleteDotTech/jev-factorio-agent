@@ -35,7 +35,8 @@ URL = re.compile(r"(?:https?|wss?)://[^\s\"<>]+", re.I)
 CREDENTIAL = re.compile(r"(?:Bearer\s+\S+|\b(?:sk|ts|pk)-[\w-]{12,})", re.I)
 RECORD_KEYS = ("controller", "policy", "tick", "session_id", "world_kind", "goal", "target",
                "status", "reason", "action", "outcome", "verified", "completed_goals",
-               "decision", "model_call", "requested_model", "resolved_model", "usage", "pending")
+               "decision", "model_call", "requested_model", "resolved_model", "usage", "pending",
+               "persistent_recovery")
 STATE_KEYS = ("tick", "session_id", "world_kind", "inventory", "player_position", "nearby_resources",
               "placed_entities", "drill_status", "drill_fuel", "drill_output_connected",
               "iron_ore_collected", "production_rates", "researched", "victory", "victory_source")
@@ -103,7 +104,31 @@ def project_record(value: dict) -> dict:
                                              if key in factory})
         record["state"] = project_state(state)
     # Keep the bounded observation before potentially large model decision data.
-    record.update({key: value[key] for key in RECORD_KEYS if key in value})
+    record.update({key: value[key] for key in RECORD_KEYS
+                   if key in value and key != "persistent_recovery"})
+    recovery = value.get("persistent_recovery")
+    if isinstance(recovery, dict):
+        phase = recovery.get("phase")
+        record["persistent_recovery"] = {
+            "phase": phase if phase in {
+                "waiting_for_changed_game_evidence", "evaluating_changed_game_evidence",
+                "selected_plan_entered_normal_execution", "provider_blocked",
+                "evaluation_outcome_unknown_waiting",
+            } else "unknown",
+            "reason": recovery.get("reason") if isinstance(recovery.get("reason"), str) else None,
+            "next_observation_seconds": (
+                recovery.get("next_observation_seconds")
+                if type(recovery.get("next_observation_seconds")) in (int, float)
+                and math.isfinite(recovery["next_observation_seconds"])
+                and recovery["next_observation_seconds"] >= 0 else None),
+            "model_call": recovery.get("model_call") if type(recovery.get("model_call")) is bool else None,
+            "recorded_attempts": (
+                recovery.get("recorded_attempts")
+                if type(recovery.get("recorded_attempts")) is int
+                and recovery["recorded_attempts"] >= 0 else None),
+        }
+    elif "persistent_recovery" in value:
+        record["persistent_recovery"] = None
     return record
 
 
