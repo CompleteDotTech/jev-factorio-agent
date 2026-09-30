@@ -174,3 +174,94 @@ def test_provider_rounding_does_not_disable_confidence_gate():
             return answers
 
     assert select_plan(RoundedLowConfidence(), state, plans).plan_id is None
+
+
+def _benefit_answers(client_answers: dict, plan_id: str, probabilities: dict,
+                     confidence: float) -> dict:
+    expected = sum(int(level) * value for level, value in probabilities.items())
+    client_answers[plan_id + "/benefit"].update(
+        probabilities=probabilities, score=expected, confidence=confidence)
+    return client_answers
+
+
+def test_benefit_gate_measures_support_for_any_contribution():
+    from jev_factorio.judgments import benefit_gate
+    split = {"type": "score", "confidence": 0.32,
+             "probabilities": {"0": 0.01, "1": 0.42, "2": 0.57}}
+    gate = benefit_gate(split, 0.45)
+    assert gate["passed"] is True
+    assert gate["support"] == pytest.approx(0.99)
+    assert gate["reported_confidence"] == pytest.approx(0.32)
+    assert gate["floor"] == pytest.approx(0.45)
+    doubtful = {"type": "score", "confidence": 0.9,
+                "probabilities": {"0": 0.5, "1": 0.3, "2": 0.2}}
+    assert benefit_gate(doubtful, 0.45)["passed"] is False
+    tie = {"type": "score", "confidence": 0.9,
+           "probabilities": {"0": 0.4, "1": 0.4, "2": 0.2}}
+    assert benefit_gate(tie, 0.45)["passed"] is False
+    weak = {"type": "score", "confidence": 0.9,
+            "probabilities": {"0": 0.3, "1": 0.35, "2": 0.35}}
+    assert benefit_gate(weak, 0.45)["passed"] is True
+    assert benefit_gate(weak, 0.75)["passed"] is False
+
+
+def test_positive_level_split_with_low_reported_confidence_is_selected():
+    plans, context, _ = batch()
+    target = plans[0].id
+
+    class LevelSplit(MockJevClient):
+        def evaluate(self, state, questions):
+            answers = super().evaluate(state, questions)
+            for key in list(answers):
+                if key.endswith("/benefit"):
+                    _benefit_answers(answers, key[:-len("/benefit")],
+                                     {"0": 0.01, "1": 0.42, "2": 0.57}, 0.32)
+            return answers
+
+    decision = select_plan(LevelSplit(), context, plans)
+    assert decision.plan_id is not None
+    assert decision.diagnostics["outcome"] == "selected"
+    assert decision.diagnostics["candidate_rejections"] == {}
+    gate = decision.diagnostics["benefit_gate"][target]
+    assert gate["passed"] is True and gate["support"] == pytest.approx(0.99)
+    assert gate["reported_confidence"] == pytest.approx(0.32)
+
+
+def test_level_zero_dominant_benefit_is_rejected_despite_confident_report():
+    plans, context, _ = batch()
+
+    class NoContribution(MockJevClient):
+        def evaluate(self, state, questions):
+            answers = super().evaluate(state, questions)
+            for key in list(answers):
+                if key.endswith("/benefit"):
+                    _benefit_answers(answers, key[:-len("/benefit")],
+                                     {"0": 0.55, "1": 0.25, "2": 0.2}, 0.97)
+            return answers
+
+    decision = select_plan(NoContribution(), context, plans)
+    assert decision.plan_id is None
+    assert decision.reason == "Candidate evidence insufficient"
+    assert decision.diagnostics["outcome"] == "all_candidates_rejected"
+    for plan in plans:
+        if plan.id in decision.diagnostics["candidate_rejections"]:
+            assert decision.diagnostics["candidate_rejections"][plan.id] == [
+                "low_benefit_confidence"]
+            assert decision.diagnostics["benefit_gate"][plan.id]["passed"] is False
+    assert decision.diagnostics["candidate_rejections"]
+
+
+def test_benefit_gate_respects_a_higher_floor():
+    plans, context, _ = batch()
+
+    class WeakSupport(MockJevClient):
+        def evaluate(self, state, questions):
+            answers = super().evaluate(state, questions)
+            for key in list(answers):
+                if key.endswith("/benefit"):
+                    _benefit_answers(answers, key[:-len("/benefit")],
+                                     {"0": 0.3, "1": 0.35, "2": 0.35}, 0.5)
+            return answers
+
+    assert select_plan(WeakSupport(), context, plans).plan_id is not None
+    assert select_plan(WeakSupport(), context, plans, confidence_floor=0.75).plan_id is None
