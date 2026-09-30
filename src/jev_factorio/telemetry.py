@@ -14,7 +14,7 @@ from .iteration_timing import span
 from .preflight_codes import CONNECTION_PREFLIGHT_CODES
 
 DISPATCH_STAGES = {"dispatch", "entity_lookup", "approach", "transfer_rpc"}
-STAGES = DISPATCH_STAGES | {"observe", "pre_dispatch_observe", "post_dispatch_observe",
+STAGES = DISPATCH_STAGES | {"observe", "reconcile", "pre_dispatch_observe", "post_dispatch_observe",
                             "selection", "verification", "planning"}
 ERROR_CODES = ({"timeout", "connection", "http", "invalid_data", "io", "interrupted", "execution",
                 "storage_preflight_rejected", "maintenance_preflight_rejected"}

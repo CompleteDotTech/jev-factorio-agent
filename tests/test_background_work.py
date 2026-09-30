@@ -142,6 +142,106 @@ def test_checkpoint_resume_never_requeues_a_background_craft(tmp_path):
         CampaignMemory.load(tmp_path / "state.json", backend.state.session_id, restored.target)
 
 
+def test_reconcile_only_verifies_paid_job_after_fresh_resume_once(tmp_path, monkeypatch):
+    backend = ReceiptBackend()
+    original = controller(backend, tmp_path)
+    original.step()
+    backend.complete()
+    calls_before = len(backend.calls)
+
+    restored = controller(backend, tmp_path, resume=True)
+    assert restored.memory is None  # The native observation validates before checkpoint restore.
+    class BombModel:
+        def evaluate(self, *args, **kwargs):
+            pytest.fail("model called during reconciliation")
+    restored.jev = BombModel()
+    monkeypatch.setattr(restored, "step", lambda: pytest.fail("step called during reconciliation"))
+    monkeypatch.setattr(backend, "execute", lambda *args: pytest.fail("execute called during reconciliation"))
+
+    first = restored.reconcile_only()
+    assert first == {
+        "status": "running", "tick": backend.state.tick,
+        "background_state": "verified_completed", "verified_attempt_added": True,
+    }
+    saved = BackgroundMemory.load(tmp_path / "state.json", backend.state.session_id, restored.target)
+    assert saved.background_job is None and saved.background_attempt is None
+    assert len([row for row in saved.attempt_outcomes if row["outcome"] == "verified"]) == 1
+    assert [event["kind"] for event in saved.history].count("background_job_completed") == 1
+    assert len(backend.calls) == calls_before
+
+    second = restored.reconcile_only()
+    assert second["background_state"] == "none"
+    assert second["verified_attempt_added"] is False
+    saved_again = BackgroundMemory.load(tmp_path / "state.json", backend.state.session_id, restored.target)
+    assert len([row for row in saved_again.attempt_outcomes if row["outcome"] == "verified"]) == 1
+    assert [event["kind"] for event in saved_again.history].count("background_job_completed") == 1
+    assert len(backend.calls) == calls_before
+
+
+def test_reconcile_only_retains_unmatched_receipt_as_uncertain(tmp_path, monkeypatch):
+    backend = ReceiptBackend()
+    original = controller(backend, tmp_path)
+    original.step()
+    backend.state.factory["craft_job"]["id"] = "unmatched-receipt"
+    calls_before = len(backend.calls)
+
+    restored = controller(backend, tmp_path, resume=True)
+    class BombModel:
+        def evaluate(self, *args, **kwargs):
+            pytest.fail("model called during reconciliation")
+    restored.jev = BombModel()
+    monkeypatch.setattr(restored, "step", lambda: pytest.fail("step called during reconciliation"))
+    monkeypatch.setattr(backend, "execute", lambda *args: pytest.fail("execute called during reconciliation"))
+    result = restored.reconcile_only()
+
+    assert result["status"] == "uncertain"
+    assert result["background_state"] == "uncertain"
+    assert result["verified_attempt_added"] is False
+    assert restored.memory.background_job is not None
+    assert restored.memory.background_job["failed"]
+    assert restored.memory.attempt_outcomes == []
+    assert len(backend.calls) == calls_before
+
+
+def test_reconcile_only_preserves_valid_running_job_without_dispatch(tmp_path, monkeypatch):
+    backend = ReceiptBackend()
+    original = controller(backend, tmp_path)
+    original.step()
+    calls_before = len(backend.calls)
+
+    restored = controller(backend, tmp_path, resume=True)
+    monkeypatch.setattr(backend, "execute", lambda *args: pytest.fail("execute called during reconciliation"))
+    result = restored.reconcile_only()
+
+    assert result["status"] == "running" and result["background_state"] == "pending"
+    assert result["verified_attempt_added"] is False
+    assert restored.memory.background_job is not None
+    assert restored.memory.background_attempt is not None
+    assert restored.memory.attempt_outcomes == []
+    assert len(backend.calls) == calls_before
+    saved = BackgroundMemory.load(tmp_path / "state.json", backend.state.session_id, restored.target)
+    assert saved.background_job == restored.memory.background_job
+    assert saved.background_attempt == restored.memory.background_attempt
+
+
+def test_reconcile_only_propagates_observation_error_without_releasing_checkpoint(tmp_path, monkeypatch):
+    backend = ReceiptBackend()
+    original = controller(backend, tmp_path)
+    original.step()
+    checkpoint_before = (tmp_path / "state.json").read_bytes()
+    calls_before = len(backend.calls)
+    backend.fail_observation = backend.observations + 1
+
+    restored = controller(backend, tmp_path, resume=True)
+    monkeypatch.setattr(backend, "execute", lambda *args: pytest.fail("execute called during reconciliation"))
+    with pytest.raises(OSError, match="observation loss"):
+        restored.reconcile_only()
+
+    assert restored.memory is None
+    assert (tmp_path / "state.json").read_bytes() == checkpoint_before
+    assert len(backend.calls) == calls_before
+
+
 def delay_native_craft_start(backend, monkeypatch, *, corrupt=None):
     execute = backend.execute
 

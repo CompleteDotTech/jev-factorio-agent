@@ -257,6 +257,99 @@ def test_duration_configuration_without_waiting(tmp_path, monkeypatch):
     assert manifest["configuration"]["duration_seconds"] == 36.0
 
 
+def test_until_complete_cli_records_unbounded_hierarchical_mode(tmp_path, monkeypatch):
+    captured = {}
+
+    class Loop:
+        def __init__(self, backend, **options):
+            pass
+
+        def run(self, **limits):
+            captured.update(limits)
+
+    monkeypatch.setattr("jev_factorio.controller.HierarchicalLoop", Loop)
+    monkeypatch.setattr(main, "make_backend", lambda *args, **kwargs: MockBackend())
+    invoke(monkeypatch, "--backend", "mock", "--controller", "hierarchical",
+           "--policy", "deterministic", "--until-complete", "--run-dir", tmp_path / "run")
+    assert captured == {"until_complete": True}
+    configuration = json.loads((tmp_path / "run" / "manifest.json").read_text())["configuration"]
+    assert configuration["until_complete"] is True
+    assert configuration["reconcile_only"] is False
+    assert configuration["steps"] is None and configuration["duration_seconds"] is None
+
+
+@pytest.mark.parametrize("arguments", [
+    ["--until-complete", "--steps", "1"],
+    ["--until-complete", "--duration-hours", "1"],
+    ["--reconcile-only", "--steps", "1"],
+    ["--reconcile-only", "--duration-hours", "1"],
+    ["--until-complete", "--reconcile-only"],
+])
+def test_unbounded_modes_reject_conflicting_cli_limits_before_backend(tmp_path, monkeypatch, arguments):
+    monkeypatch.setattr(main, "make_backend", lambda *args, **kwargs: pytest.fail("backend started"))
+    with pytest.raises(SystemExit) as error:
+        invoke(monkeypatch, "--backend", "mock", "--controller", "hierarchical",
+               "--policy", "deterministic", "--run-dir", tmp_path / "run", *arguments)
+    assert error.value.code == 2
+    assert not (tmp_path / "run").exists()
+
+
+def test_until_complete_rejects_flat_controller_before_backend(monkeypatch):
+    monkeypatch.setattr(main, "make_backend", lambda *args, **kwargs: pytest.fail("backend started"))
+    with pytest.raises(SystemExit) as error:
+        invoke(monkeypatch, "--backend", "mock", "--until-complete")
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("arguments", [
+    ["--reconcile-only"],
+    ["--reconcile-only", "--backend", "fle"],
+    ["--reconcile-only", "--backend", "fle", "--resume"],
+])
+def test_reconcile_only_requires_full_native_resume_preflight(monkeypatch, arguments):
+    monkeypatch.setattr(main, "make_backend", lambda *args, **kwargs: pytest.fail("backend started"))
+    with pytest.raises(SystemExit) as error:
+        invoke(monkeypatch, "--controller", "hierarchical", "--policy", "deterministic", *arguments)
+    assert error.value.code == 2
+
+
+def test_reconcile_only_cli_observes_without_running_controller(tmp_path, monkeypatch, capsys):
+    from jev_factorio.background import BackgroundWorkLoop
+    from jev_factorio import operational_safety
+
+    checkpoint = tmp_path / "checkpoint.json"
+    checkpoint.write_text(json.dumps({"session_id": "synthetic-preflight-only"}))
+    calls = []
+
+    def initialize(self, backend, jev=None, **options):
+        calls.append(("initialize", options))
+
+    def reconcile(self):
+        calls.append(("reconcile", None))
+        return {"status": "running", "tick": 42, "background_state": "verified_completed",
+                "verified_attempt_added": True}
+
+    monkeypatch.setattr(main, "make_backend", lambda *args, **kwargs: MockBackend())
+    monkeypatch.setattr(operational_safety, "storage_ready", lambda roots: True)
+    monkeypatch.setattr(BackgroundWorkLoop, "__init__", initialize)
+    monkeypatch.setattr(BackgroundWorkLoop, "reconcile_only", reconcile)
+    monkeypatch.setattr(BackgroundWorkLoop, "run", lambda *args, **kwargs: pytest.fail("run called"))
+    invoke(monkeypatch, "--backend", "fle", "--controller", "hierarchical",
+           "--resume", "--resume-controller", "--checkpoint", checkpoint, "--tick-seconds", "1",
+           "--factory-scheduling", "ready-work", "--background-work", "--reconcile-only",
+           "--run-dir", tmp_path / "run")
+    assert [call[0] for call in calls] == ["initialize", "reconcile"]
+    printed = json.loads(capsys.readouterr().out.strip())
+    assert printed == {"reconciliation": {
+        "status": "running", "tick": 42, "background_state": "verified_completed",
+        "verified_attempt_added": True,
+    }}
+    configuration = json.loads((tmp_path / "run" / "manifest.json").read_text())["configuration"]
+    assert configuration["reconcile_only"] is True
+    assert configuration["until_complete"] is False
+    assert configuration["steps"] is None and configuration["duration_seconds"] is None
+
+
 @pytest.mark.parametrize("exception,outcome", [(RuntimeError("unlogged-private-detail"), "error"),
                                                 (KeyboardInterrupt(), "interrupted")])
 def test_controller_exception_is_recorded_without_raw_message(tmp_path, monkeypatch, exception, outcome):

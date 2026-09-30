@@ -114,6 +114,29 @@ replayed from the Python checkpoint. The controller stops on missing evidence.
 Only the current native job receipt is retained; this is not a global exactly-once
 service or protection against malicious scripts rewriting game state/evidence.
 
+## Restart reconciliation before resuming a campaign
+
+Use `--reconcile-only` when a resumed checkpoint contains a paid background job
+that should be settled before autonomous decisions continue. This mode requires
+hierarchical FLE `--resume`, `--resume-controller`, the existing checkpoint,
+`--factory-scheduling ready-work`, and `--background-work`. It performs one fresh
+normal controller observation, passes any persisted craft through the same native
+receipt and output checks, then durably saves the resulting checkpoint. It does
+not resolve model credentials, ask Jev, plan, dispatch, clear uncertain work,
+or retry a craft. A valid completed receipt adds its existing attempt identity to
+verified outcomes once;
+missing or mismatched evidence remains retained and uncertain. The console result
+contains only controller status, observation tick, and a bounded background
+state; it omits receipt and actor identifiers.
+
+Before running this one-shot command operationally, use the existing supervisor's
+single-writer/external flock and native attachment-receipt preflight. Do not start
+a second controller or bypass receipt reconciliation. After checking the reported
+status and preserving the checkpoint, a separate launch can use `--until-complete`
+to continue until the configured target is verified or reaches the controller's
+existing blocked/uncertain terminal state. That launch has no step or duration
+cutoff and remains subject to the same failure and durability guards.
+
 ## Bounded useful work and research prefetch
 
 The ready-work material frontier is reused for independent actions. A private

@@ -86,6 +86,8 @@ def test_original_v1_configuration_without_treatment_fields_remains_valid(make_l
     manifest = json.loads((writer.run_dir / "manifest.json").read_bytes())
     for key in rl._TREATMENT_FIELDS:
         del manifest["configuration"][key]
+    manifest["configuration"].pop("until_complete", None)
+    manifest["configuration"].pop("reconcile_only", None)
     rl.validate_manifest(manifest)
 
 
@@ -145,6 +147,19 @@ def test_configuration_rejected_before_directory_creation(tmp_path, configuratio
     path = tmp_path / "run"
     with pytest.raises(ValueError):
         rl.ResearchLog(path, replace(configuration, **{field: value}), environ={})
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("updates", [
+    {"until_complete": True, "controller": "flat"},
+    {"until_complete": True, "steps": 1},
+    {"until_complete": True, "reconcile_only": True},
+    {"reconcile_only": True},
+])
+def test_unbounded_mode_configuration_is_validated_before_creation(tmp_path, configuration, updates):
+    path = tmp_path / "run"
+    with pytest.raises(ValueError):
+        rl.ResearchLog(path, replace(configuration, **updates), environ={})
     assert not path.exists()
 
 
