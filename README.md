@@ -209,6 +209,16 @@ failure path. The mode requires resumed live FLE Jev control, a supervisor-pinne
 source revision, the existing external single-owner lock, and an operator-owned
 run window; it does not extend that window.
 
+The route-cache regression tests replay the exact decision-fingerprint paths.
+Offline review also replayed a captured 15-event request slice. That slice is partial and not a
+sealed campaign report; it cannot establish total-run call reduction or gameplay
+benefit. In the slice, route-cache timestamps and the `cached` flag alone
+collapsed to one fingerprint, while later request states also differed as older
+verified history entries left the bounded prompt window. History remains part of
+the decision input and is not discarded by this change. A cache-only wait does
+not issue another model request, so it does not keep evicting history through
+repeated polling.
+
 When current research planning identifies a paid `utility:lab` placement as the
 immediate prerequisite for a capability technology, the decision evidence
 binds that prerequisite to the current technology plan, carried lab, absent lab

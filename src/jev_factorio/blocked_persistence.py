@@ -24,6 +24,7 @@ _CLOCK_FACTORY_RECEIPT = re.compile(r"[0-9]+:(factory_insert|factory_extract):([
 _CLOCK_RECEIPT = re.compile(r"[0-9]+:(.+)\Z")
 _BACKGROUND_WAIT_ID = re.compile(r"background-wait:(.+)\Z")
 _PLANNED_RECEIPT_KEYS = {"receipt", "planned_native_receipt_id"}
+_ROUTE_DIAGNOSTIC_CLOCK_KEYS = frozenset({"cached", "survey_tick", "next_survey_tick"})
 _VOLATILE_KEYS = frozenset({
     "tick", "observed_tick", "checked_tick", "last_tick", "started_tick", "finished_tick",
     "stalled_decisions", "recorded_at_utc", "timestamp", "provider_clock", "monotonic_ns",
@@ -76,6 +77,15 @@ def _canonical_planned_id(value: str) -> str:
 def _stable(value, *, path: tuple = (), current_tick: int | None = None,
             background_wait: bool = False):
     if isinstance(value, dict):
+        route_diagnostic = (
+            (len(path) >= 4 and path[0] == "candidate_plans"
+             and type(path[1]) is str
+             and path[2:4] == ("materials", "route_diagnostics"))
+            or (len(path) >= 4 and path[0] == "plans"
+                and type(path[1]) is int
+                and path[2:4] == ("materials", "route_diagnostics"))
+            or tuple(path[:4]) == ("facts", "factory", "input_routes", "diagnostics")
+        )
         background_wait = background_wait or (
             type(value.get("id")) is str and value["id"].startswith("background-wait:")
         )
@@ -84,6 +94,12 @@ def _stable(value, *, path: tuple = (), current_tick: int | None = None,
             if type(key) is not str:
                 raise ValueError("Decision input contains a non-string key")
             normalized_key = key.casefold()
+            if route_diagnostic and normalized_key in _ROUTE_DIAGNOSTIC_CLOCK_KEYS:
+                # Input-route cache age is planner refresh bookkeeping. A due
+                # refresh can change the substantive route evidence below, but
+                # the cached bit and survey timestamps alone must not authorize
+                # another model request for an unchanged native decision.
+                continue
             if normalized_key in _VOLATILE_KEYS or normalized_key.endswith("_duration_ms"):
                 continue
             if path == () and key == "history" and isinstance(item, list):

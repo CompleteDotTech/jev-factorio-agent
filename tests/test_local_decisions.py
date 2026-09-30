@@ -107,6 +107,8 @@ def test_stone_gather_explains_current_lab_recipe_dependency_without_claiming_ou
         'later_steps_require_fresh_native_preconditions': True,
     }
     assert row['gather_start_evidence'] == {
+        'observed_tick': state.tick,
+        'session_id': state.session_id,
         'resource_in_current_observation': True,
         'fair_target_identity_observed': True,
         'resource_inventory_now': 0,
@@ -539,6 +541,144 @@ def _native_lab_craft_plan(target=1):
     plan = replace(plan, steps=(replace(step, action='factory_craft_job',
         effect='craft_job_complete', parameters={**step.parameters, 'receipt': 'lab-target'}),))
     return state, data, plan
+
+
+def _native_target_gather_plan(target=5, quantity=5, *, scope='immediate'):
+    state, data = snapshot(inventory={'coal': 0}), catalog()
+    state.world_kind = 'fle'
+    identity = (state.session_id, state.tick)
+    state._coherent_observation_verified = identity
+    state._atomic_inventory_verified = identity
+    runtime = {
+        'schema': 1, 'session_id': state.session_id, 'speed': 1.0,
+        'tick_paused': False, 'actor_unit': 2543, 'player_index': 1,
+        'surface_index': 1, 'force_index': 1,
+    }
+    state.factory.update({
+        'tick': state.tick,
+        'observation_snapshot_schema': 2,
+        'acceptance_runtime': runtime,
+        'inventory_insertable': {'coal': 3900},
+        'inventory_insertable_evidence': {
+            'schema': 1, 'tick': state.tick,
+            'inventory': 'character_main', 'quality': 'normal',
+            'method': 'get_insertable_count', 'items': {'coal': 3900},
+            'session_id': state.session_id, 'actor_unit': 2543,
+            'surface_index': 1, 'force_index': 1,
+            'basis': 'native_insertable_count_estimate',
+        },
+    })
+    state.factory['fair_resource_targets'] = {
+        'coal': {'name': 'coal', 'surface_index': 1,
+                 'position': {'x': 62.5, 'y': -25.5}},
+    }
+    state.nearby_resources['coal'] = 70.0
+    step = Step(
+        action='factory_gather', effect='inventory', item='coal', threshold=target,
+        timeout_ticks=18000,
+        parameters={'resource': 'coal', 'quantity': quantity},
+    )
+    plan = Plan(
+        id=f'factory:factory_gather:coal:{quantity}', goal='rocket_launch',
+        description=f'Gather {quantity} coal for the current target', steps=(step,),
+        materials={
+            'local_objective': {
+                'item': 'coal', 'inventory_target': target,
+                'ultimate_goal': 'rocket_launch',
+            },
+            'work_intent': {'scope': scope, 'observed_tick': state.tick},
+        },
+    )
+    return state, data, plan
+
+
+def test_native_direct_target_gather_is_only_conditional_inventory_closure():
+    state, data, plan = _native_target_gather_plan()
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    assert row['local_target_completion_evidence'] == {
+        'observed_tick': state.tick,
+        'session_id': state.session_id,
+        'target_item': 'coal',
+        'target_inventory': 5,
+        'inventory_now': 0,
+        'shortfall_now': 5,
+        'requested_gather_quantity': 5,
+        'target_inventory_threshold': 5,
+        'insertable_headroom_now': 3900,
+        'fair_target_name': 'coal',
+        'fair_target_surface_index': 1,
+        'requested_quantity_equals_current_shortfall': True,
+        'would_close_current_shortfall_if_native_inventory_verifies': True,
+        'inventory_basis': 'coherent_snapshot_and_atomic_native_inventory',
+        'fresh_native_inventory_threshold_required': True,
+        'travel_is_lower_bound_not_arrival_proof': True,
+        'forecast_is_not_harvested_output': True,
+    }
+    assert row['delivers_or_crafts'] == []
+    context = {'facts': state.for_jev(),
+               **scheduling_context(state, data, [plan], 'rocket_launch')}
+    _, questions, offered = question_batch(context, [plan])
+    assert offered == [plan]
+    benefit = questions[plan.id + '/benefit']
+    assert 'only if a fresh native inventory observation confirms the target threshold' in benefit['instructions']
+    assert 'does not establish arrival, patch yield, harvested quantity' in benefit['instructions']
+    assert 'fresh native postcondition verifies' in benefit['criteria'][2]
+
+    class LowBenefitConfidence(MockJevClient):
+        def evaluate(self, context, questions):
+            answers = super().evaluate(context, questions)
+            answers[plan.id + '/benefit']['confidence'] = 0.44
+            return answers
+
+    decision = select_plan(LowBenefitConfidence(), context, [plan])
+    assert decision.plan_id is None
+    assert decision.diagnostics['candidate_rejections'][plan.id] == [
+        'low_benefit_confidence']
+
+
+def test_lookahead_gather_cannot_claim_direct_target_closure():
+    state, data, plan = _native_target_gather_plan(target=5, quantity=50, scope='lookahead')
+    plan = replace(plan, steps=(replace(plan.steps[0], threshold=50),))
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    assert row['work_scope'] == 'lookahead'
+    assert row['local_target_completion_evidence'] is None
+
+
+@pytest.mark.parametrize('failure', [
+    'missing_coherent_identity', 'missing_atomic_inventory', 'stale_atomic_inventory',
+    'missing_fair_target', 'resource_not_current', 'capacity_too_small',
+    'stale_capacity', 'unbound_actor', 'target_already_met', 'quantity_not_shortfall',
+    'stale_intent',
+])
+def test_direct_gather_target_evidence_fails_closed_on_stale_or_incomplete_native_facts(failure):
+    state, data, plan = _native_target_gather_plan()
+    if failure == 'missing_coherent_identity':
+        del state._coherent_observation_verified
+    elif failure == 'missing_atomic_inventory':
+        del state._atomic_inventory_verified
+    elif failure == 'stale_atomic_inventory':
+        state._atomic_inventory_verified = (state.session_id, state.tick - 1)
+    elif failure == 'missing_fair_target':
+        state.factory['fair_resource_targets'] = {}
+    elif failure == 'resource_not_current':
+        state.nearby_resources.pop('coal')
+    elif failure == 'capacity_too_small':
+        state.factory['inventory_insertable']['coal'] = 4
+        state.factory['inventory_insertable_evidence']['items']['coal'] = 4
+    elif failure == 'stale_capacity':
+        state.factory['inventory_insertable_evidence']['tick'] -= 1
+    elif failure == 'unbound_actor':
+        state.factory['player_bound'] = False
+    elif failure == 'target_already_met':
+        state.inventory['coal'] = 5
+    elif failure == 'quantity_not_shortfall':
+        plan = replace(plan, steps=(replace(
+            plan.steps[0], parameters={'resource': 'coal', 'quantity': 4}),))
+    else:
+        plan = replace(plan, materials={**plan.materials, 'work_intent': {
+            **plan.materials['work_intent'], 'observed_tick': state.tick - 1}})
+    assert candidate_evidence(state, data, [plan])[plan.id][
+        'local_target_completion_evidence'] is None
 
 
 def test_native_direct_target_craft_proves_only_conditional_shortfall_closure():
