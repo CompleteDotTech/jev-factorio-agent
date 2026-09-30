@@ -1025,6 +1025,7 @@ class HierarchicalLoop(AgentLoop):
         self._trace.metrics = self._performance if self.factory_scheduling == "ready-work" else None
         snapshot = self._observe()
         blocked_reevaluation = self._reevaluate_blocked_once
+        blocked_reevaluation_reason = self.memory.reason if blocked_reevaluation else None
         admission_checked = False
         if blocked_reevaluation:
             from .blocked_reevaluation import validate_blocked_memory
@@ -1053,7 +1054,7 @@ class HierarchicalLoop(AgentLoop):
         self._refresh_goals(snapshot)
         if self.terminal and not (
             blocked_reevaluation and self.memory.status == "blocked"
-            and self.memory.reason == "Candidate evidence insufficient"
+            and self.memory.reason == blocked_reevaluation_reason
         ):
             return self._record(snapshot, "observe", self.memory.reason, verified=True)
         if self.memory.active_plan is None:

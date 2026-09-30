@@ -245,6 +245,11 @@ def allowed(action: str, parameters: dict, snapshot: GameSnapshot) -> bool:
     if action == "factory_place":
         if parameters["anchor"].startswith("cell-site:") and not production_sites.allowed(parameters, snapshot):
             return False
+        if parameters.get("role") == "utility:lab" and (
+                factory.get("player_connected") is not True
+                or factory.get("player_bound") is not True
+                or factory.get("crafting_queue") != 0):
+            return False
         return not machine and snapshot.inventory.get(parameters["name"], 0) >= 1
     if action == "factory_craft_job":
         return (type(factory.get("craft_jobs_protocol")) is int

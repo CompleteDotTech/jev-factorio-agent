@@ -115,11 +115,12 @@ class LiveSelectionClient:
     uses_http_provider = False
 
 
-def _checkpoint(path: Path, backend: FLEMockBackend, *, stalled=4):
+def _checkpoint(path: Path, backend: FLEMockBackend, *, stalled=4,
+                reason="Candidate evidence insufficient"):
     memory = CampaignMemory(
         backend.session_id, "bootstrap_mining", active_goal="bootstrap_mining",
         completed_goals={"stockpile_fuel": 0}, last_tick=0,
-        status="blocked", reason="Candidate evidence insufficient",
+        status="blocked", reason=reason,
         stalled_decisions=stalled, failures={"preserved-failure": 2},
         history=[{"kind": "preserved", "marker": "old history"}],
     )
@@ -127,7 +128,8 @@ def _checkpoint(path: Path, backend: FLEMockBackend, *, stalled=4):
     return hashlib.sha256(path.read_bytes()).hexdigest(), memory
 
 
-def _make_loop(tmp_path, monkeypatch, *, selection, max_stalled_decisions=4):
+def _make_loop(tmp_path, monkeypatch, *, selection, max_stalled_decisions=4,
+               blocked_reason="Candidate evidence insufficient"):
     from jev_factorio import blocked_reevaluation
     import jev_factorio.controller as controller
 
@@ -135,7 +137,7 @@ def _make_loop(tmp_path, monkeypatch, *, selection, max_stalled_decisions=4):
     monkeypatch.setattr(controller, "gameplay_context", lambda: {})
     backend = FLEMockBackend()
     checkpoint = tmp_path / "checkpoint.json"
-    checkpoint_sha, original = _checkpoint(checkpoint, backend)
+    checkpoint_sha, original = _checkpoint(checkpoint, backend, reason=blocked_reason)
     loop = HierarchicalLoop(
         backend, jev=LiveSelectionClient(), policy="jev", target="bootstrap_mining",
         checkpoint=str(checkpoint), resume_controller=True, tick_seconds=0,
@@ -167,10 +169,14 @@ def _bootstrap_plan(snapshot):
     return Plan(plan_id, "bootstrap_mining", plan_id, (step,))
 
 
+@pytest.mark.parametrize("blocked_reason", [
+    "Candidate evidence insufficient", "low choice confidence",
+])
 def test_selected_recheck_keeps_counter_until_receipt_and_continues_unbounded_run(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, blocked_reason):
     backend, checkpoint, _sha, _original, loop = _make_loop(
-        tmp_path, monkeypatch, selection=lambda snapshot: [_bootstrap_plan(snapshot)])
+        tmp_path, monkeypatch, selection=lambda snapshot: [_bootstrap_plan(snapshot)],
+        blocked_reason=blocked_reason)
     from jev_factorio import controller
 
     selected = []
@@ -207,10 +213,14 @@ def test_selected_recheck_keeps_counter_until_receipt_and_continues_unbounded_ru
     assert loop.memory.history[0] == {"kind": "preserved", "marker": "old history"}
 
 
+@pytest.mark.parametrize("blocked_reason", [
+    "Candidate evidence insufficient", "low choice confidence",
+])
 def test_rejection_increments_existing_streak_and_same_contract_cannot_replay(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, blocked_reason):
     backend, checkpoint, _sha, original, loop = _make_loop(
-        tmp_path, monkeypatch, selection=lambda snapshot: [_bootstrap_plan(snapshot)])
+        tmp_path, monkeypatch, selection=lambda snapshot: [_bootstrap_plan(snapshot)],
+        blocked_reason=blocked_reason)
     from jev_factorio import controller
 
     calls = []
@@ -228,6 +238,7 @@ def test_rejection_increments_existing_streak_and_same_contract_cannot_replay(
     assert loop.memory.failures == original.failures
     assert loop.memory.history[0] == original.history[0]
     assert loop.memory.blocked_reevaluations[0]["stalled_decisions"] == 4
+    assert loop.memory.blocked_reevaluations[0]["reason"] == blocked_reason
     assert backend.actions == [] and calls == [True]
 
     retry_backend = FLEMockBackend()
@@ -381,6 +392,17 @@ def test_quiescent_gate_rejects_pending_and_checkpoint_hash_mismatch(tmp_path):
         validate_checkpoint_capture(captured, "0" * 64, CampaignMemory,
                                    "bootstrap_mining", 4)
     assert hashlib.sha256(captured).hexdigest() == sha
+
+
+@pytest.mark.parametrize("reason", ["model abstention", "provider circuit unavailable",
+                                     "low benefit confidence"])
+def test_re_evaluation_rejects_other_terminal_reasons(reason, tmp_path):
+    backend = FLEMockBackend()
+    path = tmp_path / "state.json"
+    _sha, memory = _checkpoint(path, backend)
+    memory.reason = reason
+    with pytest.raises(ValueError, match="quiescent eligible blocked decision"):
+        validate_blocked_memory(memory, 4)
 
 
 @pytest.mark.parametrize("gate", ["admission", "provider"])

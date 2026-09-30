@@ -102,8 +102,52 @@ class EconomicProduction:
             if technology:
                 plan = self._research(technology)
                 if plan:
-                    return self._economic_evidence(plan, objective='unlock_basic_assembly', technology=technology)
+                    plan = self._economic_evidence(
+                        plan, objective='unlock_basic_assembly', technology=technology,
+                        observed_tick=self.snapshot.tick)
+                    if self._is_current_lab_prerequisite(plan):
+                        materials = dict(plan.materials or {})
+                        materials['local_objective'] = {
+                            'kind': 'research_prerequisite',
+                            'ultimate_goal': self.goal,
+                            'primary_target': {
+                                'kind': 'native_technology',
+                                'technology': technology,
+                            },
+                            'immediate_prerequisite': 'utility:lab',
+                            'observed_tick': self.snapshot.tick,
+                            'basis': 'current_capability_research_plan',
+                            'later_power_and_research_need_native_verification': True,
+                        }
+                        materials['work_intent'] = {
+                            'observed_tick': self.snapshot.tick,
+                            'scope': 'immediate',
+                            'basis': 'current_selected_capability_research_prerequisite',
+                        }
+                        materials['utility_lab_research_dependency'] = {
+                            'observed_tick': self.snapshot.tick,
+                            'technology': technology,
+                            'objective': 'unlock_basic_assembly',
+                            'required_role': 'utility:lab',
+                            'basis': 'current_capability_technology_and_native_research_planner',
+                            'power_and_research_are_not_established': True,
+                        }
+                        plan = replace(plan, materials=materials)
+                    return plan
         return super().plan()
+
+    def _is_current_lab_prerequisite(self, plan):
+        """Mark only the exact lab placement returned by the current research walk."""
+        return (
+            plan.goal == 'rocket_launch'
+            and len(plan.steps) == 1
+            and plan.steps[0].action == 'factory_place'
+            and plan.steps[0].parameters == {
+                'role': 'utility:lab', 'name': 'lab', 'anchor': 'factory'}
+            and plan.steps[0].costs == {'lab': 1}
+            and 'utility:lab' not in self.entities
+            and self.snapshot.inventory.get('lab', 0) >= 1
+        )
 
     def _machine(self, role, name, path, anchor='factory'):
         previous = getattr(self, '_economic_acquiring', False)

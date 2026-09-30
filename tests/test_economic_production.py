@@ -5,9 +5,11 @@ import pytest
 
 from jev_factorio.controller import HierarchicalLoop
 from jev_factorio.planning.economics import capability_technology, investment_cost, remaining_products
+from jev_factorio.planning.decision_support import candidate_evidence, scheduling_context
 from jev_factorio.planning.factory import FactoryPlanner
 from jev_factorio.planning.ready_work import ReadyWorkPlanner
 from jev_factorio.planning.input_routes import InputRoutePlanner
+from jev_factorio.judgments import question_batch
 from jev_factorio.planning.scheduling import next_technology
 from test_factory import catalog, snapshot, recipe, machine
 
@@ -56,6 +58,80 @@ def test_basic_assembler_unlock_precedes_rocket_dependency_order():
     assert next_technology(data, [], 'automation') == 'study'
     # The explicit serial baseline retains its original behavior.
     assert FactoryPlanner(data, state, 'rocket_launch').plan().steps[0].parameters['technology'] == 'study'
+
+
+def test_paid_utility_lab_is_scoped_to_current_capability_research_without_site_claim():
+    data = economic_catalog()
+    state = snapshot(inventory={'lab': 1})
+    state.factory.update(research='', research_progress=0)
+
+    plan = ReadyWorkPlanner(data, state, 'rocket_launch').plan()
+    assert plan.steps[0].action == 'factory_place'
+    assert plan.steps[0].parameters == {
+        'role': 'utility:lab', 'name': 'lab', 'anchor': 'factory'}
+    assert plan.steps[0].costs == {'lab': 1}
+    assert plan.materials['economics'] == {
+        'basis': 'catalog-and-policy-estimate',
+        'objective': 'unlock_basic_assembly', 'technology': 'automation',
+        'observed_tick': state.tick,
+    }
+    assert plan.materials['local_objective'] == {
+        'kind': 'research_prerequisite',
+        'ultimate_goal': 'rocket_launch',
+        'primary_target': {'kind': 'native_technology', 'technology': 'automation'},
+        'immediate_prerequisite': 'utility:lab',
+        'observed_tick': state.tick,
+        'basis': 'current_capability_research_plan',
+        'later_power_and_research_need_native_verification': True,
+    }
+    assert plan.steps[0].allowed(state)
+    for key, value in (('player_connected', False), ('player_bound', False),
+                       ('crafting_queue', 1)):
+        changed = deepcopy(state)
+        changed.factory[key] = value
+        assert not plan.steps[0].allowed(changed)
+
+    support = scheduling_context(state, data, [plan], 'rocket_launch')
+    row = support['candidate_evidence'][plan.id]
+    dependency = row['utility_lab_research_dependency']
+    assert row['work_scope'] == 'immediate'
+    assert dependency['technology'] == 'automation'
+    assert dependency['paid_lab_in_inventory_now'] == 1
+    assert dependency['technology_unlocks_basic_assembler'] is True
+    assert dependency['lab_required_by_native_research_walk'] is True
+    assert dependency['native_placement_site_preflight_performed'] is False
+    assert dependency['placement_site_clearance_unknown_until_dispatch'] is True
+    assert dependency['lab_power_and_research_require_later_native_verification'] is True
+    assert set(row['unknowns']) == {
+        'placement_site:factory_place', 'travel:factory_place'}
+    assert row['placement_start_evidence'] is None
+    context, questions, offered = question_batch(
+        {'facts': state.for_jev(), 'active_goal': 'rocket_launch', **support}, [plan])
+    assert offered == [plan]
+    assert 'immediate prerequisite' in questions['candidate']['instructions']
+    assert 'have not been observed' in questions['candidate']['instructions']
+    assert 'useful prerequisite progress (score level 1)' in (
+        questions[plan.id + '/benefit']['instructions'])
+    assert 'Site clearance and travel remain unknown' in (
+        questions[plan.id + '/needs_observation']['instructions'])
+
+    for mutate in (
+            lambda current: current.inventory.update(lab=0),
+            lambda current: current.factory.update(player_bound=False),
+            lambda current: current.factory.update(crafting_queue=1),
+            lambda current: current.factory['entities'].__setitem__(
+                'utility:lab', machine('lab', unit_number=401)),
+    ):
+        current = snapshot(inventory={'lab': 1})
+        current.factory.update(research='', research_progress=0)
+        mutate(current)
+        assert candidate_evidence(current, data, [plan])[plan.id][
+            'utility_lab_research_dependency'] is None
+
+    stale = deepcopy(plan)
+    stale.materials['utility_lab_research_dependency']['observed_tick'] -= 1
+    assert candidate_evidence(state, data, [stale])[stale.id][
+        'utility_lab_research_dependency'] is None
 
 
 def test_current_research_is_not_cancelled_to_prioritize_automation():
