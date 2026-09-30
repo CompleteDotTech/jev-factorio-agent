@@ -479,13 +479,15 @@ def test_furnace_craft_keeps_current_lab_planner_provenance_without_claiming_lab
     assert context['candidate_evidence'][plan.id]['craft_dependency'] == row['craft_dependency']
     assert 'Prefer this bounded craft over observe' in questions['candidate']['instructions']
     assert 'current planner-linked intermediate craft' in (
+        questions[plan.id + '/benefit']['instructions'])
+    assert 'does not establish receipt-conditional closure of an observed' in (
         questions[plan.id + '/benefit']['criteria'][1])
     assert 'handcrafts from carried inputs without changing existing entities' in (
         questions[plan.id + '/disruption']['criteria'][0])
     assert 'later production still need fresh native receipt and precondition checks' in str(questions)
     benefit = questions[plan.id + '/benefit']['instructions']
     observation = questions[plan.id + '/needs_observation']['instructions']
-    assert 'bounded intermediate product' in benefit
+    assert 'level-1 partial progress from this current planner-linked intermediate craft' in benefit
     assert 'current `candidate_evidence`' in benefit
     assert 'output still requires native receipt verification' in observation
     assert 'future completion is not a missing start observation' in observation
@@ -518,6 +520,161 @@ def test_furnace_craft_keeps_current_lab_planner_provenance_without_claiming_lab
     assert candidate_evidence(state, data, [empty_target])[empty_target.id]['craft_dependency'] is None
     data.recipes['stone-furnace']['enabled'] = False
     assert candidate_evidence(state, data, [plan])[plan.id]['craft_dependency'] is None
+
+
+def _native_lab_craft_plan(target=1):
+    state, data = snapshot(inventory={'iron-plate': 5}), catalog()
+    data.recipes['lab'] = recipe('lab', {'iron-plate': 1})
+    data.stack_sizes['lab'] = 10
+    state.world_kind = 'fle'
+    state.factory['craft_jobs_protocol'] = 1
+    identity = (state.session_id, state.tick)
+    state._coherent_observation_verified = identity
+    state._atomic_inventory_verified = identity
+    planner = ReadyWorkPlanner(data, state, 'rocket_launch')
+    planner._set_focus('lab', target)
+    plan = planner._need('lab', target)
+    step = plan.steps[0]
+    plan = replace(plan, steps=(replace(step, action='factory_craft_job',
+        effect='craft_job_complete', parameters={**step.parameters, 'receipt': 'lab-target'}),))
+    return state, data, plan
+
+
+def test_native_direct_target_craft_proves_only_conditional_shortfall_closure():
+    state, data, plan = _native_lab_craft_plan()
+    # The qualified atomic snapshot is complete, so an absent sparse-map key is zero.
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    evidence = row['local_target_completion_evidence']
+    assert evidence == {
+        'observed_tick': state.tick, 'session_id': state.session_id,
+        'target_item': 'lab', 'target_inventory': 1, 'inventory_now': 0,
+        'shortfall_now': 1, 'expected_output_after_native_receipt': 1,
+        'shortfall_after_expected_output': 0,
+        'would_close_current_shortfall_if_native_receipt_verifies': True,
+        'native_recipe': 'lab', 'native_batches': 1,
+        'target_item_stack_size': 10,
+        'inventory_basis': 'coherent_snapshot_and_atomic_craft_inventory',
+        'native_receipt_required_for_completion': True,
+        'forecast_is_not_completed_output': True,
+    }
+    assert row['delivers_or_crafts'] == []
+    _, questions, _ = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
+        [plan])
+    benefit = questions[plan.id + '/benefit']
+    assert 'current local-target shortfall would close' in benefit['instructions']
+    assert 'only after its native receipt verifies' in benefit['criteria'][2]
+    assert 'future research' in benefit['instructions']
+    assert 'level-1 partial progress' not in benefit['instructions']
+    assert 'local-target shortfall or establish blocker removal' not in benefit['instructions']
+
+
+def test_native_direct_target_craft_that_leaves_shortfall_open_is_partial():
+    state, data, plan = _native_lab_craft_plan()
+    plan = replace(plan, materials={**plan.materials, 'local_objective': {
+        **plan.materials['local_objective'], 'inventory_target': 2}})
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    evidence = row['local_target_completion_evidence']
+    assert evidence['target_inventory'] == 2
+    assert evidence['shortfall_now'] == 2
+    assert evidence['expected_output_after_native_receipt'] == 1
+    assert evidence['shortfall_after_expected_output'] == 1
+    assert evidence['would_close_current_shortfall_if_native_receipt_verifies'] is False
+    _, questions, _ = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
+        [plan])
+    benefit = questions[plan.id + '/benefit']
+    assert 'leaves the current local-target shortfall open' in benefit['instructions']
+    assert 'does not establish receipt-conditional closure of an observed' in benefit['criteria'][1]
+
+
+@pytest.mark.parametrize('failure', [
+    'no_native_inventory_contract', 'stale_tick', 'stale_session',
+    'invalid_inventory_entry', 'missing_stack_size', 'fractional_recipe_output',
+    'unsupported_multi_product_recipe', 'unqualified_start', 'stale_intent',
+])
+def test_native_target_completion_evidence_fails_closed_on_unknown_or_stale_facts(failure):
+    state, data, plan = _native_lab_craft_plan()
+    if failure == 'no_native_inventory_contract':
+        del state._atomic_inventory_verified
+    elif failure == 'stale_tick':
+        state._atomic_inventory_verified = (state.session_id, state.tick - 1)
+    elif failure == 'stale_session':
+        state._coherent_observation_verified = ('other-session', state.tick)
+    elif failure == 'invalid_inventory_entry':
+        state.inventory['unknown-item-count'] = True
+    elif failure == 'missing_stack_size':
+        data.stack_sizes.pop('lab')
+    elif failure == 'fractional_recipe_output':
+        data.recipes['lab']['products'][0]['amount'] = 0.5
+    elif failure == 'unsupported_multi_product_recipe':
+        data.recipes['lab']['products'].append(
+            {'name': 'iron-gear-wheel', 'amount': 1, 'type': 'item', 'probability': 1})
+    elif failure == 'unqualified_start':
+        state.factory['player_bound'] = False
+    else:
+        plan = replace(plan, materials={**plan.materials, 'work_intent': {
+            **plan.materials['work_intent'], 'observed_tick': state.tick - 1}})
+    assert candidate_evidence(state, data, [plan])[plan.id][
+        'local_target_completion_evidence'] is None
+
+
+def test_native_target_already_met_is_not_scored_as_target_closure():
+    state, data, plan = _native_lab_craft_plan()
+    state.inventory['lab'] = 1
+    row = candidate_evidence(state, data, [plan])[plan.id]
+    evidence = row['local_target_completion_evidence']
+    assert evidence['inventory_now'] == evidence['target_inventory'] == 1
+    assert evidence['shortfall_now'] == 0
+    assert evidence['would_close_current_shortfall_if_native_receipt_verifies'] is False
+    _, questions, _ = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
+        [plan])
+    assert 'target is already met before this craft' in (
+        questions[plan.id + '/benefit']['instructions'])
+
+
+def test_native_integer_valued_float_product_is_counted_as_exact_item_quantity():
+    state, data, plan = _native_lab_craft_plan()
+    data.recipes['lab']['products'][0]['amount'] = 1.0
+    evidence = candidate_evidence(state, data, [plan])[plan.id][
+        'local_target_completion_evidence']
+    assert evidence['expected_output_after_native_receipt'] == 1
+    assert evidence['would_close_current_shortfall_if_native_receipt_verifies'] is True
+
+
+def test_local_benefit_score_levels_exclude_blocker_removal_from_partial_level():
+    state, data, plan = _native_lab_craft_plan()
+    context = {'facts': state.for_jev(),
+               **scheduling_context(state, data, [plan], 'rocket_launch')}
+    _, questions, _ = question_batch(context, [plan])
+    criteria = questions[plan.id + '/benefit']['criteria']
+    assert 'does not remove a separately evidenced current blocker or due starvation' in criteria[1]
+    assert 'separate same-tick evidence shows it directly removes a specific observed blocker' in criteria[2]
+
+    legacy_context, legacy_questions, _ = question_batch(
+        {'facts': state.for_jev(), 'active_goal': 'rocket_launch'}, [plan])
+    assert legacy_questions[plan.id + '/benefit']['criteria'] == [
+        "The steps do not improve the active goal's required state",
+        'The steps make partial progress but leave a required action unplanned',
+        'The steps supply all actions needed to satisfy the active goal',
+    ]
+
+
+def test_qualified_target_evidence_does_not_bypass_benefit_confidence_floor():
+    state, data, plan = _native_lab_craft_plan()
+    support = scheduling_context(state, data, [plan], 'rocket_launch')
+
+    class LowBenefitConfidence(MockJevClient):
+        def evaluate(self, context, questions):
+            answers = super().evaluate(context, questions)
+            answers[plan.id + '/benefit']['confidence'] = 0.44
+            return answers
+
+    decision = select_plan(LowBenefitConfidence(), support, [plan])
+    assert decision.plan_id is None
+    assert decision.diagnostics['candidate_rejections'][plan.id] == [
+        'low_benefit_confidence']
 
 
 @pytest.mark.parametrize('change', [

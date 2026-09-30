@@ -84,6 +84,129 @@ def _craft_start_evidence(snapshot, catalog, step):
     }
 
 
+def _local_target_completion_evidence(snapshot, catalog, plan, craft_start,
+                                      craft_dependency):
+    """Assess whether a receipt-conditional direct craft covers the local target.
+
+    This is a forecast from the current native recipe and complete inventory
+    observation. It never reports the craft as completed; the native receipt
+    remains the only completion authority.
+    """
+    if (snapshot.world_kind != 'fle' or len(plan.steps) != 1
+            or not isinstance(craft_start, dict)
+            or not isinstance(craft_dependency, dict)):
+        return None
+    materials = plan.materials or {}
+    local = materials.get('local_objective')
+    intent = materials.get('work_intent')
+    if not isinstance(local, dict) or not isinstance(intent, dict):
+        return None
+    item, target = local.get('item'), local.get('inventory_target')
+    step = plan.steps[0]
+    parameters = step.parameters or {}
+    if (not isinstance(item, str) or not item or type(target) is not int or target < 1
+            or step.action != 'factory_craft_job' or step.effect != 'craft_job_complete'
+            or step.item != item or type(parameters.get('batches')) is not int
+            or not 1 <= parameters['batches'] <= 200
+            or not isinstance(parameters.get('recipe'), str)
+            or not parameters['recipe']
+            or not isinstance(parameters.get('receipt'), str)
+            or not parameters['receipt']
+            or intent.get('scope') != 'immediate'
+            or intent.get('observed_tick') != snapshot.tick
+            or craft_start.get('observed_tick') != snapshot.tick
+            or craft_start.get('native_recipe') != parameters['recipe']
+            or craft_start.get('native_receipt_required_for_completion') is not True
+            or craft_dependency.get('observed_tick') != snapshot.tick
+            or craft_dependency.get('current_craft_product') != item
+            or craft_dependency.get('planner_item_path') != [item]
+            or craft_dependency.get('basis') !=
+                'current_recursive_planner_provenance_and_native_recipe'):
+        return None
+    if any(craft_start.get(key) is not True for key in (
+            'input_costs_match_native_recipe', 'inputs_in_inventory_now',
+            'recipe_unlocked_and_handcraftable', 'player_connected_and_bound',
+            'crafting_queue_empty', 'craft_job_protocol_ready')):
+        return None
+    try:
+        if not step.allowed(snapshot):
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    session, tick = snapshot.session_id, snapshot.tick
+    identity = (session, tick)
+    if (not isinstance(session, str) or not session or type(tick) is not int
+            or getattr(snapshot, '_coherent_observation_verified', None) != identity
+            or getattr(snapshot, '_atomic_inventory_verified', None) != identity):
+        return None
+    inventory = snapshot.inventory
+    if (not isinstance(inventory, dict) or len(inventory) > 4096
+            or any(not isinstance(name, str) or not name or len(name) > 128
+                   or type(amount) is not int or amount < 0
+                   for name, amount in inventory.items())):
+        return None
+    current = inventory.get(item, 0)
+
+    # Recompute the target item's output from the version-bound native catalog;
+    # do not trust planner annotations or fractional/bool quantities.
+    recipe = catalog.recipes.get(parameters['recipe'])
+    outputs = craft_start.get('expected_products_after_native_verification')
+    stack_size = catalog.stack_sizes.get(item)
+    output_value = outputs.get(item) if isinstance(outputs, dict) else None
+    if (not isinstance(recipe, dict) or recipe.get('name') != parameters['recipe']
+            or recipe.get('hidden') or not catalog.enabled(recipe, snapshot.researched or [])
+            or not isinstance(recipe.get('products'), list)
+            or len(recipe['products']) != 1
+            or not isinstance(outputs, dict) or not outputs
+            or any(not isinstance(name, str) or not name
+                   or type(amount) not in {int, float} or not _finite(amount)
+                   or amount < 1 or not float(amount).is_integer()
+                   for name, amount in outputs.items())
+            or type(stack_size) is not int or stack_size < 1
+            or type(output_value) not in {int, float} or not _finite(output_value)
+            or output_value < 1 or not float(output_value).is_integer()):
+        return None
+    output = int(output_value)
+    native_outputs = {}
+    for product in recipe.get('products', []):
+        probability = product.get('probability', 1) if isinstance(product, dict) else None
+        if (not isinstance(product, dict) or product.get('type') != 'item'
+                or type(probability) not in {int, float} or probability != 1
+                or type(product.get('amount')) not in {int, float}
+                or not _finite(product['amount']) or product['amount'] < 1
+                or not float(product['amount']).is_integer()):
+            return None
+        name = product.get('name')
+        if not isinstance(name, str) or not name:
+            return None
+        native_outputs[name] = (native_outputs.get(name, 0)
+                                + int(product['amount']) * parameters['batches'])
+    normalized_outputs = {name: int(amount) for name, amount in outputs.items()}
+    if native_outputs != normalized_outputs or native_outputs.get(item) != output:
+        return None
+
+    shortfall = max(0, target - current)
+    return {
+        'observed_tick': tick,
+        'session_id': session,
+        'target_item': item,
+        'target_inventory': target,
+        'inventory_now': current,
+        'shortfall_now': shortfall,
+        'expected_output_after_native_receipt': output,
+        'shortfall_after_expected_output': max(0, shortfall - output),
+        'would_close_current_shortfall_if_native_receipt_verifies': (
+            shortfall > 0 and output >= shortfall),
+        'native_recipe': parameters['recipe'],
+        'native_batches': parameters['batches'],
+        'target_item_stack_size': stack_size,
+        'inventory_basis': 'coherent_snapshot_and_atomic_craft_inventory',
+        'native_receipt_required_for_completion': True,
+        'forecast_is_not_completed_output': True,
+    }
+
+
 def _placement_start_evidence(snapshot, plan):
     if len(plan.steps) != 1 or plan.steps[0].action != 'factory_place':
         return None
@@ -469,6 +592,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                     'basis': 'current_recursive_planner_provenance_and_native_recipe',
                     'later_steps_require_fresh_native_preconditions': True,
                 }
+        local_target_completion = _local_target_completion_evidence(
+            snapshot, catalog, plan, craft_start, craft_dependency)
         shared_bill_craft = None
         bill = (plan.materials or {}).get('shared_bill_craft')
         local = (plan.materials or {}).get('local_objective')
@@ -716,6 +841,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'fuel_transfer_start_evidence': fuel_transfer_start,
             'craft_start_evidence': craft_start,
             'craft_dependency': craft_dependency,
+            'local_target_completion_evidence': local_target_completion,
             'shared_bill_craft': shared_bill_craft,
             'placement_start_evidence': placement_start,
             'placement_dependency': placement_dependency,
