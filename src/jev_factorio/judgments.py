@@ -173,7 +173,8 @@ def _qualified_power_child(step, row, evidence, tick):
     path = child.get('planner_item_path')
     if (step.action != action or child.get('action') != action or child.get('kind') != kind
             or type(child.get('observed_tick')) is not int or child['observed_tick'] != tick
-            or child.get('item') != step.item
+            or child.get('item') != (parameters.get('item')
+                                     if action == 'factory_insert' else step.item)
             or child.get('role') != (parameters.get('role') or parameters.get('resource'))
             or child.get('quantity') != parameters.get('quantity')
             or child.get('step_costs') != (step.costs or {})
@@ -233,7 +234,12 @@ def _qualified_power_child(step, row, evidence, tick):
                 and witness.get('owned_source_role') == role and witness.get('ingredient') == item
                 and witness.get('paid_quantity_to_transfer') == quantity
                 and witness.get('planned_native_receipt_id') == receipt)
-    return (witness.get('basis') == 'current_planner_need_owned_burner_and_paid_inventory'
+    local = row.get('local_target')
+    return (isinstance(role, str) and role.startswith('recipe:')
+            and bool(path) and path[-1] == role.removeprefix('recipe:')
+            and witness.get('planner_item_path') == path
+            and (not isinstance(local, dict) or path[0] == local.get('item'))
+            and witness.get('basis') == 'current_planner_need_owned_burner_and_paid_inventory'
             and witness.get('burner_role') == role and item == 'coal'
             and witness.get('coal_to_transfer') == quantity and witness.get('native_receipt') == receipt)
 
@@ -352,6 +358,26 @@ def _qualified_utility_power_dependency(plan, row, tick):
     return False
 
 
+def _compact_plan_documents(plans):
+    """Factor identical large material records without deleting any evidence."""
+    documents = {plan.id: plan.to_dict() for plan in plans}
+    if len(documents) < 2:
+        return documents, {}
+    materials = [document.get("materials") or {} for document in documents.values()]
+    shared = {}
+    for key, value in materials[0].items():
+        if (isinstance(value, (dict, list))
+                and len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")) > 256
+                and all(key in row and row[key] == value for row in materials[1:])):
+            shared[key] = value
+    if shared:
+        for document in documents.values():
+            document["materials"] = {key: value for key, value in
+                                     (document.get("materials") or {}).items() if key not in shared}
+            document["shared_materials_keys"] = sorted(shared)
+    return documents, shared
+
+
 def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                    max_candidates: int = 16) -> tuple[dict, dict, list[Plan]]:
     """Bound serialized request bytes, NOT estimated tokens or provider limits."""
@@ -362,8 +388,14 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
     if len({p.id for p in selected}) != len(selected):
         raise ValueError("Duplicate candidate IDs")
     while selected:
+        plan_documents, shared_materials = _compact_plan_documents(selected)
         context = {
-            **state, "candidate_plans": {p.id: p.to_dict() for p in selected},
+            **state, "candidate_plans": plan_documents,
+            "judgment_contract": {
+                "schema": 2,
+                "eligibility": "explicit_useful_progress_choice",
+                "benefit": "ordinal_ranking_with_negative_evidence_check",
+            },
             "execution_contract": (
                 "These are bounded tool plans, not keyboard commands or full-game strategies. "
                 "Code filters plans for current resource, inventory, and placement preconditions "
@@ -378,6 +410,12 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "Each action needs a fresh observed postcondition before it counts as success."
             ),
         }
+        if shared_materials:
+            context["shared_plan_materials"] = shared_materials
+            context["execution_contract"] += (
+                " Each candidate's shared_materials_keys names material records in "
+                "shared_plan_materials that also apply to that candidate. Read those "
+                "records together with its own materials; no material proof is omitted.")
         if "candidate_evidence" in context:
             context["candidate_evidence"] = {p.id: state["candidate_evidence"][p.id]
                                              for p in selected if p.id in state["candidate_evidence"]}
@@ -1344,6 +1382,26 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "Verify each action normally and reevaluate from a fresh native observation."
                 if qualified_research_trigger else ""
             )
+            questions[plan.id + "/useful_progress"] = {
+                "type": "choice",
+                "criteria": {
+                    "useful": "Current evidence supports useful progress toward the supplied objective",
+                    "unsupported": "Useful progress is unsupported or contradicted by current evidence",
+                },
+                "instructions": (
+                    f"Would the next bounded action in {pointer} make useful progress toward "
+                    f"`{objective}` if its native receipt and fresh postcondition verify? "
+                    "Judge independently using `facts`, this plan's current `candidate_evidence`, "
+                    "and `execution_contract`; other questions' answers are unavailable. "
+                    "Useful progress includes an evidenced prerequisite or intermediate, not "
+                    "only completing the target. Distinguish whether any useful progress is "
+                    "supported from its magnitude (partial progress versus removing a blocker). "
+                    "Use unsupported for missing, stale, mismatched or contrary dependency "
+                    "evidence. A planner proposal or future unverified result alone is not proof. "
+                    "Report confidence in this usefulness choice, not in completing the game. "
+                    "This judgment does not authorize execution or waive native checks."
+                ),
+            }
             questions[plan.id + "/benefit"] = {
                 "type": "score",
                 "instructions": (
@@ -1468,15 +1526,11 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
 
 
 def benefit_gate(answer: dict, confidence_floor: float) -> dict:
-    """Judge a validated benefit score by its support for any contribution.
+    """Retain the legacy distribution summary for audit, never admission.
 
-    The rubric's level 0 is "no demonstrated contribution"; every higher level
-    is a positive contribution of some degree. The floor therefore applies to
-    the probability that the action contributes at all, ``1 - P(level 0)``,
-    not to the model's confidence in the exact level. A distribution split
-    between two positive levels is sign-certain and passes; a distribution
-    whose most probable level is 0, or whose positive support is below the
-    floor, fails. The reported confidence is retained for audit only.
+    ``select_plan`` now requires an independent useful-progress choice. Neither
+    this positive probability mass nor its legacy ``passed`` field authorizes
+    selection. The reported confidence describes ordinal magnitude uncertainty.
     """
     probabilities = answer["probabilities"]
     level0 = float(probabilities["0"])
@@ -1493,9 +1547,22 @@ def benefit_gate(answer: dict, confidence_floor: float) -> dict:
 
 
 def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float = 0.45,
-                max_bytes: int = DEFAULT_MAX_REQUEST_BYTES) -> Decision:
+                max_bytes: int = DEFAULT_MAX_REQUEST_BYTES, *, prepared_batch=None) -> Decision:
     _number(confidence_floor)
-    context, questions, offered = question_batch(state, plans, max_bytes=max_bytes)
+    if prepared_batch is None:
+        context, questions, offered = question_batch(state, plans, max_bytes=max_bytes)
+    else:
+        context, questions, offered = prepared_batch
+        offered_ids = [plan.id for plan in offered]
+        if (not offered_ids or len(offered_ids) != len(set(offered_ids))
+                or any(plan not in plans for plan in offered)
+                or set(context.get("candidate_plans", {})) != set(offered_ids)
+                or set(questions) != {"candidate", *(
+                    plan_id + suffix for plan_id in offered_ids
+                    for suffix in ("/useful_progress", "/benefit", "/disruption", "/needs_observation"))}
+                or len(json.dumps({"state": context, "questions": questions},
+                                  ensure_ascii=False, allow_nan=False).encode("utf-8")) > max_bytes):
+            raise ValueError("Invalid or oversized prepared decision batch")
     request_bytes = len(json.dumps({"state": context, "questions": questions},
                                    ensure_ascii=False, allow_nan=False).encode("utf-8"))
     diagnostics = {"schema": 1, "input_candidates": len(plans),
@@ -1539,15 +1606,34 @@ def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float 
                         diagnostics={**diagnostics, "outcome": outcome})
     utilities = {}
     diagnostics["benefit_gate"] = {}
+    diagnostics["usefulness_gate"] = {}
     for plan in offered:
         benefit = answers[plan.id + "/benefit"]
         disruption = answers[plan.id + "/disruption"]
+        usefulness = answers[plan.id + "/useful_progress"]
         gate = benefit_gate(benefit, confidence_floor)
+        gate["eligibility_authority"] = False
         diagnostics["benefit_gate"][plan.id] = gate
+        useful = (usefulness["choice"] == "useful"
+                  and usefulness["confidence"] >= confidence_floor)
+        diagnostics["usefulness_gate"][plan.id] = {
+            "choice": usefulness["choice"],
+            "confidence": usefulness["confidence"],
+            "floor": confidence_floor,
+            "passed": useful,
+        }
         rejected = []
         if answers[plan.id + "/needs_observation"]["noul"] >= 0.5:
             rejected.append("missing_start_evidence")
-        if not gate["passed"]:
+        if usefulness["choice"] != "useful":
+            rejected.append("no_demonstrated_progress")
+        elif usefulness["confidence"] < confidence_floor:
+            rejected.append("low_usefulness_confidence")
+        # A negative ordinal judgment contradicts eligibility; never ignore it.
+        # Positive-level ambiguity and its reported confidence only affect rank.
+        probabilities = benefit["probabilities"]
+        if probabilities["0"] >= max(value for key, value in probabilities.items()
+                                     if key != "0"):
             rejected.append("low_benefit_confidence")
         if disruption["confidence"] < confidence_floor:
             rejected.append("low_disruption_confidence")

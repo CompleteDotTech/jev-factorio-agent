@@ -19,7 +19,7 @@ def batch():
 
 def test_explicit_question_references_and_full_mock_distributions():
     plans, context, questions = batch()
-    assert len(questions) == 1 + 3 * len(plans)
+    assert len(questions) == 1 + 4 * len(plans)
     for plan in plans:
         assert plan.id in questions[plan.id + "/benefit"]["instructions"]
     answers = MockJevClient().evaluate(context, questions)
@@ -131,7 +131,7 @@ def test_maximum_choice_uses_254_candidates_plus_observe():
     _, questions, offered = question_batch({}, plans, max_candidates=254, max_bytes=1000000)
     assert len(offered) == 254
     assert len(questions["candidate"]["criteria"]) == 255
-    assert len(questions) == 763  # schema construction only; no live provider call
+    assert len(questions) == 1017  # schema construction only; no live provider call
 
 
 @pytest.mark.parametrize(("probabilities", "score"), [
@@ -251,7 +251,7 @@ def test_level_zero_dominant_benefit_is_rejected_despite_confident_report():
     assert decision.diagnostics["candidate_rejections"]
 
 
-def test_benefit_gate_respects_a_higher_floor():
+def test_explicit_usefulness_gate_respects_a_higher_floor():
     plans, context, _ = batch()
 
     class WeakSupport(MockJevClient):
@@ -261,6 +261,8 @@ def test_benefit_gate_respects_a_higher_floor():
                 if key.endswith("/benefit"):
                     _benefit_answers(answers, key[:-len("/benefit")],
                                      {"0": 0.3, "1": 0.35, "2": 0.35}, 0.5)
+                elif key.endswith("/useful_progress"):
+                    answers[key]["confidence"] = 0.7
             return answers
 
     assert select_plan(WeakSupport(), context, plans).plan_id is not None
