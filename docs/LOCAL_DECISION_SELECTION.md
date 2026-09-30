@@ -68,6 +68,23 @@ disruption-confidence and `needs_observation` gates are unchanged, and passing
 the gate still grants no execution: native precondition, payment, receipt,
 capacity and postcondition checks decide whether the step counts.
 
+The request is bounded by serialized bytes, not provider tokens. The default
+budget is 48,000 bytes and `--max-request-bytes` (or `JEV_MAX_REQUEST_BYTES`)
+sets it within 8,000 to 262,144. On the live campaign one candidate with its
+context is about 26 KB and each further candidate about 10 KB, so the former
+32 KB budget offered a single candidate even when an executable second plan
+existed. When the budget drops candidates the controller prints the offered
+and dropped counts, the request size and the dropped plan IDs, and every
+decision records `request_bytes`, `max_request_bytes` and `pruned_candidate_ids`
+in its diagnostics. If all offered candidates are then rejected, the decision
+keeps the reason `Candidate evidence insufficient` and adds
+`alternatives_not_shown`, so a readback can tell "no alternative existed" from
+"alternatives were never shown".
+
+A budget change alters which candidates are offered but not the decision fingerprint, so a
+checkpoint already blocked and recorded under the old budget will not re-ask on its own;
+use `--reevaluate-blocked-once` after a decision-contract change.
+
 A failed JSON decode after a
 provider call remains attributed as a model call. A skipped call cannot inherit
 usage or resolved-model metadata from an earlier request.

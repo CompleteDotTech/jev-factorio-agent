@@ -265,3 +265,36 @@ def test_benefit_gate_respects_a_higher_floor():
 
     assert select_plan(WeakSupport(), context, plans).plan_id is not None
     assert select_plan(WeakSupport(), context, plans, confidence_floor=0.75).plan_id is None
+
+
+def test_all_rejected_with_pruned_candidates_reports_alternatives_not_shown():
+    plans = [Plan(str(i), "fuel", "gather", (Step("mine_coal", "inventory", "coal", 5),))
+             for i in range(6)]
+
+    class RejectEverything(MockJevClient):
+        def evaluate(self, state, questions):
+            answers = super().evaluate(state, questions)
+            for key in list(answers):
+                if key.endswith("/needs_observation"):
+                    answers[key]["noul"] = 0.9
+            return answers
+
+    def size(count):
+        context, questions, _ = question_batch({}, plans[:count], max_bytes=10 ** 6)
+        return len(json.dumps({"state": context, "questions": questions},
+                              ensure_ascii=False).encode("utf-8"))
+
+    budget = (size(2) + size(3)) // 2
+    _, _, offered = question_batch({}, plans, max_bytes=budget)
+    assert len(offered) == 2 < len(plans)
+    decision = select_plan(RejectEverything(), {}, plans, max_bytes=budget)
+    assert decision.plan_id is None and decision.reason == "Candidate evidence insufficient"
+    diagnostics = decision.diagnostics
+    assert diagnostics["outcome"] == "all_candidates_rejected"
+    assert diagnostics["alternatives_not_shown"] == diagnostics["pruned_candidate_ids"]
+    assert len(diagnostics["alternatives_not_shown"]) == len(plans) - len(offered)
+    assert diagnostics["max_request_bytes"] == budget
+    assert 0 < diagnostics["request_bytes"] <= budget
+    fits = select_plan(RejectEverything(), {}, plans, max_bytes=100000)
+    assert "alternatives_not_shown" not in fits.diagnostics
+    assert fits.diagnostics["pruned_candidate_ids"] == []
