@@ -81,7 +81,7 @@ def connector_snapshot_sha256(snapshot: dict) -> str:
 
 
 def connector_snapshot_observation_command(session_id: str, actor_unit: int) -> str:
-    """Build the only native command allowed to qualify the retained observer."""
+    """Build the coherent observer qualification command."""
     return '/sc ' + (
         'local rt=assert(jev_fle_runtime);local c=assert(rt.campaign);'
         'local b=assert(rt.connector_observer_bridge_v1);'
@@ -113,6 +113,62 @@ def _normalize_empty_connector_routes(snapshot):
     if isinstance(snapshot, dict) and snapshot.get('routes') == []:
         snapshot = {**snapshot, 'routes': {}}
     return snapshot
+
+
+
+def connector_ownership_only_snapshot_command_v1(session_id: str, actor_unit: int) -> str:
+    """Build a bounded direct query; never enter the factory/coal observer chain."""
+    if not (isinstance(session_id, str) and session_id
+            and type(actor_unit) is int and actor_unit >= 1):
+        raise ValueError('Invalid connector snapshot owner binding')
+    session = json.dumps(session_id)
+    actor = str(actor_unit)
+    return '/sc ' + (
+        'local rt=assert(jev_fle_runtime);local c=assert(rt.campaign);'
+        'local f=assert(rt.fair);local solid=assert(rt.solid_routes);'
+        'local b=assert(rt.connector_observer_bridge_v1);'
+        'local n=assert(rt.native_installation);local cb=assert(n.callbacks);'
+        'local a=assert(rt.agent_characters and rt.agent_characters[1]);'
+        'local p=assert(f.actor());local ledger=assert(c.connector_ledger);'
+        'assert(rt.jev_session_id==' + session + ' and n.session_id==' + session
+        + ' and n.actor_unit==' + actor + ');'
+        'assert(n.schema=="jev.native-installation.v2" and a.valid and a.unit_number==' + actor
+        + ' and p.connected and p.character==a and p.force==a.force and p.surface==a.surface);'
+        'assert(b.protocol==1 and b.observer==c.observe and c.observe==solid.observer '
+        'and b.snapshot_qualified~=true);'
+        'assert(cb.observe==c.observe and cb.connector_observe==c.observe_connector_ownership '
+        'and type(c.observe_connector_ownership)=="function");'
+        'assert(ledger.protocol==1 and type(ledger.routes)=="table" '
+        'and ledger.active==nil and next(ledger.routes)==nil);'
+        'local tick=game.tick;local ownership=c.observe_connector_ownership();'
+        'assert(type(ownership)=="table" and ownership.protocol==1 '
+        'and ownership.session_id==rt.jev_session_id and ownership.tick==tick '
+        'and ownership.active==nil and type(ownership.routes)=="table" '
+        'and next(ownership.routes)==nil);'
+        'assert(game.tick==tick and ledger.active==nil and next(ledger.routes)==nil);'
+        'local function copy(value) if type(value)~="table" then return value end;'
+        'local result={};for key,item in pairs(value) do result[copy(key)]=copy(item) end;'
+        'return result end;'
+        'b.snapshot_ownership=copy(ownership);b.snapshot_tick=tick;b.snapshot_qualified=true;'
+        'rcon.print(helpers.table_to_json({schema=1,session_id=rt.jev_session_id,'
+        'actor_unit=a.unit_number,tick=tick,connector_ownership=ownership}))'
+    )
+
+
+def connector_snapshot_command(session_id: str, actor_unit: int, *, mode: str = "coherent") -> str:
+    """Select an exact supported v1 qualification command; never accept arbitrary Lua."""
+    if mode == "coherent":
+        return connector_snapshot_observation_command(session_id, actor_unit)
+    if mode == "ownership-only-v1":
+        return connector_ownership_only_snapshot_command_v1(session_id, actor_unit)
+    raise ValueError("Unknown connector snapshot command mode")
+
+
+def connector_snapshot_command_sha256s(session_id: str, actor_unit: int) -> frozenset[str]:
+    """Allow only the two exact source-built v1 command variants."""
+    return frozenset(hashlib.sha256(connector_snapshot_command(
+        session_id, actor_unit, mode=mode).encode('utf-8')).hexdigest()
+        for mode in ('coherent', 'ownership-only-v1'))
 
 
 def _private_read(path: Path, *, maximum: int) -> bytes:
@@ -184,9 +240,9 @@ def _connector_witness(path, result: dict, receipt_path) -> None:
             or first['receipt_sha256'] != receipt_sha256
             or first['bridge_asset_sha256'] != result['native_installation']['assets'].get(
                 'connector_observer_bridge_v1')
-            or first['command_sha256'] != hashlib.sha256(
-                connector_snapshot_observation_command(
-                    result['session_id'], result['actor_unit']).encode('utf-8')).hexdigest()
+            or not isinstance(first['command_sha256'], str)
+            or first['command_sha256'] not in connector_snapshot_command_sha256s(
+                result['session_id'], result['actor_unit'])
             or any(not (isinstance(first[key], str) and len(first[key]) == 64
                         and all(c in '0123456789abcdef' for c in first[key]))
                    for key in ('checkpoint_sha256', 'receipt_sha256',

@@ -19,6 +19,8 @@ from .native_attachment import (
     connector_observer_bridge_sha256, connector_ownership_sha256,
     connector_snapshot_sha256, manual_journal_sha256, readback,
     connector_snapshot_observation_command as _snapshot_command,
+    connector_snapshot_command,
+    connector_snapshot_command_sha256s,
     _connector_witness, _normalize_empty_connector_routes,
 )
 from .native_manual_cycle_migration import (
@@ -451,8 +453,10 @@ def qualify_connector_snapshot_v1(
     witness_path: Path, expected_session_id: str, expected_actor_unit: int,
     expected_target: str, expected_checkpoint_sha256: str,
     expected_receipt_sha256: str, owner_lock_fd: int | None = None,
+    snapshot_mode: str = "coherent",
 ) -> dict:
-    """Call the retained observer once under a durable, owner-locked intent."""
+    """Qualify one supported snapshot command under a durable owner-locked intent."""
+    command = connector_snapshot_command(expected_session_id, expected_actor_unit, mode=snapshot_mode)
     if os.name != 'posix':
         raise RuntimeError('Native snapshot qualification requires the POSIX owner-lock host')
     checkpoint_path, receipt_path = Path(checkpoint_path), Path(receipt_path)
@@ -490,7 +494,6 @@ def qualify_connector_snapshot_v1(
                     MANUAL_CYCLE_PROFILE, CLOSED_WORLD_PROFILE}):
             raise RuntimeError('Connector snapshot bridge is not in its one-time qualification state')
         _snapshot_preflight(client, expected_session_id, expected_actor_unit)
-        command = _snapshot_command(expected_session_id, expected_actor_unit)
         if (_digest(_private_bytes(checkpoint_path)) != expected_checkpoint_sha256
                 or _digest(_private_bytes(receipt_path)) != expected_receipt_sha256):
             raise RuntimeError('Connector snapshot evidence changed before dispatch')
@@ -588,6 +591,8 @@ def reconcile_connector_snapshot_v1(
                 or any(not _sha256_text(first[name]) for name in (
                     'checkpoint_sha256', 'receipt_sha256', 'bridge_asset_sha256',
                     'command_sha256'))
+                or first['command_sha256'] not in connector_snapshot_command_sha256s(
+                    first['session_id'], first['actor_unit'])
                 or first['bridge_asset_sha256'] != connector_observer_bridge_sha256()
                 or not isinstance(first['lock_identity'], dict)
                 or set(first['lock_identity']) != {'device', 'inode'}
