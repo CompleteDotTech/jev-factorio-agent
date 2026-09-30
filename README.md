@@ -211,7 +211,9 @@ unchanged, resolved fingerprint, the invocation ends normally with the recovery 
 `idle_wait_exhausted`. The blocked status, attempts, stall and failure history are
 preserved and no model request is made; the checkpoint stays resumable with
 `--reevaluate-blocked-once` after a decision-contract change. The count is
-process-local, so a new invocation waits again. `0` disables the bound. An
+process-local, so a new invocation waits again. `0` disables the bound. The
+invocation exits normally in this case, but that is not success: the campaign is still
+blocked, and a launcher must not treat the exit as completion. An
 unresolved evaluation outcome is never abandoned by this bound.
 Provider, native, checkpoint, or owner-gate faults stop through the normal
 failure path. The mode requires resumed live FLE Jev control, a supervisor-pinned

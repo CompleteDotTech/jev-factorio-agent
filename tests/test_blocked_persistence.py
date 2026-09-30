@@ -871,3 +871,12 @@ def test_unresolved_decision_outcome_is_never_abandoned_by_the_idle_bound(
 def test_idle_observation_bound_is_validated(tmp_path, monkeypatch, bad):
     with pytest.raises(ValueError, match="idle observations"):
         _idle_loop(tmp_path, monkeypatch, idle_observations=bad)
+
+
+def test_large_tick_seconds_does_not_make_early_waits_count_as_idle(tmp_path, monkeypatch):
+    loop, _, _, _, _ = _idle_loop(tmp_path, monkeypatch, idle_observations=2)
+    loop.tick_seconds = 500.0
+    for _ in range(6):
+        loop.step()
+        assert loop.terminal is False
+    assert loop._persistent_idle_waits == 0

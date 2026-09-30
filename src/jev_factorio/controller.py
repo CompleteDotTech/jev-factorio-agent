@@ -245,13 +245,14 @@ class HierarchicalLoop(AgentLoop):
                     delay = float(2 ** min(self._persistent_runtime_wait_level, 8))
         else:
             delay = record_wait(self.memory, source, input_sha256)
+        backoff_delay = delay  # before any tick_seconds floor, so a large tick cannot fake idleness
         delay = max(self.tick_seconds, delay)
         attempt = find_attempt(self.memory, source, input_sha256,
                                archive_index=self._blocked_recovery_archive_index)
         unresolved = attempt is not None and attempt.get("outcome") == "pending"
         # An unresolved (possibly billed) decision is never abandoned here; only a
         # resolved, unchanged fingerprint already at the longest delay counts as idle.
-        if unresolved or delay < IDLE_DELAY_SECONDS:
+        if unresolved or backoff_delay < IDLE_DELAY_SECONDS:
             self._persistent_idle_waits = 0
         else:
             self._persistent_idle_waits += 1
