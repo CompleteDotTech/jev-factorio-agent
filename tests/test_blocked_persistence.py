@@ -84,6 +84,38 @@ def test_native_receipt_existence_and_item_identity_remain_in_fingerprint():
     assert after != before
 
 
+def test_recompiled_craft_job_uuid_does_not_retrigger_unchanged_decision():
+    from types import SimpleNamespace
+    from jev_factorio.background import BackgroundWorkLoop
+    from test_factory import recipe
+
+    owner = SimpleNamespace(catalog=SimpleNamespace(recipes={
+        "pipe": recipe("pipe", {"iron-plate": 1}),
+    }))
+    plan = Plan("craft-pipe", "steam_power", "Craft needed pipe", (
+        Step("factory_craft", "inventory", "pipe", 1, costs={"iron-plate": 1},
+             parameters={"recipe": "pipe", "batches": 1}),
+    ))
+    first = BackgroundWorkLoop._tracked_plan(owner, plan, None).to_dict()
+    second = BackgroundWorkLoop._tracked_plan(owner, plan, None).to_dict()
+    assert first["steps"][0]["parameters"]["receipt"] != second["steps"][0]["parameters"]["receipt"]
+
+    def digest(candidate, observed=None):
+        context = {"candidate_plans": {candidate["id"]: candidate}}
+        if observed is not None:
+            context["facts"] = {"factory": {"craft_job": observed}}
+        return persistence.decision_input_sha256(
+            context, [candidate], session_id="campaign-session", source_revision=SOURCE,
+            target="steam_power", policy="jev", confidence_floor=.45, current_tick=10)
+
+    assert digest(first) == digest(second)
+    assert digest(first, first["steps"][0]) != digest(first, second["steps"][0])
+    changed = deepcopy(second)
+    changed["steps"][0]["parameters"]["batches"] = 2
+    assert digest(changed) != digest(first)
+    assert first != second  # Hashing must not replace the receipts used by dispatch.
+
+
 def test_route_survey_cache_clock_churn_does_not_retrigger_selection():
     def inputs(tick, *, survey_tick, next_survey_tick, cached,
                receiver_count=0, reason="output_not_commissioned",

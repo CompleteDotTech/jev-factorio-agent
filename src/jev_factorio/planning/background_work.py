@@ -7,6 +7,7 @@ from dataclasses import replace
 
 from ..craft_jobs import CraftJob
 from ..skills import Plan, Step
+from ..factory_contract import connected
 from .ready_work import ReadyWorkPlanner
 from .demand import SupplyLedger
 from .scheduling import research_schedule, future_research_demands, future_research_plan
@@ -40,9 +41,17 @@ def independent_candidates(goal, snapshot, catalog, job: CraftJob | None = None,
     candidates = []
     worker = new_planner()
     # Keep the existing boiler alive while handcrafting; do not build new power.
-    if job and "utility:boiler" in worker.entities:
+    if (job and "utility:boiler" in worker.entities
+            and all(connected(snapshot.factory, source, target, kind, fluid)
+                    for source, target, kind, fluid in (
+                        ("utility:water", "utility:boiler", "pipe", "water"),
+                        ("utility:boiler", "utility:engine", "pipe", "steam"),
+                        ("utility:engine", "utility:lab", "small-electric-pole", "electricity"),
+                    ))):
         try:
-            maintenance = worker._fuel("utility:boiler", ())
+            research = snapshot.factory.get("research")
+            path = ("technology:" + research,) if research else ()
+            maintenance = worker._powered("utility:lab", path)
             if maintenance:
                 candidates.append(maintenance)
         except (KeyError, ValueError):

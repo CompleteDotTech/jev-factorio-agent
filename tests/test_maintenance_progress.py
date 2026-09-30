@@ -79,14 +79,38 @@ def test_depleted_output_still_services_required_input_route():
     assert plan.steps[0].parameters['item'] == 'coal'
 
 
-def test_boiler_emergency_still_precedes_science(tmp_path):
+def connected_power_plant(state, *, fuel=1):
+    """Model an operating plant, including the actual lab supply topology."""
+    state.factory['entities']['utility:lab']['electric_network_id'] = 9
+    state.factory['entities'].update({
+        'utility:water': machine('offshore-pump', unit_number=902,
+            fluid_ports=[{'id': 91, 'fluid': 'water'}]),
+        'utility:boiler': machine('boiler', unit_number=901, fuel={'coal': fuel},
+            fluid_ports=[{'id': 91, 'fluid': 'water'}, {'id': 92, 'fluid': 'steam'}]),
+        'utility:engine': machine('steam-engine', unit_number=903, electric_network_id=9,
+            fluid_ports=[{'id': 92, 'fluid': 'steam'}]),
+    })
+
+
+@pytest.mark.parametrize('connected', [False, True])
+def test_boiler_emergency_requires_connected_plant_before_science(tmp_path, connected):
     backend, _ = progress_scenario()
     backend.state.factory['entities']['utility:boiler'] = machine(
         'boiler', unit_number=901, fuel={'coal': 1})
+    if connected:
+        connected_power_plant(backend.state)
     loop = controller(backend, tmp_path, kind=RouteLoop)
     plans, _ = loop._compile_candidates(backend.state)
-    assert plans and plans[0].steps[0].parameters['role'] == 'utility:boiler'
-    assert plans[0].steps[0].parameters['item'] == 'coal'
+    assert plans
+    step = plans[0].steps[0]
+    if connected:
+        assert step.action == 'factory_insert'
+        assert step.parameters['role'] == 'utility:boiler'
+        assert step.parameters['item'] == 'coal'
+        assert step.parameters['quantity'] == 4
+    else:
+        assert step.parameters.get('role') != 'utility:boiler'
+        assert plans[0].materials['utility_power_prerequisite']['consumer_role'] == 'utility:lab'
 
 
 def test_fault_retains_execution_barrier_and_failure_history(tmp_path):
