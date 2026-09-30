@@ -12,7 +12,7 @@ from jev_factorio.backends.native_attachment import (
     LEGACY_MANUAL_CYCLE_PROFILE, MANUAL_CYCLE_PROFILE, PINNED_ASSETS,
     PINNED_SOURCE_COMMIT, PINNED_SOURCE_TREE, PROBE,
     connector_observer_bridge_sha256, connector_ownership_sha256,
-    manual_journal_sha256, readback,
+    manual_journal_sha256, readback, connector_snapshot_command,
 )
 from jev_factorio.backends.native_connector_observation_migration import (
     INTENT_NAME, SENTINEL, _command, _manifest, _preflight,
@@ -263,7 +263,8 @@ def test_preflight_rejects_any_nonempty_or_ambiguous_native_state():
             _preflight(Client(changed.items()), 'retained-session', 2543)
 
 
-def test_bridge_attachment_requires_emitted_snapshot_and_matching_durable_witness(tmp_path):
+@pytest.mark.parametrize("snapshot_mode", ["coherent", "ownership-only-v1"])
+def test_bridge_attachment_requires_emitted_snapshot_and_matching_durable_witness(tmp_path, snapshot_mode):
     row = installed_repaired_v5()
 
     class Client:
@@ -273,11 +274,11 @@ def test_bridge_attachment_requires_emitted_snapshot_and_matching_durable_witnes
 
     with pytest.raises(RuntimeError, match='one-use native qualification'):
         readback(Client())
-    receipt, witness = write_snapshot_witness(tmp_path, row)
+    receipt, witness = write_snapshot_witness(tmp_path, row, snapshot_mode=snapshot_mode)
     witness.unlink()
     with pytest.raises(RuntimeError, match='fixed durable witness'):
         readback(Client(), receipt_path=receipt, connector_witness_path=witness)
-    receipt, witness = write_snapshot_witness(tmp_path, row, receipt_path=receipt)
+    receipt, witness = write_snapshot_witness(tmp_path, row, receipt_path=receipt, snapshot_mode=snapshot_mode)
     row['connector_snapshot_ownership']['routes'] = []
     qualified = readback(Client(), receipt_path=receipt, connector_witness_path=witness)
     assert qualified['connector_snapshot_qualified'] is True
@@ -289,7 +290,7 @@ def test_bridge_attachment_requires_emitted_snapshot_and_matching_durable_witnes
     with pytest.raises(RuntimeError, match='witness identity changed'):
         readback(Client(), receipt_path=receipt, connector_witness_path=witness)
     events[0]['command_sha256'] = hashlib.sha256(
-        _snapshot_command(row['session_id'], row['actor_unit']).encode('utf-8')).hexdigest()
+        connector_snapshot_command(row['session_id'], row['actor_unit'], mode=snapshot_mode).encode('utf-8')).hexdigest()
     events[-1]['snapshot_sha256'] = '0' * 64
     witness.write_text(''.join(json.dumps(event) + '\n' for event in events))
     witness.chmod(0o600)
@@ -415,9 +416,10 @@ def test_owner_locked_repair_is_one_use_and_readback_only_after_ambiguity(
 
 @pytest.mark.skipif(os.name != 'posix', reason='owner lock requires POSIX')
 @pytest.mark.parametrize('outcome', ['ack', 'lost_ack', 'unknown_before_apply'])
+@pytest.mark.parametrize('snapshot_mode', ['coherent', 'ownership-only-v1'])
 @pytest.mark.parametrize('external_lock', [False, True])
 def test_native_snapshot_qualification_is_journaled_one_shot_and_reconciles_without_observing(
-        tmp_path, outcome, external_lock):
+        tmp_path, outcome, external_lock, snapshot_mode):
     import fcntl
 
     checkpoint = tmp_path / 'controller.json'
@@ -467,7 +469,7 @@ def test_native_snapshot_qualification_is_journaled_one_shot_and_reconciles_with
                     'ledger_protocol': 1, 'ledger_active': False, 'ledger_routes': 0,
                     'journal_protocol': 1, 'journal_pending': False, 'journal_rows': 0,
                     'coal_committed': False, 'coal_pending': False, 'actor_idle': True})
-            if 'local factory=c.observe();' in command:
+            if command == connector_snapshot_command('retained-session', 2543, mode=snapshot_mode):
                 self.dispatches += 1
                 if outcome == 'unknown_before_apply':
                     raise ConnectionError('ambiguous snapshot probe')
@@ -486,7 +488,7 @@ def test_native_snapshot_qualification_is_journaled_one_shot_and_reconciles_with
     client = Client()
     kwargs = dict(checkpoint_path=checkpoint, receipt_path=receipt, lock_path=lock,
                   witness_path=witness, expected_session_id='retained-session',
-                  expected_actor_unit=2543, expected_target='rocket_launch',
+                  expected_actor_unit=2543, expected_target='rocket_launch', snapshot_mode=snapshot_mode,
                   expected_checkpoint_sha256=hashlib.sha256(checkpoint_bytes).hexdigest(),
                   expected_receipt_sha256=hashlib.sha256(receipt_bytes).hexdigest())
 
@@ -510,6 +512,18 @@ def test_native_snapshot_qualification_is_journaled_one_shot_and_reconciles_with
             invoke()
     assert independent_available()
     assert client.dispatches == 1
+    if outcome == 'lost_ack':
+        original_witness = witness.read_bytes()
+        corrupt = _intent_events(witness)
+        corrupt[0]['command_sha256'] = '0' * 64
+        witness.write_text(''.join(json.dumps(event)+'\n' for event in corrupt))
+        rejected_witness = witness.read_bytes()
+        with pytest.raises(RuntimeError, match='intent requires reconciliation'):
+            reconcile_connector_snapshot_v1(
+                client, checkpoint_path=checkpoint, receipt_path=receipt,
+                lock_path=lock, witness_path=witness)
+        assert witness.read_bytes() == rejected_witness
+        witness.write_bytes(original_witness)
     status = reconcile_connector_snapshot_v1(
         client, checkpoint_path=checkpoint, receipt_path=receipt,
         lock_path=lock, witness_path=witness)

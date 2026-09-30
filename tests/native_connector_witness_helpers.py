@@ -7,7 +7,7 @@ from jev_factorio.backends.native_attachment import (
     CONNECTOR_OBSERVER_WITNESS_NAME, PINNED_ASSETS,
     PINNED_SOURCE_COMMIT, PINNED_SOURCE_TREE,
     connector_observer_bridge_sha256, connector_snapshot_sha256,
-    connector_snapshot_observation_command,
+    connector_snapshot_command,
 )
 
 
@@ -20,7 +20,7 @@ def qualify_snapshot_row(row, *, tick=900):
     return snapshot
 
 
-def write_snapshot_witness(directory, row, *, receipt_path=None):
+def write_snapshot_witness(directory, row, *, receipt_path=None, snapshot_mode="coherent"):
     directory = Path(directory)
     receipt = Path(receipt_path) if receipt_path is not None else directory / 'attachment.json'
     if receipt_path is None:
@@ -42,8 +42,8 @@ def write_snapshot_witness(directory, row, *, receipt_path=None):
          'receipt_sha256': hashlib.sha256(receipt_bytes).hexdigest(),
          'lock_identity': {'device': 1, 'inode': 2},
          'bridge_asset_sha256': connector_observer_bridge_sha256(),
-         'command_sha256': hashlib.sha256(connector_snapshot_observation_command(
-             row['session_id'], row['actor_unit']).encode('utf-8')).hexdigest()},
+         'command_sha256': hashlib.sha256(connector_snapshot_command(
+             row['session_id'], row['actor_unit'], mode=snapshot_mode).encode('utf-8')).hexdigest()},
         {'phase': 'qualified', 'snapshot_tick': snapshot['tick'],
          'snapshot_sha256': connector_snapshot_sha256(snapshot)},
     ]
