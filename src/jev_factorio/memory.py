@@ -40,6 +40,9 @@ class CampaignMemory:
     capital_investment: dict | None = None
     blocked_reevaluations: list[dict] = field(default_factory=list)
     blocked_recovery: dict | None = None
+    # Keep this optional extension after the legacy fields so positional
+    # CampaignMemory construction retains its historical argument order.
+    blocked_recovery_archive: dict | None = None
 
     def event(self, kind: str, **details) -> None:
         self.history.append({"kind": kind, **details})
@@ -65,7 +68,11 @@ class CampaignMemory:
 
     @classmethod
     def load(cls, path: Path, session_id: str, target: str) -> CampaignMemory:
-        return cls.from_bytes(path.read_bytes(), session_id, target)
+        memory = cls.from_bytes(path.read_bytes(), session_id, target)
+        if memory.blocked_recovery_archive is not None:
+            from .blocked_recovery_archive import build_index
+            memory._blocked_recovery_archive_index = build_index(path, memory)
+        return memory
 
     @classmethod
     def from_bytes(cls, raw: bytes, session_id: str, target: str) -> CampaignMemory:
@@ -208,6 +215,22 @@ class CampaignMemory:
             if memory.blocked_recovery is not None:
                 from .blocked_persistence import _validate_state
                 _validate_state(memory.blocked_recovery, memory.session_id)
+            if memory.blocked_recovery_archive is not None:
+                archive = memory.blocked_recovery_archive
+                required = {"schema", "session_id", "target", "entry_count",
+                            "segment_count", "head_sha256"}
+                if (not isinstance(archive, dict) or set(archive) != required
+                        or type(archive["schema"]) is not int or archive["schema"] != 1
+                        or archive["session_id"] != memory.session_id
+                        or archive["target"] != memory.target
+                        or type(archive["entry_count"]) is not int or archive["entry_count"] < 1
+                        or type(archive["segment_count"]) is not int or archive["segment_count"] < 1
+                        or archive["entry_count"] < archive["segment_count"]
+                        or archive["entry_count"] > archive["segment_count"] * 1024
+                        or type(archive["head_sha256"]) is not str
+                        or re.fullmatch(r"[0-9a-f]{64}", archive["head_sha256"]) is None
+                        or memory.blocked_recovery is None):
+                    raise ValueError("Invalid blocked-recovery archive pointer")
             return memory
         except (TypeError, KeyError, AttributeError, json.JSONDecodeError) as error:
             raise ValueError("Invalid controller checkpoint; refusing to reset it") from error
@@ -256,4 +279,8 @@ def load_checkpoint(path: Path, session_id: str, target: str) -> CampaignMemory:
         if not CHECKPOINT_FIELDS <= data.keys():
             raise ValueError("Incomplete coal checkpoint extension")
         loop_type = coal_loop_type(loop_type)
-    return loop_type.memory_type.from_bytes(raw, session_id, target)
+    memory = loop_type.memory_type.from_bytes(raw, session_id, target)
+    if memory.blocked_recovery_archive is not None:
+        from .blocked_recovery_archive import build_index
+        memory._blocked_recovery_archive_index = build_index(path, memory)
+    return memory

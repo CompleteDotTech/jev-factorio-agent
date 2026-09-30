@@ -288,6 +288,7 @@ def test_snapshot_excludes_transient_verification_counters(tmp_path):
     expected = asdict(memory)
     expected.pop('capital_investment', None)
     expected.pop('blocked_recovery', None)
+    expected.pop('blocked_recovery_archive', None)
     assert persisted == expected == checkpoint_data(memory)
     assert not any('verification' in key or 'sync_calls' in key for key in persisted)
 

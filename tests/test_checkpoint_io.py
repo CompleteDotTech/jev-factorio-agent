@@ -40,6 +40,7 @@ def test_identical_bytes_skip_but_every_changed_state_is_written(tmp_path, monke
     expected = asdict(memory)
     expected.pop('capital_investment', None)
     expected.pop('blocked_recovery', None)
+    expected.pop('blocked_recovery_archive', None)
     assert saved == expected == checkpoint_data(memory)
     expected_payload = json.dumps(expected, sort_keys=True, allow_nan=False).encode('utf-8')
     assert path.read_bytes() == expected_payload

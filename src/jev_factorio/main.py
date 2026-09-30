@@ -486,6 +486,25 @@ def cli() -> None:
                 loop_type = campaign_loop_type(loop_type)
                 options.update(lead_time_supply=args.lead_time_supply,
                                coverage_margin_lookahead=args.coverage_margin_lookahead)
+            if args.checkpoint and Path(args.checkpoint).is_file():
+                try:
+                    import json
+                    path = Path(args.checkpoint)
+                    captured = path.read_bytes()
+                    checkpoint_data = json.loads(captured.decode("utf-8"))
+                    if (isinstance(checkpoint_data, dict)
+                            and checkpoint_data.get("blocked_recovery_archive") is not None):
+                        if not args.resume_controller:
+                            raise ValueError("An archived blocked-recovery checkpoint must be resumed")
+                        from .memory import load_checkpoint
+                        verified = load_checkpoint(path, checkpoint_data.get("session_id"), args.target)
+                        index = getattr(verified, "_blocked_recovery_archive_index", None)
+                        if index is not None:
+                            index.close()
+                        if path.read_bytes() != captured:
+                            raise ValueError("Checkpoint or blocked-recovery archive changed during preflight")
+                except (OSError, UnicodeError, ValueError, TypeError, KeyError, AttributeError) as error:
+                    p.error(f"Blocked-recovery archive preflight failed: {error}")
             if args.backend == "fle":
                 from .operational_safety import storage_ready
                 output_roots = [Path(args.checkpoint).parent]
@@ -516,10 +535,16 @@ def cli() -> None:
             if args.reevaluate_blocked_once:
                 try:
                     from .blocked_reevaluation import validate_checkpoint_capture
-                    validate_checkpoint_capture(blocked_checkpoint_capture,
-                                                args.exact_checkpoint_sha256,
-                                                loop_type.memory_type, args.target, 4,
-                                                blocked_reevaluation_source["decision_contract_sha256"])
+                    preflight_memory = validate_checkpoint_capture(
+                        blocked_checkpoint_capture, args.exact_checkpoint_sha256,
+                        loop_type.memory_type, args.target, 4,
+                        blocked_reevaluation_source["decision_contract_sha256"],
+                        checkpoint_path=Path(args.checkpoint))
+                    # The CLI preflight only needs to validate the archive. The
+                    # live controller builds its own bounded index after restore.
+                    index = getattr(preflight_memory, "_blocked_recovery_archive_index", None)
+                    if index is not None:
+                        index.close()
                     if Path(args.checkpoint).read_bytes() != blocked_checkpoint_capture:
                         raise ValueError('Checkpoint changed during blocked-decision preflight')
                 except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:

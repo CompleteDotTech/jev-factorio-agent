@@ -181,6 +181,23 @@ def test_route_diagnostic_clock_keys_are_ignored_only_at_known_route_paths():
     assert after != before
 
 
+def test_archive_commit_bookkeeping_alone_does_not_authorize_a_model_retry():
+    state, plans = _inputs(100)
+
+    def digest(value):
+        return persistence.decision_input_sha256(
+            value, plans, session_id="campaign-session", source_revision=SOURCE,
+            target="rocket_launch", policy="jev", confidence_floor=0.45,
+            current_tick=100)
+
+    baseline = digest(state)
+    state["history"].append({
+        "kind": "blocked_recovery_archive_committed",
+        "head_sha256": "a" * 64, "archived_entries": 1024,
+    })
+    assert digest(state) == baseline
+
+
 def test_recovery_ledger_is_durable_unique_and_fail_closed_on_unseeded_block(tmp_path):
     memory = CampaignMemory("campaign-session", "rocket_launch", status="blocked",
                             reason="low choice confidence", stalled_decisions=5)

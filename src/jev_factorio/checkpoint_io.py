@@ -179,6 +179,8 @@ def _same_value(live, captured) -> bool:
 def _same_memory(memory, captured: dict) -> bool:
     names = [field.name for field in fields(memory)
              if (field.name != 'capital_investment' or memory.capital_investment is not None)
+             and (field.name != 'blocked_recovery_archive'
+                  or memory.blocked_recovery_archive is not None)
              and (field.name != 'blocked_recovery' or memory.blocked_recovery is not None)]
     return (len(names) == len(captured)
             and all(name in captured and _same_value(getattr(memory, name), captured[name])
@@ -193,7 +195,7 @@ def checkpoint_data(memory) -> dict:
     exactly; unrelated ``None`` fields remain part of the schema.
     """
     data = asdict(memory)
-    for name in ('capital_investment', 'blocked_recovery'):
+    for name in ('capital_investment', 'blocked_recovery_archive', 'blocked_recovery'):
         if data.get(name) is None:
             data.pop(name, None)
     return data

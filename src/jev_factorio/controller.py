@@ -125,9 +125,13 @@ class HierarchicalLoop(AgentLoop):
             ):
                 raise ValueError("Blocked decision source differs from supervised source provenance")
             raw = self.checkpoint.read_bytes()
-            validate_checkpoint_capture(
+            preflight_memory = validate_checkpoint_capture(
                 raw, exact_checkpoint_sha256, self.memory_type, target,
-                self.max_stalled_decisions, source["decision_contract_sha256"])
+                self.max_stalled_decisions, source["decision_contract_sha256"],
+                checkpoint_path=self.checkpoint)
+            preflight_index = getattr(preflight_memory, "_blocked_recovery_archive_index", None)
+            if preflight_index is not None:
+                preflight_index.close()
             if self.checkpoint.read_bytes() != raw:
                 raise ValueError("Controller checkpoint changed during blocked-decision preflight")
             self._blocked_reevaluation_checkpoint_sha256 = exact_checkpoint_sha256
@@ -138,6 +142,7 @@ class HierarchicalLoop(AgentLoop):
                     or getattr(jev, "is_mock", False) or not isinstance(revision, dict)):
                 raise ValueError("Persistent blocked recovery requires resumed live Jev control and source provenance")
         self.memory: CampaignMemory | None = None
+        self._blocked_recovery_archive_index = None
         self._decision: Decision | None = None
         self._process_id = uuid4().hex
         self._attempt_clock: tuple[str, float] | None = None
@@ -204,6 +209,13 @@ class HierarchicalLoop(AgentLoop):
             return max(self.tick_seconds, float(2 ** max(1, min(self._persistent_runtime_wait_level, 8))))
         return max(self.tick_seconds, wait_seconds(self.memory))
 
+    def _blocked_recovery_attempt_count(self) -> int:
+        if self.memory is None or self.memory.blocked_recovery is None:
+            return 0
+        archive = self.memory.blocked_recovery_archive
+        return ((archive["entry_count"] if archive is not None else 0)
+                + len(self.memory.blocked_recovery["attempts"]))
+
     def _persistent_wait(self, snapshot: GameSnapshot, input_sha256: str, *,
                          source_authorized: bool = False) -> dict:
         """Persist one observation-only wait while retaining the blocked state."""
@@ -223,7 +235,8 @@ class HierarchicalLoop(AgentLoop):
         else:
             delay = record_wait(self.memory, source, input_sha256)
         delay = max(self.tick_seconds, delay)
-        attempt = find_attempt(self.memory, source, input_sha256)
+        attempt = find_attempt(self.memory, source, input_sha256,
+                               archive_index=self._blocked_recovery_archive_index)
         unresolved = attempt is not None and attempt.get("outcome") == "pending"
         self._persistent_recovery_status = {
             "phase": ("evaluation_outcome_unknown_waiting" if unresolved
@@ -232,8 +245,7 @@ class HierarchicalLoop(AgentLoop):
             "next_observation_seconds": delay,
             "model_call": False,
             "decision_input_sha256": input_sha256,
-            "recorded_attempts": (len(self.memory.blocked_recovery["attempts"])
-                                  if self.memory.blocked_recovery is not None else 0),
+            "recorded_attempts": self._blocked_recovery_attempt_count(),
         }
         outcome = ("Decision outcome unresolved; observing for changed evidence" if unresolved
                    else "Blocked; waiting for changed game evidence")
@@ -252,15 +264,18 @@ class HierarchicalLoop(AgentLoop):
                 persistent_outcome=outcome)
             return
         from .blocked_persistence import RECOVERABLE_REASONS, finish_attempt, record_attempt
+        self._archive_full_recovery_tail()
         prior_recovery = deepcopy(self.memory.blocked_recovery)
         prior_history = deepcopy(self.memory.history)
         try:
             reason = self.memory.reason if self.memory.reason in RECOVERABLE_REASONS else None
             record_attempt(self.memory, self.provenance["code_revision"], input_sha256,
-                           reason, snapshot.tick)
+                           reason, snapshot.tick,
+                           archive_index=self._blocked_recovery_archive_index)
             if outcome != "pending":
                 finish_attempt(self.memory, self.provenance["code_revision"], input_sha256,
-                               outcome, reason)
+                               outcome, reason,
+                               archive_index=self._blocked_recovery_archive_index)
             self.memory.event(
                 "blocked_recovery_attempt", decision_input_sha256=input_sha256,
                 tick=snapshot.tick, source_head=self.provenance["code_revision"]["commit"])
@@ -270,13 +285,71 @@ class HierarchicalLoop(AgentLoop):
             self.memory.history = prior_history
             raise
 
+    def _archive_full_recovery_tail(self) -> None:
+        """Commit a full attempt tail to immutable history before a new WAL row."""
+        from .blocked_persistence import MAX_ATTEMPTS
+        if (self.memory.blocked_recovery is None
+                or len(self.memory.blocked_recovery["attempts"]) < MAX_ATTEMPTS):
+            return
+        from .blocked_recovery_archive import archive_full_tail
+        old_index = self._blocked_recovery_archive_index
+        # First establish a durable base for classifying any failure from the
+        # pointer commit below. A failed save can occur either before or after
+        # replacement; the controller must stop and restore memory from the
+        # exact bytes that remain authoritative on disk.
+        self._save()
+        prior_bytes = self.checkpoint.read_bytes()
+        new_index = archive_full_tail(self.checkpoint, self.memory)
+        from .checkpoint_io import checkpoint_data
+        expected_new = json.dumps(checkpoint_data(self.memory), sort_keys=True,
+                                  allow_nan=False).encode("utf-8")
+        try:
+            self._save()
+        except BaseException:
+            new_index.close()
+            try:
+                actual = self.checkpoint.read_bytes()
+                if actual == prior_bytes:
+                    restored = self.memory_type.from_bytes(
+                        actual, self.memory.session_id, self.target)
+                    restored._checkpoint_cache = None
+                    if old_index is not None:
+                        self._blocked_recovery_archive_index = old_index
+                        restored._blocked_recovery_archive_index = old_index
+                elif actual == expected_new:
+                    restored = self.memory_type.from_bytes(
+                        actual, self.memory.session_id, self.target)
+                    restored._checkpoint_cache = None
+                    from .blocked_recovery_archive import build_index
+                    restored_index = build_index(self.checkpoint, restored)
+                    self._blocked_recovery_archive_index = restored_index
+                    restored._blocked_recovery_archive_index = restored_index
+                    if old_index is not None:
+                        old_index.close()
+                else:
+                    raise ValueError("Checkpoint bytes match neither side of archive rotation")
+                self.memory = restored
+            except BaseException as reconciliation_error:
+                # _save has already latched _persistence_failed. A state that
+                # cannot be reconciled is unusable and must never reach observe.
+                self.memory = None
+                raise RuntimeError(
+                    "Archive rotation failed and checkpoint state could not be reconciled"
+                ) from reconciliation_error
+            raise
+        self._blocked_recovery_archive_index = new_index
+        self.memory._blocked_recovery_archive_index = new_index
+        if old_index is not None:
+            old_index.close()
+
     def _blocked_frontier_wait(self, snapshot: GameSnapshot, input_sha256: str, *,
                                source_authorized: bool = False,
                                authorization_reason: str | None = None) -> dict:
         """Authorize and record a no-candidate frontier without calling the model."""
         from .blocked_persistence import was_attempted
         if was_attempted(self.memory, self.provenance["code_revision"], input_sha256,
-                         allow_source_change=source_authorized):
+                         allow_source_change=source_authorized,
+                         archive_index=self._blocked_recovery_archive_index):
             return self._persistent_wait(snapshot, input_sha256)
         self._record_persistent_attempt(snapshot, input_sha256,
                                         source_authorized=source_authorized,
@@ -289,7 +362,7 @@ class HierarchicalLoop(AgentLoop):
             "next_observation_seconds": wait,
             "model_call": False,
             "decision_input_sha256": input_sha256,
-            "recorded_attempts": len(self.memory.blocked_recovery["attempts"]),
+            "recorded_attempts": self._blocked_recovery_attempt_count(),
         }
         return self._record(snapshot, "observe", "Blocked; waiting for changed game evidence")
 
@@ -341,12 +414,15 @@ class HierarchicalLoop(AgentLoop):
             memory = validate_checkpoint_capture(
                 raw, self._blocked_reevaluation_checkpoint_sha256, self.memory_type,
                 self.target, self.max_stalled_decisions,
-                self._blocked_reevaluation_source["decision_contract_sha256"])
+                self._blocked_reevaluation_source["decision_contract_sha256"],
+                checkpoint_path=self.checkpoint)
             if memory.session_id != snapshot.session_id or self.checkpoint.read_bytes() != raw:
                 raise ValueError("Blocked decision checkpoint identity changed during restore")
         else:
             memory = (self.memory_type.load(self.checkpoint, snapshot.session_id, self.target)
                       if self.resume_controller else self.memory_type(snapshot.session_id, self.target))
+        self._blocked_recovery_archive_index = getattr(
+            memory, "_blocked_recovery_archive_index", None)
         if self.persist_recoverable_blocks:
             from .blocked_persistence import validate_memory_state
             validate_memory_state(
@@ -374,6 +450,8 @@ class HierarchicalLoop(AgentLoop):
         ledger_reason = authorization_reason or self.memory.reason
         if ledger_reason not in {"Candidate evidence insufficient", "low choice confidence"}:
             raise ValueError("Blocked decision re-evaluation reason is not eligible")
+        if persistent_input is not None:
+            self._archive_full_recovery_tail()
         prior_history = deepcopy(self.memory.history)
         prior_ledger = deepcopy(self.memory.blocked_reevaluations)
         prior_recovery = deepcopy(self.memory.blocked_recovery)
@@ -398,10 +476,12 @@ class HierarchicalLoop(AgentLoop):
             if persistent_input is not None:
                 from .blocked_persistence import finish_attempt, record_attempt
                 record_attempt(self.memory, self.provenance["code_revision"], persistent_input,
-                               self.memory.reason, snapshot.tick, allow_source_change=True)
+                               self.memory.reason, snapshot.tick, allow_source_change=True,
+                               archive_index=self._blocked_recovery_archive_index)
                 if persistent_outcome != "pending":
                     finish_attempt(self.memory, self.provenance["code_revision"], persistent_input,
-                                   persistent_outcome, self.memory.reason)
+                                   persistent_outcome, self.memory.reason,
+                                   archive_index=self._blocked_recovery_archive_index)
                 self.memory.event("blocked_recovery_attempt", decision_input_sha256=persistent_input,
                                   tick=snapshot.tick,
                                   source_head=self.provenance["code_revision"]["commit"])
@@ -1271,7 +1351,8 @@ class HierarchicalLoop(AgentLoop):
                     input_sha256 = planner_input_sha256(
                         snapshot, [plan.to_dict() for plan in plans], blocker or self.memory.reason,
                         source_revision=self.provenance["code_revision"], target=self.target)
-                    if was_attempted(self.memory, self.provenance["code_revision"], input_sha256):
+                    if was_attempted(self.memory, self.provenance["code_revision"], input_sha256,
+                                     archive_index=self._blocked_recovery_archive_index):
                         return self._persistent_wait(snapshot, input_sha256)
                     return self._blocked_frontier_wait(
                         snapshot, input_sha256, source_authorized=blocked_reevaluation,
@@ -1353,7 +1434,8 @@ class HierarchicalLoop(AgentLoop):
                     if was_attempted(
                             self.memory, self.provenance["code_revision"],
                             persistent_input_sha256,
-                            allow_source_change=blocked_reevaluation):
+                            allow_source_change=blocked_reevaluation,
+                            archive_index=self._blocked_recovery_archive_index):
                         return self._persistent_wait(snapshot, persistent_input_sha256)
                     if blocked_reevaluation:
                         # Consume both gates and record this exact input in one
@@ -1369,7 +1451,7 @@ class HierarchicalLoop(AgentLoop):
                         "reason": self.memory.reason,
                         "model_call": True,
                         "decision_input_sha256": persistent_input_sha256,
-                        "recorded_attempts": len(self.memory.blocked_recovery["attempts"]),
+                        "recorded_attempts": self._blocked_recovery_attempt_count(),
                     }
                 elif (self.persist_recoverable_blocks and self.memory.status == "running"
                       and self.memory.stalled_decisions + 1 >= self.max_stalled_decisions):
@@ -1384,7 +1466,8 @@ class HierarchicalLoop(AgentLoop):
                         policy=self.policy, confidence_floor=self.confidence_floor,
                         current_tick=snapshot.tick)
                     if find_attempt(self.memory, self.provenance["code_revision"],
-                                    persistent_input_sha256) is not None:
+                                    persistent_input_sha256,
+                                    archive_index=self._blocked_recovery_archive_index) is not None:
                         return self._persistent_wait(snapshot, persistent_input_sha256)
                     self._record_persistent_attempt(
                         snapshot, persistent_input_sha256)
@@ -1401,7 +1484,8 @@ class HierarchicalLoop(AgentLoop):
                     if persistent_input_sha256 is not None:
                         from .blocked_persistence import finish_attempt
                         finish_attempt(self.memory, self.provenance["code_revision"],
-                                       persistent_input_sha256, "provider_blocked")
+                                       persistent_input_sha256, "provider_blocked",
+                                       archive_index=self._blocked_recovery_archive_index)
                         self._persistent_recovery_status = {
                             "phase": "provider_blocked", "reason": self._decision.reason,
                             "model_call": self._decision.model_called,
@@ -1425,10 +1509,12 @@ class HierarchicalLoop(AgentLoop):
                         if self._decision.reason in RECOVERABLE_REASONS:
                             finish_attempt(self.memory, self.provenance["code_revision"],
                                            persistent_input_sha256, "rejected",
-                                           self._decision.reason)
+                                           self._decision.reason,
+                                           archive_index=self._blocked_recovery_archive_index)
                         else:
                             finish_attempt(self.memory, self.provenance["code_revision"],
-                                           persistent_input_sha256, "failed")
+                                           persistent_input_sha256, "failed",
+                                           archive_index=self._blocked_recovery_archive_index)
                     if (persistent_input_sha256 is not None
                             and self._persistent_block_active()):
                         wait = self.persistent_recovery_wait_seconds()
@@ -1442,7 +1528,7 @@ class HierarchicalLoop(AgentLoop):
                             "next_observation_seconds": wait,
                             "model_call": self._decision.model_called,
                             "decision_input_sha256": persistent_input_sha256,
-                            "recorded_attempts": len(self.memory.blocked_recovery["attempts"]),
+                            "recorded_attempts": self._blocked_recovery_attempt_count(),
                         }
                     return self._record(snapshot, "observe", self.memory.reason)
             from .capital_controller import commit as commit_capital
@@ -1461,7 +1547,7 @@ class HierarchicalLoop(AgentLoop):
                         "reason": "Selection committed; action still requires ordinary native verification",
                         "model_call": self._decision.model_called,
                         "decision_input_sha256": persistent_input_sha256,
-                        "recorded_attempts": len(self.memory.blocked_recovery["attempts"]),
+                        "recorded_attempts": self._blocked_recovery_attempt_count(),
                     }
             self.memory.active_plan = chosen.to_dict()
             self.memory.step_index = 0
@@ -1473,7 +1559,8 @@ class HierarchicalLoop(AgentLoop):
             if persistent_input_sha256 is not None:
                 from .blocked_persistence import finish_attempt
                 finish_attempt(self.memory, self.provenance["code_revision"],
-                               persistent_input_sha256, "selected")
+                               persistent_input_sha256, "selected",
+                               archive_index=self._blocked_recovery_archive_index)
             self._save()
             if self._trace.enabled:
                 self._trace.emit("plan_committed", {"plan_id": chosen.id, "plan": chosen.to_dict(),
