@@ -54,6 +54,7 @@ class SolidRouteMixin:
         # checks the live session, tick, epoch, ownership and receipts.
         self._solid_resume_checkpoint = None
         self._solid_resume_memory = None
+        self._solid_resume_archive_index = None
         if options.get("resume_controller"):
             path = Path(options["checkpoint"])
             captured = path.read_bytes()
@@ -64,26 +65,47 @@ class SolidRouteMixin:
                 raise ValueError("Solid treatment cannot silently replace or migrate a checkpoint")
             restored = self.memory_type.from_bytes(captured, saved.get("session_id"),
                                                    options.get("target", "rocket_launch"))
-            if path.read_bytes() != captured:
-                raise ValueError("Checkpoint changed during resume validation")
-            if not restored.solid_epoch:
-                # This is valid retained fault evidence for offline inspection,
-                # not permission to install another runtime or adopt an epoch.
-                raise ValueError(UNBOUND_FAULT)
+            archive_index = None
+            try:
+                if restored.blocked_recovery_archive is not None:
+                    # The base loader's path-based load builds this temporary
+                    # index. This composed controller restores the exact bytes
+                    # captured above instead, so verify the same archive before
+                    # any backend capability can be installed and keep the
+                    # SQLite handle separate from the checkpoint deepcopy.
+                    from .blocked_recovery_archive import build_index
+                    archive_index = build_index(path, restored)
+                if path.read_bytes() != captured:
+                    raise ValueError("Checkpoint changed during resume validation")
+                if not restored.solid_epoch:
+                    # This is valid retained fault evidence for offline inspection,
+                    # not permission to install another runtime or adopt an epoch.
+                    raise ValueError(UNBOUND_FAULT)
+            except BaseException:
+                if archive_index is not None:
+                    archive_index.close()
+                raise
             self._solid_resume_checkpoint = captured
             self._solid_resume_memory = restored
-        super().__init__(backend, jev, **options)
-        native = getattr(backend, "_factory", None)
-        if native is not None:
-            current = native
-            while current is not None and not isinstance(current, SolidRouteFactory):
-                current = getattr(current, "native", None)
-            if current is None:
-                backend._factory = SolidRouteFactory(native, self._solid_intents)
-            elif current.intents != self._solid_intents:
-                raise ValueError("Existing native solid treatment differs")
-        elif getattr(backend, "solid_routes_supported", False) is not True:
-            raise ValueError("Backend does not support owned solid-route observations")
+            self._solid_resume_archive_index = archive_index
+        try:
+            super().__init__(backend, jev, **options)
+            native = getattr(backend, "_factory", None)
+            if native is not None:
+                current = native
+                while current is not None and not isinstance(current, SolidRouteFactory):
+                    current = getattr(current, "native", None)
+                if current is None:
+                    backend._factory = SolidRouteFactory(native, self._solid_intents)
+                elif current.intents != self._solid_intents:
+                    raise ValueError("Existing native solid treatment differs")
+            elif getattr(backend, "solid_routes_supported", False) is not True:
+                raise ValueError("Backend does not support owned solid-route observations")
+        except BaseException:
+            if self._solid_resume_archive_index is not None:
+                self._solid_resume_archive_index.close()
+                self._solid_resume_archive_index = None
+            raise
 
     def _check_resume_checkpoint(self):
         try:
@@ -103,7 +125,9 @@ class SolidRouteMixin:
             # The preflight used the full composed loader. Reuse those validated
             # bytes' value rather than reopening a mutable path (including ABA).
             # The ordinary observer still checks the live session and tick.
-            return deepcopy(self._solid_resume_memory)
+            memory = deepcopy(self._solid_resume_memory)
+            return self._complete_initial_memory_restore(
+                memory, archive_index=self._solid_resume_archive_index)
         return super()._initial_memory(snapshot)
 
     def _observe_snapshot(self):
@@ -190,6 +214,7 @@ class SolidRouteMixin:
         self._save()  # Exact reconciled state is durable before action admission.
         self._solid_resume_memory = None
         self._solid_resume_checkpoint = None
+        self._solid_resume_archive_index = None
         return snapshot
 
     def _observe_solid(self, stage="observe"):
