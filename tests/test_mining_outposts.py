@@ -1,6 +1,6 @@
 """Synthetic contracts and actual Lua builder tests; no native throughput claims."""
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 import json
@@ -14,6 +14,8 @@ from jev_factorio.controller import HierarchicalLoop
 from jev_factorio.input_controller import input_loop_type
 from jev_factorio.memory import load_checkpoint
 from jev_factorio.outpost_controller import outpost_loop_type
+from jev_factorio.judgments import question_batch
+from jev_factorio.planning.decision_support import candidate_evidence, scheduling_context
 from jev_factorio.planning.mining_outposts import MiningOutpostPlanner
 from jev_factorio.skills import Plan, Step
 from test_factory import catalog, snapshot, machine, recipe
@@ -62,6 +64,55 @@ def build(state, part, receipt=None):
 def full(state):
     build(state, 'chest'); build(state, 'drill')
     return state
+
+
+def decode_native_fixture(source):
+    """Feed the fixture through the real atomic observation decoder."""
+    from copy import deepcopy
+    from test_atomic_observation import setup as atomic_setup
+
+    patcher = pytest.MonkeyPatch()
+    try:
+        backend, _, payload, _ = atomic_setup(patcher, craft=True)
+        runtime = deepcopy(source.factory['acceptance_runtime'])
+        payload.update({
+            'tick': source.tick,
+            'session_id': source.session_id,
+            'actor_unit': runtime['actor_unit'],
+            'surface_index': runtime['surface_index'],
+            'force_index': runtime['force_index'],
+            'position': {'x': source.player_position[0], 'y': source.player_position[1]},
+            'inventory': deepcopy(source.inventory),
+            'targets': deepcopy(source.factory['fair_resource_targets']),
+            'anchors': {},
+            'inventory_capacity': {
+                'schema': 1, 'tick': source.tick, 'inventory': 'character_main',
+                'quality': 'normal', 'method': 'get_insertable_count',
+                'items': {'coal': 3900},
+            },
+        })
+        payload['controls'].update({
+            'tick': source.tick,
+            'position': deepcopy(payload['position']),
+        })
+        runtime.update(session_id=source.session_id, speed=1, tick_paused=False)
+        payload['factory'] = deepcopy(source.factory)
+        # The general planner fixture predates the atomic wire contract and
+        # uses None for an unknown research list.  The native envelope
+        # requires a concrete list, so normalize this field before decoding.
+        if payload['factory'].get('researched') is None:
+            payload['factory']['researched'] = []
+        for counter in ('rockets_launched', 'rocket_baseline'):
+            if payload['factory'].get(counter) is None:
+                payload['factory'][counter] = 0
+        payload['factory'].update(tick=source.tick, acceptance_runtime=runtime)
+        payload['factory'].pop('fair_resource_targets', None)
+        payload['factory']['craft_job_inventory'] = {
+            'tick': source.tick, 'items': deepcopy(source.inventory),
+        }
+        return backend.observe()
+    finally:
+        patcher.undo()
 
 
 def commission(state):
@@ -154,6 +205,264 @@ def test_native_stocked_furnace_can_gather_ore_for_its_outpost_drill_kit():
     assert plan.steps[0].parameters == {'resource': 'iron-ore', 'quantity': 5}
     assert plan.steps[0].allowed(state)
     assert state == before
+
+
+def nested_kit_plan(kind='transfer'):
+    state, data = state_fixture()
+    furnace = state.factory['entities']['recipe:iron-plate']
+    furnace.update(unit_number=2547, fuel={'coal': 3}, products_finished=100,
+                   input={}, output={}, crafting=False)
+    furnace.pop('recipe', None)
+    state.player_position = (0, 0)
+    state.factory.update(tick=state.tick,
+        acceptance_runtime={
+            'schema': 1, 'session_id': state.session_id, 'actor_unit': 17,
+            'player_index': 1, 'surface_index': 1, 'force_index': 1,
+            'speed': 1, 'tick_paused': False,
+        },
+        fair_resource_targets={
+            'iron-ore': {'name': 'iron-ore', 'surface_index': 1,
+                         'position': {'x': 8.0, 'y': 3.0}},
+            'coal': {'name': 'coal', 'surface_index': 1,
+                     'position': {'x': 6.0, 'y': 4.0}},
+        })
+    state.nearby_resources.update({'iron-ore': 8.5, 'coal': 7.2})
+    state.inventory = {'wooden-chest': 1, 'coal': 50}
+    if kind == 'transfer':
+        state.inventory['iron-ore'] = 5
+    elif kind == 'pickup':
+        furnace['output'] = {'iron-plate': 5}
+    elif kind == 'craft':
+        state.inventory['iron-plate'] = 5
+    elif kind != 'gather':
+        raise AssertionError(kind)
+    data.recipes['burner-mining-drill'] = recipe('burner-mining-drill', {'iron-plate': 5})
+    data.recipes['outer-pump'] = recipe('outer-pump', {'iron-ore': 1})
+    state.factory['production_sites'] = {
+        'protocol': 1, 'session_id': state.session_id, 'tick': state.tick,
+        'sources': {'recipe:iron-plate': {
+            'state': 'owned', 'reason': 'owned legacy furnace',
+            'anchor': 'cell-site:legacy-iron-furnace',
+            'position': {'x': 0, 'y': 0}, 'belt_count': 1,
+            'bill': {'stone-furnace': 1, 'burner-mining-drill': 1,
+                     'burner-inserter': 2, 'wooden-chest': 1,
+                     'transport-belt': 1},
+            'source_unit': 2547,
+        }},
+    }
+    state = decode_native_fixture(state)
+    planner = MiningOutpostPlanner(data, state, 'rocket_launch')
+    planner.focus = ('outer-pump', 20)
+    plan = planner._need('iron-ore', 20, ('item:outer-pump',))
+    return state, data, plan
+
+
+def advance_native_fixture(state):
+    """Advance and decode a new coherent fixture instead of setting trust flags."""
+    from copy import deepcopy
+
+    fresh = deepcopy(state)
+    fresh.tick += 1
+    for name in ('mining_outposts', 'production_sites', 'input_routes', 'output_buffers'):
+        if isinstance(fresh.factory.get(name), dict):
+            fresh.factory[name]['tick'] = fresh.tick
+    return decode_native_fixture(fresh)
+
+
+@pytest.mark.parametrize(('kind', 'action'), [
+    ('gather', 'factory_gather'),
+    ('transfer', 'factory_insert'),
+    ('pickup', 'factory_extract'),
+    ('craft', 'factory_craft'),
+])
+def test_nested_outpost_kit_provenance_qualifies_each_current_native_child_step(kind, action):
+    state, data, plan = nested_kit_plan(kind)
+    assert plan.steps[0].action == action
+    assert plan.materials['local_objective']['item'] == 'outer-pump'
+    nested = plan.materials['outpost_kit_prerequisite']
+    assert nested['parent_request']['planner_item_path'] == ['outer-pump', 'iron-ore']
+    assert nested['child_request'] == {
+        'item': 'burner-mining-drill', 'quantity': 1, 'kind': 'outpost_component'}
+    support = scheduling_context(state, data, [plan], 'rocket_launch')
+    row_evidence = support['candidate_evidence'][plan.id]
+    start = row_evidence['outpost_kit_prerequisite_start_evidence']
+    assert start is not None
+    assert start['parent_target_item'] == 'outer-pump'
+    assert start['parent_request_item'] == 'iron-ore'
+    assert start['child_kit_item'] == 'burner-mining-drill'
+    assert start['parent_and_child_paths_are_separate']
+    assert start['admission_is_not_native_payback_evidence']
+    assert start['outpost_placement_arrival_flow_output_and_parent_completion_unverified']
+    assert start['useful_partial_benefit_level'] == 1
+    assert row_evidence['local_target'] == plan.materials['local_objective']
+    if action == 'factory_insert':
+        assert row_evidence['recipe_input_transfer_start_evidence'] is None
+        assert start['child_planner_item_path'] == [
+            'burner-mining-drill', 'iron-plate', 'iron-ore']
+        assert start['action_start_facts']['receiver_capacity_observed'] is False
+        assert start['action_start_facts']['fresh_native_dispatch_capacity_check_required']
+        assert start['action_start_facts']['native_dispatch_checks_receiver_insertable_count']
+    context, questions, selected = question_batch(
+        {'facts': state.for_jev(), **support}, [plan])
+    assert selected == [plan]
+    benefit = questions[plan.id + '/benefit']['instructions']
+    assert 'current child request on separate' in benefit
+    assert 'not native payback' in benefit
+    assert 'level 1' in benefit
+    assert 'outpost arrival/flow/output' in benefit
+    needs = questions[plan.id + '/needs_observation']['instructions']
+    assert 'separate same-tick parent and child paths' in needs
+
+
+def test_nested_outpost_kit_evidence_fails_closed_on_stale_paths_owners_quantity_actor_and_research():
+    state, data, plan = nested_kit_plan('transfer')
+
+    def evidence(changed_state=state, changed_plan=plan, changed_catalog=data):
+        return candidate_evidence(changed_state, changed_catalog, [changed_plan])[
+            changed_plan.id]['outpost_kit_prerequisite_start_evidence']
+
+    assert evidence() is not None
+    bad_parent = deepcopy(plan.materials['outpost_kit_prerequisite'])
+    bad_parent['parent_request']['planner_item_path'] = ['unrelated', 'iron-ore']
+    assert evidence(changed_plan=replace(plan, materials={
+        **plan.materials, 'outpost_kit_prerequisite': bad_parent})) is None
+    bad_child = deepcopy(plan.materials['recipe_input_transfer'])
+    bad_child['planner_item_path'] = ['outer-pump', 'iron-plate', 'iron-ore']
+    assert evidence(changed_plan=replace(plan, materials={
+        **plan.materials, 'recipe_input_transfer': bad_child})) is None
+    bad_step = replace(plan.steps[0], parameters={**plan.steps[0].parameters, 'quantity': 4})
+    assert evidence(changed_plan=replace(plan, steps=(bad_step,))) is None
+
+    stale = deepcopy(state)
+    stale.tick += 1
+    assert evidence(changed_state=stale) is None
+    foreign = deepcopy(state)
+    foreign.factory['entities']['recipe:iron-plate']['unit_number'] = 9999
+    foreign.factory['production_sites']['sources']['recipe:iron-plate']['source_unit'] = 9999
+    assert evidence(changed_state=foreign) is None
+    actor = deepcopy(state)
+    actor.factory['player_bound'] = False
+    assert evidence(changed_state=actor) is None
+    locked = deepcopy(data)
+    locked.recipes['iron-plate']['enabled'] = False
+    assert evidence(changed_catalog=locked) is None
+
+
+@pytest.mark.parametrize('change', [
+    lambda s: setattr(s, '_coherent_observation_verified', (s.session_id, s.tick - 1)),
+    lambda s: s.factory['acceptance_runtime'].update(session_id='other-session'),
+    lambda s: s.factory['fair_resource_targets']['iron-ore'].update(surface_index=2),
+    lambda s: s.factory['fair_resource_targets']['iron-ore'].update(name='copper-ore'),
+    lambda s: s.factory.update(observation_snapshot_schema=1),
+])
+def test_nested_raw_gather_requires_fresh_decoded_target_identity(change):
+    state, data, plan = nested_kit_plan('gather')
+    change(state)
+    assert candidate_evidence(state, data, [plan])[plan.id][
+        'outpost_kit_prerequisite_start_evidence'] is None
+
+
+def test_nested_component_quantity_uses_exact_current_remaining_kit():
+    state, data, plan = nested_kit_plan('transfer')
+    changed = deepcopy(plan.materials['outpost_kit_prerequisite'])
+    changed['child_request']['quantity'] = 2
+    wrong = replace(plan, materials={**plan.materials, 'outpost_kit_prerequisite': changed})
+    assert candidate_evidence(state, data, [wrong])[wrong.id][
+        'outpost_kit_prerequisite_start_evidence'] is None
+
+
+def test_nested_parent_fractional_request_uses_same_rounded_shortage_for_admission_and_evidence():
+    state, data, _ = nested_kit_plan('gather')
+    state.inventory['iron-ore'] = 0
+    state = decode_native_fixture(state)
+    planner = MiningOutpostPlanner(data, state, 'rocket_launch')
+    planner.focus = ('outer-pump', 20)
+    plan = planner._need('iron-ore', 10.5, ('item:outer-pump',))
+
+    nested = plan.materials['outpost_kit_prerequisite']
+    assert nested['parent_request']['amount'] == 11
+    assert nested['admission']['shortage_now'] == 11
+    start = candidate_evidence(state, data, [plan])[plan.id][
+        'outpost_kit_prerequisite_start_evidence']
+    assert start['parent_request_amount'] == 11
+    assert start['parent_shortage_now'] == 11
+
+
+def test_nested_construction_fuel_is_a_separate_bounded_native_request():
+    state, data = nested_kit_plan('gather')[:2]
+    state.inventory.update({'burner-mining-drill': 1, 'coal': 0})
+    state = decode_native_fixture(state)
+    planner = MiningOutpostPlanner(data, state, 'rocket_launch')
+    planner.focus = ('outer-pump', 20)
+    plan = planner._need('iron-ore', 20, ('item:outer-pump',))
+
+    assert plan.steps[0].action == 'factory_gather'
+    nested = plan.materials['outpost_kit_prerequisite']
+    assert nested['child_request'] == {
+        'item': 'coal', 'quantity': 5, 'kind': 'outpost_construction_fuel'}
+    start = candidate_evidence(state, data, [plan])[plan.id][
+        'outpost_kit_prerequisite_start_evidence']
+    assert start['child_request_kind'] == 'outpost_construction_fuel'
+    assert start['child_kit_quantity'] == 5
+    assert start['action_start_facts']['resource'] == 'coal'
+    assert start['action_start_facts']['quantity'] == 5
+    _, questions, _ = question_batch(
+        {'facts': state.for_jev(), **scheduling_context(state, data, [plan], 'rocket_launch')},
+        [plan])
+    assert 'bounded five-coal construction-fuel request' in (
+        questions[plan.id + '/benefit']['instructions'])
+
+    state.inventory['coal'] = 4
+    state = decode_native_fixture(state)
+    edge_planner = MiningOutpostPlanner(data, state, 'rocket_launch')
+    edge_planner.focus = ('outer-pump', 20)
+    edge_plan = edge_planner._need('iron-ore', 20, ('item:outer-pump',))
+    assert edge_plan.steps[0].parameters['quantity'] == 1
+    edge = candidate_evidence(state, data, [edge_plan])[edge_plan.id][
+        'outpost_kit_prerequisite_start_evidence']
+    assert edge['child_request_kind'] == 'outpost_construction_fuel'
+    assert edge['child_kit_quantity'] == 5
+    assert edge['action_start_facts']['quantity'] == 1
+
+
+def test_nested_component_chain_requalifies_gather_transfer_pickup_and_handcraft():
+    state, data, plan = nested_kit_plan('gather')
+    actions = []
+
+    def current_plan():
+        planner = MiningOutpostPlanner(data, state, 'rocket_launch')
+        planner.focus = ('outer-pump', 20)
+        plan = planner._need(
+            'iron-ore', 20, ('item:outer-pump',))
+        evidence = candidate_evidence(state, data, [plan])[plan.id][
+            'outpost_kit_prerequisite_start_evidence']
+        assert evidence is not None
+        actions.append(plan.steps[0].action)
+        return plan
+
+    gather = current_plan()
+    state.inventory['iron-ore'] = gather.steps[0].threshold
+    state = advance_native_fixture(state)
+
+    transfer = current_plan()
+    assert transfer.steps[0].action == 'factory_insert'
+    state.inventory['iron-ore'] -= transfer.steps[0].parameters['quantity']
+    furnace = state.factory['entities']['recipe:iron-plate']
+    # Represent the later fresh native snapshot after the paid ore was processed.
+    furnace['input'] = {}
+    furnace['output'] = {'iron-plate': 5}
+    state = advance_native_fixture(state)
+
+    pickup = current_plan()
+    assert pickup.steps[0].action == 'factory_extract'
+    assert pickup.steps[0].parameters['quantity'] == 5
+    furnace['output'] = {}
+    state.inventory['iron-plate'] = 5
+    state = advance_native_fixture(state)
+
+    craft = current_plan()
+    assert craft.steps[0].action == 'factory_craft'
+    assert actions == ['factory_gather', 'factory_insert', 'factory_extract', 'factory_craft']
 
 
 def test_outpost_kit_still_collects_paid_plate_output_before_manual_ore():

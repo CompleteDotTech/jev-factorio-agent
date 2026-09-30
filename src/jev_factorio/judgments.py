@@ -291,6 +291,26 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "lab power, completed research, or assembler. Observe only for a specific "
                 "missing current start fact, not to demand certainty about those later outcomes."
             )
+        outpost_kit_choice_hint = ""
+        for candidate_plan in selected:
+            candidate_row = evidence.get(candidate_plan.id)
+            nested = (candidate_row.get('outpost_kit_prerequisite_start_evidence')
+                      if isinstance(candidate_row, dict) else None)
+            if (not isinstance(nested, dict) or nested.get('observed_tick') != tick
+                    or nested.get('parent_target_item') != target
+                    or nested.get('native_step_allowed_now') is not True
+                    or nested.get('admission_is_not_native_payback_evidence') is not True
+                    or nested.get('outpost_placement_arrival_flow_output_and_parent_completion_unverified')
+                        is not True):
+                continue
+            outpost_kit_choice_hint += (
+                " This candidate is a current, native-guarded child-kit step for a separately "
+                "traced outpost prerequisite under the outer local target. A proposed outpost's "
+                "admission reflects the existing planner's direct-route and minimum-runway "
+                "policy heuristic, not measured payback. Judge this bounded child step from its "
+                "current start evidence; its own outcome still requires normal native verification. "
+                "Do not require proof of arrival, outpost flow/output, or completion of the outer target."
+            )
         questions = {
             "candidate": {
                 "type": "choice",
@@ -313,7 +333,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                                  "observed frontier, not confidence in completing the ultimate goal. "
                                  "Do not assume other questions' answers are available."
                                  + choice_priority_hint + bill_craft_hint
-                                 + craft_choice_hint + utility_lab_choice_hint),
+                                 + craft_choice_hint + utility_lab_choice_hint
+                                 + outpost_kit_choice_hint),
                 "criteria": {**{p.id: p.description for p in selected},
                              "observe": "Gather another observation without mutating the factory"},
             }
@@ -405,7 +426,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     and bool(parameters['receipt'])
                     and type(parameters.get('batches')) is int
                     and parameters['batches'] > 0
-                    and local_target == target
+                    and isinstance(local_target, dict)
+                    and local_target.get('item') == target
                     and isinstance(primary, dict)
                     and primary.get('inventory_target') == current_target
                     and type(current_target) is int and current_target > 0
@@ -781,6 +803,109 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "owned machine, carried input, and planned receipt before assigning benefit."
                 if isinstance(recipe_input_start, dict) else ""
             )
+            nested_kit = row.get('outpost_kit_prerequisite_start_evidence')
+            nested_action = (nested_kit.get('action_start_facts')
+                             if isinstance(nested_kit, dict) else None)
+            nested_parent_path = (nested_kit.get('parent_planner_item_path')
+                                  if isinstance(nested_kit, dict) else None)
+            nested_child_path = (nested_kit.get('child_planner_item_path')
+                                 if isinstance(nested_kit, dict) else None)
+            nested_action_kinds = {
+                'factory_gather': 'observed_raw_gather_start',
+                'factory_insert': 'owned_native_recipe_input_transfer_start',
+                'factory_extract': 'owned_native_output_pickup_start',
+                'factory_craft': 'paid_native_handcraft_start',
+                'factory_craft_job': 'paid_native_handcraft_start',
+            }
+            qualified_nested_kit = (
+                len(selected) == 1 and input_step is not None
+                and input_step.action in nested_action_kinds
+                and input_step.effect in {'inventory', 'transfer', 'craft_job_complete'}
+                and isinstance(nested_kit, dict)
+                and row.get('work_scope') == 'immediate'
+                and row.get('unknowns') == [] and row.get('reasons') == []
+                and type(row.get('urgency')) is int and row['urgency'] == 0
+                and row.get('research_deadline_tick') is None
+                and row.get('requires_investment') is False
+                and type(tick) is int and isinstance(target, str) and bool(target)
+                and isinstance(row.get('local_target'), dict)
+                and row['local_target'].get('item') == target
+                and nested_kit.get('schema') == 1
+                and nested_kit.get('observed_tick') == tick
+                and nested_kit.get('parent_target_item') == target
+                and nested_kit.get('parent_request_item') == nested_kit.get('outpost_resource')
+                and nested_kit.get('parent_and_child_paths_are_separate') is True
+                and isinstance(nested_parent_path, list) and 1 <= len(nested_parent_path) <= 32
+                and nested_parent_path[0] == target
+                and nested_parent_path[-1] == nested_kit.get('outpost_resource')
+                and isinstance(nested_child_path, list) and 1 <= len(nested_child_path) <= 32
+                and nested_child_path[0] == nested_kit.get('child_kit_item')
+                and type(nested_kit.get('child_kit_quantity')) is int
+                and nested_kit['child_kit_quantity'] >= 1
+                and nested_kit.get('child_request_kind') in {
+                    'outpost_component', 'outpost_construction_fuel'}
+                and nested_kit.get('current_action') == input_step.action
+                and nested_kit.get('native_step_allowed_now') is True
+                and nested_kit.get('native_action_outcome_requires_verification') is True
+                and nested_kit.get('useful_partial_benefit_level') == 1
+                and nested_kit.get('does_not_establish_level_two_blocker_removal') is True
+                and nested_kit.get('admission_is_not_native_payback_evidence') is True
+                and nested_kit.get(
+                    'outpost_placement_arrival_flow_output_and_parent_completion_unverified') is True
+                and isinstance(nested_action, dict)
+                and nested_action.get('kind') == nested_action_kinds[input_step.action])
+            if qualified_nested_kit and input_step.action == 'factory_insert':
+                nested_transfer = nested_action.get('transfer')
+                qualified_nested_kit = (
+                    nested_kit.get('child_request_kind') == 'outpost_component'
+                    and isinstance(nested_transfer, dict)
+                    and nested_transfer.get('observed_tick') == tick
+                    and nested_transfer.get('native_transfer_and_later_output_require_verification') is True
+                    and nested_action.get('receiver_capacity_observed') is False
+                    and nested_action.get('fresh_native_dispatch_capacity_check_required') is True
+                    and nested_action.get('native_dispatch_checks_receiver_insertable_count') is True)
+            if qualified_nested_kit and input_step.action == 'factory_gather':
+                qualified_nested_kit = (
+                    nested_action.get('fair_target_identity_observed') is True
+                    and nested_action.get('native_target_session_bound') is True
+                    and type(nested_action.get('fair_target_surface_index')) is int
+                    and nested_action['fair_target_surface_index'] > 0
+                    and nested_action.get('travel_is_lower_bound_not_arrival_proof') is True
+                    and nested_action.get('native_harvest_requires_fresh_verification') is True)
+            if qualified_nested_kit and input_step.action == 'factory_extract':
+                nested_pickup = nested_action.get('pickup')
+                qualified_nested_kit = (
+                    isinstance(nested_pickup, dict)
+                    and nested_pickup.get('observed_tick') == tick
+                    and nested_pickup.get('native_pickup_and_inventory_delta_require_verification') is True)
+            if qualified_nested_kit and input_step.action in {'factory_craft', 'factory_craft_job'}:
+                nested_craft = nested_action.get('craft')
+                qualified_nested_kit = (
+                    isinstance(nested_craft, dict)
+                    and nested_craft.get('observed_tick') == tick
+                    and nested_craft.get('native_recipe') == (input_step.parameters or {}).get('recipe')
+                    and nested_craft.get('inputs_in_inventory_now') is True
+                    and nested_craft.get('player_connected_and_bound') is True
+                    and nested_craft.get('crafting_queue_empty') is True
+                    and nested_action.get(
+                        'native_output_and_child_completion_require_verification') is True)
+            outpost_kit_hint = (
+                " `outpost_kit_prerequisite_start_evidence` keeps the outer target and the "
+                "current child request on separate, same-tick planner paths. The outpost "
+                "admission is only the existing direct-route/minimum-runway policy heuristic "
+                "or a verified paid-prefix continuation, not native payback. This current "
+                "gather, input transfer, output pickup, or handcraft supplies useful partial "
+                "progress to that child request if its ordinary native outcome verifies (level 1); "
+                "it does not establish level-two blocker removal, outpost arrival/flow/output, "
+                "or completion of the outer target. A contrary current fact can lower the score."
+                + (" This is the bounded five-coal construction-fuel request; the request is "
+                   "an inventory target, not the amount gathered in this one step."
+                   if nested_kit.get('child_request_kind') == 'outpost_construction_fuel' else "")
+                + (" Receiver capacity is not in this snapshot; the native transfer dispatch "
+                   "must check exact insertable capacity before removing the carried input."
+                   if input_step.action == 'factory_insert' else "")
+                if qualified_nested_kit else ""
+            )
             pickup_start = row.get('output_pickup_start_evidence')
             pickup_step = plan.steps[0] if len(plan.steps) == 1 else None
             pickup_path = (pickup_start.get('planner_item_path')
@@ -828,7 +953,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "the named native recipe, not that the later craft already happened."
                     + raw_gather_hint + craft_hint + bill_craft_hint + place_hint + fuel_hint
                     + utility_lab_hint + transfer_hint + input_hint
-                    + pickup_hint + local_target_completion_hint
+                    + outpost_kit_hint + pickup_hint + local_target_completion_hint
                 ),
                 "criteria": ([
                     "No demonstrated contribution to the bounded production objective",
@@ -903,6 +1028,12 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                        "planned receipt. Judge missing start facts from those values; "
                        "the future pickup and inventory delta require native verification."
                        if qualified_pickup else "")
+                    + (" This nested outpost-kit step has separate same-tick parent and child "
+                       "paths plus current native start facts. A proposed outpost's admission "
+                       "is a planner policy heuristic, not payoff evidence. Judge only whether "
+                       "a start fact is missing for this child step; future placement, arrival, "
+                       "outpost flow/output, and outer-target completion remain unverified."
+                       if qualified_nested_kit else "")
                     + (" For a placement, `placement_start_evidence` combines a current "
                        "surveyed site offer with observed actor/queue facts. Judge missing "
                        "start facts from those "
