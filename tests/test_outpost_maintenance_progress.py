@@ -9,7 +9,7 @@ from jev_factorio.planning.mining_outposts import MiningOutpostPlanner
 from jev_factorio.planning.ready_work import ReadyWorkPlanner
 from test_factory import machine
 from test_input_route_integration import RouteLoop, controller
-from test_maintenance_progress import progress_scenario
+from test_maintenance_progress import progress_scenario, connected_power_plant
 from test_mining_outposts import state_fixture, full, commission, row
 
 
@@ -254,13 +254,24 @@ def test_outpost_group_recomputes_after_a_partial_receipt_without_more_gathering
                for item in ('iron-ore', 'copper-ore'))
 
 
-def test_composed_outpost_still_defers_to_urgent_boiler(tmp_path):
+@pytest.mark.parametrize('connected', [False, True])
+def test_composed_outpost_only_defers_boiler_fuel_for_connected_plant(tmp_path, connected):
     loop, backend = composed(tmp_path)
     backend.state.factory['entities']['utility:boiler'] = machine(
         'boiler', unit_number=901, fuel={'coal': 1})
+    if connected:
+        connected_power_plant(backend.state)
     plans, _ = loop._compile_candidates(backend.state)
-    assert plans and plans[0].steps[0].parameters['role'] == 'utility:boiler'
-    assert plans[0].steps[0].parameters['item'] == 'coal'
+    assert plans
+    step = plans[0].steps[0]
+    if connected:
+        assert step.action == 'factory_insert'
+        assert step.parameters['role'] == 'utility:boiler'
+        assert step.parameters['item'] == 'coal'
+        assert step.parameters['quantity'] == 4
+    else:
+        assert step.parameters.get('role') != 'utility:boiler'
+        assert plans[0].materials['utility_power_prerequisite']['consumer_role'] == 'utility:lab'
 
 
 def _retain_outposts(loop, state):
