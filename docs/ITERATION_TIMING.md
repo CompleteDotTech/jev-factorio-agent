@@ -86,11 +86,27 @@ bytes once; an unknown delegate marks that logical call's byte evidence incomple
 without discarding known bytes from its other delegates. Delegate results and
 exception objects remain unchanged.
 
-Helpers retaining the installed `SessionRcon` can expose their actual logical
-client attempts. Other private helper handles remain measured inclusively under
-`fle_helper`. Retry/backoff and native/network decomposition are **unknown** when
-not instrumented by the installed dependency. A test containing two attempts and
-a wait does not establish that every installed FLE retry path is covered.
+The action-time FLE `get_entity` lookup used by `NativeFactory.entity` is measured
+inclusively under `fle_helper`; each client call it makes through `SessionRcon`
+remains separately counted as a logical native command. These nested inclusive
+durations are not additive. This span covers the helper call, not a decomposition
+of its internal work. FLE retry counts, helper backoff, response decoding inside
+the dependency, and native/network time separation remain **unknown**. A test
+containing two attempts and a wait does not establish that every installed FLE
+retry path is covered.
+
+The installed FLE source used for this audit is pinned to v0.4.3 commit
+`6439e18b7870770454cf91eb36b3d1e6412724f4`. Check a local runtime environment
+with the read-only compatibility command:
+
+```sh
+PYTHONPATH=src python -m jev_factorio.fle_compat_audit
+```
+
+It checks the installed version and hashes of the controller and helper modules
+that define processing retries, entity lookup, and helper polling. It emits no
+installation path or direct-URL metadata; a match establishes source identity,
+not retry attribution or native performance.
 
 ## Durability and compatibility
 

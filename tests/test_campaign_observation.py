@@ -9,6 +9,7 @@ import pytest
 from jev_factorio.observation import (ObservationProfile, ProfiledRcon, ProfiledTools,
                                      profile_backend, parse_snapshot, host_pressure, MAX_PAYLOAD_BYTES)
 from jev_factorio.backends.observed_factory import ObservedFactory
+from jev_factorio import iteration_timing as timing
 from test_factory import snapshot
 
 
@@ -94,6 +95,72 @@ def test_unshared_helper_manager_is_not_claimed_as_profiled_rpc():
     assert backend.last_observation_profile['subcalls']['entities']['count'] == 1
     assert backend.last_observation_profile['calls'] == {}
     assert backend.last_observation_profile['helper_retry_attempts'] is None
+
+
+def test_action_factory_connect_profiles_opaque_entity_helpers_and_preserves_error(monkeypatch):
+    from jev_factorio.backends.fle import FleBackend, SessionRcon
+    from jev_factorio.backends.native_factory import NativeFactory
+
+    position = lambda **values: NS(**values)
+    monkeypatch.setitem(sys.modules, 'fle.env', NS(Position=position))
+    expected_error = RuntimeError('private native detail')
+    helper_calls = 0
+    sent = []
+    connected = []
+    entity_lookups = []
+
+    def send_command(command):
+        nonlocal helper_calls
+        sent.append(command)
+        if 'get_entity_fixture' in command:
+            helper_calls += 1
+            if helper_calls == 4:
+                raise expected_error
+            return 'same-entity-result'
+        if 'entities["source"]' in command:
+            return '{"name":"small-electric-pole","position":{"x":1,"y":2}}'
+        if 'entities["target"]' in command:
+            return '{"name":"small-electric-pole","position":{"x":3,"y":4}}'
+        raise AssertionError('unexpected fixture command')
+
+    session = SessionRcon(NS(send_command=send_command))
+    def get_entity(prototype, point):
+        entity_lookups.append((prototype, point.x, point.y))
+        assert session.send_command('/sc get_entity_fixture') == 'same-entity-result'
+        return NS(position=point)
+
+    tools = NS(get_entity=get_entity)
+    backend = FleBackend()
+    backend._instance = NS(namespace=tools, rcon_client=session, _native_attachment=None)
+    backend._fair = NS(connect=lambda *args, **kwargs: connected.append((args, kwargs)))
+    factory = NativeFactory.__new__(NativeFactory)
+    factory.backend = backend
+    factory.prototype = lambda name: name
+    parameters = {'source': 'source', 'target': 'target',
+                  'kind': 'small-electric-pole', 'fluid': 'electricity'}
+
+    ledger = timing.Ledger()
+    token = timing._CURRENT.set(ledger)
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            with ledger.span('iteration'):
+                assert factory.execute('factory_connect', parameters).startswith(
+                    'Constructed small-electric-pole connection')
+                factory.execute('factory_connect', parameters)
+    finally:
+        timing._CURRENT.reset(token)
+
+    assert caught.value is expected_error
+    report = ledger.snapshot(1, 'error')
+    assert report['partition_complete'] is True
+    assert report['phases']['fle_helper']['calls'] == 4
+    assert report['phases']['fle_helper']['failed'] == 1
+    assert report['native_io']['command_calls'] == 8
+    assert report['native_io']['failed_calls'] == 1
+    assert len(sent) == 8
+    assert len(entity_lookups) == 4
+    assert len(connected) == 1
+    assert 'private native detail' not in json.dumps(report)
 
 
 @pytest.mark.parametrize('amount,unit,nanos', [('2.5','ms',2500000), ('3','us',3000), ('1','s',1000000000)])

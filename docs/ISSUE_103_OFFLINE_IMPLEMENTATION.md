@@ -143,8 +143,10 @@ separate and are never added to enclosing RPC wall time.
 synchronous sink operation. These are distinguished from the operation itself.
 They remain inclusive diagnostic counters, not a global non-overlapping iteration
 partition. The current record's metrics scope still ends before record emission.
-Helper retry/backoff and transport breakdown remain null/unavailable where the
-underlying FLE helper retains its own opaque transport.
+Action-time FLE entity lookup now has an inclusive `fle_helper` span, while each
+`SessionRcon` client call remains counted separately. FLE retry counts, helper
+backoff, response decoding inside the dependency, and transport breakdown remain
+unknown because the helper keeps those details inside its opaque implementation.
 
 ```sh
 PYTHONPATH=src python -m jev_factorio.latency_report "$PRIVATE_GAMEPLAY_LOG" > latency.json
