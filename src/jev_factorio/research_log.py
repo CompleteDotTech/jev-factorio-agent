@@ -46,6 +46,7 @@ _TREATMENT_FIELDS = {"factory_scheduling", "background_work",
                      "lead_time_supply", "coverage_margin_lookahead", "solid_routes", "solid_science_policy", "coal_supply", "coal_kit_policy", "coal_economic_admission"}
 _OPTIONAL_CONFIGURATION_FIELDS = _TREATMENT_FIELDS | {
     "treatment_sha256", "until_complete", "reconcile_only",
+    "reevaluate_blocked_once", "exact_checkpoint_sha256", "blocked_source_revision",
 }
 
 
@@ -116,6 +117,9 @@ class RunConfiguration:
     treatment_sha256: str | None = None
     until_complete: bool = False
     reconcile_only: bool = False
+    reevaluate_blocked_once: bool = False
+    exact_checkpoint_sha256: str | None = None
+    blocked_source_revision: str | None = None
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -373,6 +377,14 @@ def _configuration(configuration: dict) -> None:
             raise ValueError("Invalid run configuration label")
     for key in ("target", "requested_model"):
         _optional_text(configuration[key])
+    for key in ("exact_checkpoint_sha256", "blocked_source_revision"):
+        _optional_text(configuration.get(key))
+    if configuration.get("exact_checkpoint_sha256") is not None and re.fullmatch(
+            r"[0-9a-f]{64}", configuration["exact_checkpoint_sha256"]) is None:
+        raise ValueError("Invalid exact checkpoint SHA-256")
+    if configuration.get("blocked_source_revision") is not None and re.fullmatch(
+            r"[0-9a-f]{40}", configuration["blocked_source_revision"]) is None:
+        raise ValueError("Invalid blocked source revision")
     if configuration["steps"] is not None:
         _integer(configuration["steps"])
     for key in ("duration_seconds", "tick_seconds", "confidence_floor"):
@@ -386,12 +398,16 @@ def _configuration(configuration: dict) -> None:
     if configuration["steps"] is not None and configuration["duration_seconds"] is not None:
         raise ValueError("Run configuration has conflicting limits")
     for key in ("resume", "resume_controller", "adopt_session", "mock_model",
-                "legacy_log_enabled", "checkpoint_enabled", "until_complete", "reconcile_only"):
-        value = configuration.get(key, False) if key in {"until_complete", "reconcile_only"} else configuration[key]
+                "legacy_log_enabled", "checkpoint_enabled", "until_complete", "reconcile_only",
+                "reevaluate_blocked_once"):
+        value = (configuration.get(key, False)
+                 if key in {"until_complete", "reconcile_only", "reevaluate_blocked_once"}
+                 else configuration[key])
         if type(value) is not bool:
             raise ValueError("Invalid run configuration flag")
     until_complete = configuration.get("until_complete", False)
     reconcile_only = configuration.get("reconcile_only", False)
+    reevaluate_blocked_once = configuration.get("reevaluate_blocked_once", False)
     if until_complete and reconcile_only:
         raise ValueError("Run configuration has conflicting execution modes")
     if (until_complete or reconcile_only) and (
@@ -408,6 +424,17 @@ def _configuration(configuration: dict) -> None:
         or configuration["target"] == "bootstrap_mining"
     ):
         raise ValueError("Reconcile-only requires a resumed native background-work campaign")
+    if reevaluate_blocked_once:
+        if (configuration["backend"] != "fle" or configuration["controller"] != "hierarchical"
+                or configuration["policy"] != "jev" or configuration["mock_model"]
+                or not configuration["resume"] or not configuration["resume_controller"]
+                or not configuration["checkpoint_enabled"] or reconcile_only
+                or not configuration.get("exact_checkpoint_sha256")
+                or not configuration.get("blocked_source_revision")):
+            raise ValueError("Blocked decision re-evaluation requires pinned resumed native Jev control")
+    elif (configuration.get("exact_checkpoint_sha256") is not None
+          or configuration.get("blocked_source_revision") is not None):
+        raise ValueError("Blocked decision pins require blocked re-evaluation mode")
 
 
 def _provenance(provenance: dict) -> None:

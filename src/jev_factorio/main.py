@@ -106,6 +106,12 @@ def cli() -> None:
     p.add_argument("--model", help="Provider-specific model ID; pin it for reproducible evaluation")
     p.add_argument("--checkpoint", help="Session-bound controller checkpoint, not a game save")
     p.add_argument("--resume-controller", action="store_true")
+    p.add_argument("--reevaluate-blocked-once", action="store_true",
+                   help="Re-evaluate one exact blocked decision after the decision contract changes")
+    p.add_argument("--exact-checkpoint-sha256",
+                   help="Exact starting controller checkpoint SHA-256 for blocked re-evaluation")
+    p.add_argument("--blocked-source-revision",
+                   help="Full Git commit supplied by the checkpoint owner for the blocked decision")
     p.add_argument("--adopt-session", action="store_true",
                    help="Explicitly identify an older live FLE session without resetting it")
     args = p.parse_args()
@@ -135,6 +141,33 @@ def cli() -> None:
     ):
         p.error("--reconcile-only requires resumed hierarchical FLE background-work, "
                 "ready-work scheduling, and a checkpoint")
+    blocked_reevaluation_source = None
+    blocked_checkpoint_capture = None
+    if args.reevaluate_blocked_once:
+        if (args.backend != "fle" or args.controller != "hierarchical" or args.policy != "jev"
+                or args.mock_model or not args.resume or not args.resume_controller
+                or not args.checkpoint or args.steps == 0
+                or args.reconcile_only or args.owner_step_gate_dir is not None
+                or args.owner_step_lock_path is not None or args.owner_step_lock_fd is not None
+                or not args.exact_checkpoint_sha256 or not args.blocked_source_revision):
+            p.error("--reevaluate-blocked-once requires resumed hierarchical FLE Jev control, "
+                    "its exact checkpoint SHA-256, and the blocked source revision; "
+                    "it cannot use reconcile-only or owner-step gating")
+        try:
+            from .blocked_reevaluation import validate_checkpoint_digest, validate_source_revision
+            from .provenance import gameplay_context
+            blocked_reevaluation_source = validate_source_revision(args.blocked_source_revision)
+            supervised_revision = gameplay_context().get("code_revision")
+            if (supervised_revision is not None
+                    and (not isinstance(supervised_revision, dict)
+                         or supervised_revision.get("commit") != blocked_reevaluation_source["source_head"])):
+                raise ValueError("Current Git HEAD differs from supervised source provenance")
+            blocked_checkpoint_capture = Path(args.checkpoint).read_bytes()
+            validate_checkpoint_digest(blocked_checkpoint_capture, args.exact_checkpoint_sha256)
+        except (OSError, ValueError) as error:
+            p.error(f"Blocked decision re-evaluation preflight failed: {error}")
+    elif args.exact_checkpoint_sha256 is not None or args.blocked_source_revision is not None:
+        p.error("Exact checkpoint and blocked source pins require --reevaluate-blocked-once")
     if args.tick_seconds < 0 or not args.tick_seconds < float("inf"):
         p.error("--tick-seconds must be finite and nonnegative")
     if args.resume and args.backend != "fle":
@@ -294,6 +327,9 @@ def cli() -> None:
             if args.duration_hours is None and not (args.until_complete or args.reconcile_only) else None,
             duration_seconds=args.duration_hours * 3600 if args.duration_hours is not None else None,
             until_complete=args.until_complete, reconcile_only=args.reconcile_only,
+            reevaluate_blocked_once=args.reevaluate_blocked_once,
+            exact_checkpoint_sha256=args.exact_checkpoint_sha256,
+            blocked_source_revision=args.blocked_source_revision,
             tick_seconds=args.tick_seconds, confidence_floor=args.confidence_floor,
             resume=args.resume, resume_controller=args.resume_controller,
             adopt_session=args.adopt_session, mock_model=args.mock_model,
@@ -353,6 +389,12 @@ def cli() -> None:
                                           connector_witness_path=connector_witness), **options)
         else:
             options["research_log"] = research
+            if args.reevaluate_blocked_once:
+                options.update(
+                    reevaluate_blocked_once=True,
+                    exact_checkpoint_sha256=args.exact_checkpoint_sha256,
+                    blocked_source_revision=args.blocked_source_revision,
+                )
             loop_type = HierarchicalLoop
             if args.background_work:
                 from .background import BackgroundWorkLoop
@@ -415,6 +457,17 @@ def cli() -> None:
                             raise ValueError('Checkpoint changed during composed preflight')
                     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
                         p.error(f'Composed treatment checkpoint preflight failed: {error}')
+            if args.reevaluate_blocked_once:
+                try:
+                    from .blocked_reevaluation import validate_checkpoint_capture
+                    validate_checkpoint_capture(blocked_checkpoint_capture,
+                                                args.exact_checkpoint_sha256,
+                                                loop_type.memory_type, args.target, 4,
+                                                blocked_reevaluation_source["decision_contract_sha256"])
+                    if Path(args.checkpoint).read_bytes() != blocked_checkpoint_capture:
+                        raise ValueError('Checkpoint changed during blocked-decision preflight')
+                except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+                    p.error(f'Blocked decision checkpoint preflight failed: {error}')
             if setup_timing:
                 setup_timing.mark('preflight_ready')
             if setup_timing:

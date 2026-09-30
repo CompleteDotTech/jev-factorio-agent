@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,6 +33,7 @@ class CampaignMemory:
     attempt_outcomes: list[dict] = field(default_factory=list)
     transfer_recovery: dict | None = None
     capital_investment: dict | None = None
+    blocked_reevaluations: list[dict] = field(default_factory=list)
 
     def event(self, kind: str, **details) -> None:
         self.history.append({"kind": kind, **details})
@@ -165,6 +167,37 @@ class CampaignMemory:
                 if outcome["id"] in seen or outcome["finished_tick"] > memory.last_tick:
                     raise ValueError("Duplicate or future attempt outcome")
                 seen.add(outcome["id"])
+            if (not isinstance(memory.blocked_reevaluations, list)
+                    or len(memory.blocked_reevaluations) > 1024):
+                raise ValueError("Invalid blocked-decision re-evaluation ledger")
+            reevaluation_contracts = set()
+            for entry in memory.blocked_reevaluations:
+                required = {
+                    "schema", "authorization_id", "blocked_source_revision", "source_head",
+                    "decision_contract_sha256", "checkpoint_sha256", "stalled_decisions",
+                    "reason", "tick", "state",
+                }
+                if (not isinstance(entry, dict) or set(entry) != required
+                        or type(entry["schema"]) is not int or entry["schema"] != 1
+                        or type(entry["authorization_id"]) is not str
+                        or re.fullmatch(r"[0-9a-f]{32}", entry["authorization_id"]) is None
+                        or type(entry["blocked_source_revision"]) is not str
+                        or re.fullmatch(r"[0-9a-f]{40}", entry["blocked_source_revision"]) is None
+                        or type(entry["source_head"]) is not str
+                        or re.fullmatch(r"[0-9a-f]{40}", entry["source_head"]) is None
+                        or type(entry["decision_contract_sha256"]) is not str
+                        or re.fullmatch(r"[0-9a-f]{64}", entry["decision_contract_sha256"]) is None
+                        or type(entry["checkpoint_sha256"]) is not str
+                        or re.fullmatch(r"[0-9a-f]{64}", entry["checkpoint_sha256"]) is None
+                        or type(entry["stalled_decisions"]) is not int
+                        or entry["stalled_decisions"] < 1
+                        or entry["reason"] != "Candidate evidence insufficient"
+                        or type(entry["tick"]) is not int or not 0 <= entry["tick"] <= memory.last_tick
+                        or entry["state"] != "consumed"):
+                    raise ValueError("Invalid blocked-decision re-evaluation ledger entry")
+                if entry["decision_contract_sha256"] in reevaluation_contracts:
+                    raise ValueError("Decision contract was already re-evaluated")
+                reevaluation_contracts.add(entry["decision_contract_sha256"])
             return memory
         except (TypeError, KeyError, AttributeError, json.JSONDecodeError) as error:
             raise ValueError("Invalid controller checkpoint; refusing to reset it") from error

@@ -163,6 +163,43 @@ def test_unbounded_mode_configuration_is_validated_before_creation(tmp_path, con
     assert not path.exists()
 
 
+@pytest.mark.parametrize("execution", [
+    {"until_complete": True, "steps": None, "duration_seconds": None},
+    {"until_complete": False, "steps": 3, "duration_seconds": None},
+    {"until_complete": False, "steps": None, "duration_seconds": 3600.0},
+])
+def test_blocked_re_evaluation_authorizes_one_decision_not_a_run_lifetime(
+        tmp_path, configuration, execution):
+    path = tmp_path / "run"
+    selected = replace(
+        configuration, backend="fle", controller="hierarchical", target="rocket_launch",
+        factory_scheduling="ready-work", background_work=True, policy="jev",
+        mock_model=False, resume=True, resume_controller=True, checkpoint_enabled=True,
+        reevaluate_blocked_once=True, exact_checkpoint_sha256="a" * 64,
+        blocked_source_revision="b" * 40, **execution)
+    writer = rl.ResearchLog(path, selected, environ={})
+    manifest = json.loads((path / "manifest.json").read_bytes())
+    assert manifest["configuration"]["reevaluate_blocked_once"] is True
+    assert manifest["configuration"]["until_complete"] is execution["until_complete"]
+    assert manifest["configuration"]["steps"] == execution["steps"]
+    assert manifest["configuration"]["duration_seconds"] == execution["duration_seconds"]
+    writer.close()
+
+
+def test_blocked_re_evaluation_cannot_be_recorded_as_reconcile_only(
+        tmp_path, configuration):
+    path = tmp_path / "run"
+    selected = replace(
+        configuration, backend="fle", controller="hierarchical", target="rocket_launch",
+        factory_scheduling="ready-work", background_work=True, policy="jev",
+        mock_model=False, resume=True, resume_controller=True, checkpoint_enabled=True,
+        reevaluate_blocked_once=True, exact_checkpoint_sha256="a" * 64,
+        blocked_source_revision="b" * 40, reconcile_only=True, steps=None)
+    with pytest.raises(ValueError, match="Blocked decision re-evaluation"):
+        rl.ResearchLog(path, selected, environ={})
+    assert not path.exists()
+
+
 def test_monotonic_regression_rejected_but_wall_clock_adjustment_allowed(make_log):
     clocks = iter([10, 9, 10, 11])
     utc = iter([datetime(2026, 9, 21, tzinfo=timezone.utc) - timedelta(seconds=i)
