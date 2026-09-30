@@ -293,6 +293,7 @@ def test_ready_lookahead_gear_craft_exposes_bounded_shared_bill_and_possible_ove
     plans = [plans[0], gear]
     support = scheduling_context(state, data, plans, 'rocket_launch')
     row = support['candidate_evidence'][gear.id]
+    assert row['local_target'] == gear.materials['local_objective']
     assert row['craft_dependency'] is None
     assert row['shared_bill_craft']['unfilled_bill_units'] == 2
     assert row['shared_bill_craft']['forecast_is_not_paid_stock_or_completed_output'] is True
@@ -544,6 +545,7 @@ def test_native_direct_target_craft_proves_only_conditional_shortfall_closure():
     state, data, plan = _native_lab_craft_plan()
     # The qualified atomic snapshot is complete, so an absent sparse-map key is zero.
     row = candidate_evidence(state, data, [plan])[plan.id]
+    assert row['local_target'] == plan.materials['local_objective']
     evidence = row['local_target_completion_evidence']
     assert evidence == {
         'observed_tick': state.tick, 'session_id': state.session_id,

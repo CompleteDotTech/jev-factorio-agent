@@ -4,7 +4,8 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
-from ..mining_outposts import COMMAND, RESOURCES, flow_complete, remaining_kit, role, sources
+from ..mining_outposts import (COMMAND, PARTS, RESOURCES, current, flow_complete,
+                               remaining_kit, role, sources)
 from .input_routes import InputRoutePlanner
 
 
@@ -32,6 +33,8 @@ class MiningOutpostPlanner(InputRoutePlanner):
         if (item not in RESOURCES or self._outpost_acquiring or self.goal != 'rocket_launch'
                 or self.snapshot.inventory.get(item, 0) >= amount):
             return super()._need(item, amount, path)
+        requested_amount = math.ceil(amount)
+        shortage = requested_amount - self.snapshot.inventory.get(item, 0)
         row = sources(self.snapshot).get(item)
         if not row or row['state'] == 'fault':
             return super()._need(item, amount, path)
@@ -40,8 +43,7 @@ class MiningOutpostPlanner(InputRoutePlanner):
             direct = self.factory.get('input_routes', {}).get('sources', {}).get(RESOURCES[item])
             # Small bootstrap work and an available direct route take precedence.
             # Only invest for an established manually supplied producer.
-            if (direct or machine.get('products_finished', 0) < 20
-                    or amount - self.snapshot.inventory.get(item, 0) < 10):
+            if (direct or machine.get('products_finished', 0) < 20 or shortage < 10):
                 return super()._need(item, amount, path)
             # Collect already-paid legacy ore rather than hiding it behind an investment.
             if any(e.get('output', {}).get(item, 0) for e in self.entities.values()):
@@ -54,6 +56,71 @@ class MiningOutpostPlanner(InputRoutePlanner):
             for name, count in {**kit, 'coal': 5}.items():
                 prerequisite = self._acquire_outpost(name, count, path)
                 if prerequisite:
+                    # Keep the outpost's parent demand separate from the
+                    # bounded child-kit request. _acquire_outpost deliberately
+                    # resets its recursive path so a kit recipe may use an
+                    # existing producer whose raw input is the outpost's own
+                    # resource. Do not rewrite that child path as if it were
+                    # the outer consumer's direct recipe chain.
+                    parent_path = [entry.removeprefix('item:') for entry in path
+                                   if entry.startswith('item:')]
+                    if parent_path[-1:] != [item]:
+                        parent_path.append(item)
+                    producer = self.entities.get(RESOURCES[item], {})
+                    output_ready = any(
+                        isinstance(entity.get('output'), dict)
+                        and entity['output'].get(item, 0) > 0
+                        for entity in self.entities.values())
+                    if name in PARTS.values():
+                        child_kind = 'outpost_component'
+                    else:
+                        child_kind = 'outpost_construction_fuel'
+                    if row['state'] == 'proposed':
+                        admission = {
+                            'classification': 'existing_proposed_outpost_policy_heuristic',
+                            'state_at_admission': row['state'],
+                            'source_role': RESOURCES[item],
+                            'source_unit': producer.get('unit_number'),
+                            'products_finished': producer.get('products_finished'),
+                            'minimum_products_finished': 20,
+                            'direct_input_route_absent': not bool(direct),
+                            'shortage_now': shortage,
+                            'minimum_shortage': 10,
+                            'paid_output_absent': not output_ready,
+                            'native_outpost_payback_observed': False,
+                            'basis': 'current_planner_direct_route_and_minimum_runway_policy',
+                        }
+                    else:
+                        admission = {
+                            'classification': 'current_paid_outpost_prefix_continuation',
+                            'state_at_admission': row['state'],
+                            'paid_parts': sorted(row['parts']),
+                            'current_paid_prefix': bool(row['parts']) and current(row, self.snapshot),
+                            'native_outpost_payback_observed': False,
+                            'basis': 'current_validated_outpost_component_receipts',
+                        }
+                    materials = dict(prerequisite.materials or {})
+                    materials['outpost_kit_prerequisite'] = {
+                        'schema': 1,
+                        'observed_tick': self.snapshot.tick,
+                        'outpost_resource': item,
+                        'outpost_layout': row['layout'],
+                        'outpost_remaining': row['remaining'],
+                        'parent_request': {
+                            'item': item,
+                            'amount': requested_amount,
+                            'inventory_now': self.snapshot.inventory.get(item, 0),
+                            'planner_item_path': parent_path,
+                            'local_target_item': self.focus[0] if self.focus else item,
+                        },
+                        'child_request': {
+                            'item': name,
+                            'quantity': count,
+                            'kind': child_kind,
+                        },
+                        'admission': admission,
+                    }
+                    prerequisite = replace(prerequisite, materials=materials)
                     return prerequisite
             spec = next(s for s in row['steps'] if s['part'] not in row['parts'])
             return self._plan(COMMAND, 'outpost_component', parameters={

@@ -12,6 +12,12 @@ from copy import deepcopy
 from .scheduling import (RAW_TICKS_PER_ITEM, SAFETY_TICKS, SERVICE_TICKS,
                          TRAVEL_TICKS_PER_TILE, research_schedule)
 from ..production_sites import sources as production_site_sources
+from ..input_routes import sources as input_route_sources
+from ..mining_outposts import (PARTS as OUTPOST_PARTS,
+                               RESOURCES as OUTPOST_RESOURCES,
+                               current as outpost_current,
+                               remaining_kit as outpost_remaining_kit,
+                               sources as outpost_sources)
 
 
 def _finite(value):
@@ -330,7 +336,7 @@ def _utility_lab_research_dependency(snapshot, catalog, plan):
     }
 
 
-def _recipe_input_transfer_start_evidence(snapshot, catalog, plan):
+def _recipe_input_transfer_start_evidence(snapshot, catalog, plan, *, path_root=None):
     """Bind a paid recipe input transfer to current native facts, not future output."""
     if len(plan.steps) != 1:
         return None
@@ -369,7 +375,9 @@ def _recipe_input_transfer_start_evidence(snapshot, catalog, plan):
         return None
     required = max(0, math.ceil(matches[0]['amount'] * batches - buffered
                                  - (matches[0]['amount'] if crafting else 0)))
-    if (provenance.get('observed_tick') != snapshot.tick
+    expected_path_root = local.get('item') if path_root is None else path_root
+    if (not isinstance(expected_path_root, str) or not expected_path_root
+            or provenance.get('observed_tick') != snapshot.tick
             or type(machine.get('unit_number')) is not int or machine['unit_number'] <= 0
             or provenance.get('source_unit') != machine['unit_number']
             or source.get('state') != 'owned'
@@ -385,7 +393,7 @@ def _recipe_input_transfer_start_evidence(snapshot, catalog, plan):
             or provenance.get('observed_crafting') is not crafting
             or not isinstance(path, list) or not 2 <= len(path) <= 32
             or any(not isinstance(part, str) or not part for part in path)
-            or path[0] != local.get('item') or path[-2:] != [recipe_name, item]
+            or path[0] != expected_path_root or path[-2:] != [recipe_name, item]
             or type(required) is not int or required < 1
             or parameters.get('role') != role or parameters.get('item') != item
             or parameters.get('quantity') != required
@@ -412,7 +420,7 @@ def _recipe_input_transfer_start_evidence(snapshot, catalog, plan):
     }
 
 
-def _output_pickup_start_evidence(snapshot, catalog, plan):
+def _output_pickup_start_evidence(snapshot, catalog, plan, *, path_root=None):
     """Describe ready output at an owned native source, never a completed pickup."""
     if len(plan.steps) != 1:
         return None
@@ -450,7 +458,9 @@ def _output_pickup_start_evidence(snapshot, catalog, plan):
     recipe_name = role.removeprefix('recipe:')
     recipe = catalog.recipes.get(recipe_name)
     path = provenance.get('planner_item_path')
-    if (type(unit) is not int or unit <= 0
+    expected_path_root = local.get('item') if path_root is None else path_root
+    if (not isinstance(expected_path_root, str) or not expected_path_root
+            or type(unit) is not int or unit <= 0
             or source.get('state') != 'owned' or source.get('source_unit') != unit
             or not isinstance(recipe, dict) or recipe.get('name') != recipe_name
             or recipe.get('hidden') or not catalog.enabled(recipe, snapshot.researched or [])
@@ -458,7 +468,7 @@ def _output_pickup_start_evidence(snapshot, catalog, plan):
                        for product in recipe.get('products', []))
             or not isinstance(path, list) or not 1 <= len(path) <= 32
             or any(not isinstance(part, str) or not part for part in path)
-            or path[0] != local.get('item') or path[-1] != item
+            or path[0] != expected_path_root or path[-1] != item
             or provenance.get('source_role') != role
             or provenance.get('source_unit') != unit
             or provenance.get('item') != item
@@ -480,6 +490,344 @@ def _output_pickup_start_evidence(snapshot, catalog, plan):
         'player_connected_and_bound_now': True,
         'basis': 'current_planner_output_and_owned_native_machine',
         'native_pickup_and_inventory_delta_require_verification': True,
+    }
+
+
+def _current_item_dependency_path(snapshot, catalog, path, root, tail):
+    """Validate a same-tick catalog path without conflating parent and child roots."""
+    if (not isinstance(path, list) or not 1 <= len(path) <= 32
+            or any(not isinstance(item, str) or not item for item in path)
+            or path[0] != root or path[-1] != tail or len(set(path)) != len(path)):
+        return False
+    for product, ingredient in zip(path, path[1:]):
+        try:
+            recipe = catalog.recipe_for(product)
+        except (KeyError, ValueError, TypeError):
+            return False
+        if (not isinstance(recipe, dict) or recipe.get('hidden')
+                or not catalog.enabled(recipe, snapshot.researched or [])
+                or not any(isinstance(row, dict) and row.get('type') == 'item'
+                           and row.get('name') == product
+                           and _finite(row.get('amount')) and row['amount'] > 0
+                           and row.get('probability', 1) == 1
+                           for row in recipe.get('products', []))
+                or not any(isinstance(row, dict) and row.get('type') == 'item'
+                           and row.get('name') == ingredient
+                           and _finite(row.get('amount')) and row['amount'] > 0
+                           for row in recipe.get('ingredients', []))):
+            return False
+    return True
+
+
+def _current_native_fair_resource_target(snapshot, item):
+    """Reuse the atomic observer's decoded, same-session resource identity."""
+    if (snapshot.world_kind != 'fle' or not isinstance(item, str)
+            or item not in {'wood', 'coal', 'iron-ore', 'copper-ore', 'stone'}):
+        return None
+    session, tick = snapshot.session_id, snapshot.tick
+    identity = (session, tick)
+    factory = snapshot.factory
+    runtime = factory.get('acceptance_runtime')
+    if (not isinstance(session, str) or not session or type(tick) is not int
+            or getattr(snapshot, '_coherent_observation_verified', None) != identity
+            or factory.get('observation_snapshot_schema') != 2
+            or factory.get('tick') != tick
+            or factory.get('player_connected') is not True
+            or factory.get('player_bound') is not True
+            or not isinstance(runtime, dict) or runtime.get('schema') != 1
+            or runtime.get('session_id') != session
+            or runtime.get('speed') != 1 or runtime.get('tick_paused') is not False
+            or any(type(runtime.get(key)) is not int or runtime[key] <= 0
+                   for key in ('actor_unit', 'player_index', 'surface_index', 'force_index'))):
+        return None
+    targets = factory.get('fair_resource_targets')
+    target = targets.get(item) if isinstance(targets, dict) else None
+    if (not isinstance(target, dict) or not isinstance(target.get('name'), str)
+            or not target['name'].strip()
+            or (item != 'wood' and target['name'] != item)
+            or type(target.get('surface_index')) is not int
+            or target['surface_index'] != runtime['surface_index']
+            or _position(target.get('position')) is None
+            or item not in snapshot.nearby_resources):
+        return None
+    return target
+
+
+def _outpost_kit_prerequisite_start_evidence(snapshot, catalog, plan):
+    """Qualify one current child-kit step while keeping its outer demand distinct.
+
+    The current outpost admission rule is represented as a planner policy
+    heuristic. This evidence does not forecast native payback or claim that the
+    outpost arrived, flowed, produced output, or completed the outer target.
+    """
+    materials = plan.materials or {}
+    provenance = materials.get('outpost_kit_prerequisite')
+    local = materials.get('local_objective')
+    intent = materials.get('work_intent')
+    if (plan.goal != 'rocket_launch' or len(plan.steps) != 1
+            or not isinstance(provenance, dict) or not isinstance(local, dict)
+            or not isinstance(intent, dict) or provenance.get('schema') != 1
+            or provenance.get('observed_tick') != snapshot.tick
+            or intent.get('observed_tick') != snapshot.tick
+            or intent.get('scope') != 'immediate'):
+        return None
+
+    resource, layout = provenance.get('outpost_resource'), provenance.get('outpost_layout')
+    parent, child, admission = (provenance.get('parent_request'),
+                                provenance.get('child_request'),
+                                provenance.get('admission'))
+    local_item = local.get('item')
+    if (resource not in OUTPOST_RESOURCES or not isinstance(layout, str) or not layout
+            or not isinstance(parent, dict) or not isinstance(child, dict)
+            or not isinstance(admission, dict)
+            or parent.get('item') != resource
+            or parent.get('local_target_item') != local_item
+            or not isinstance(local_item, str) or not local_item
+            or type(parent.get('amount')) is not int or parent['amount'] <= 0
+            or type(parent.get('inventory_now')) is not int
+            or parent['inventory_now'] < 0
+            or parent['inventory_now'] != snapshot.inventory.get(resource, 0)
+            or type(child.get('quantity')) is not int or child['quantity'] < 1
+            or child.get('kind') not in {'outpost_component', 'outpost_construction_fuel'}):
+        return None
+    kit_item = child.get('item')
+    if (not isinstance(kit_item, str) or not kit_item
+            or (child['kind'] == 'outpost_component' and kit_item not in OUTPOST_PARTS.values())
+            or (child['kind'] == 'outpost_construction_fuel'
+                and (kit_item != 'coal' or child['quantity'] != 5
+                     or snapshot.inventory.get('coal', 0) >= 5))):
+        return None
+
+    try:
+        row = outpost_sources(snapshot).get(resource)
+        paid_sites = production_site_sources(snapshot)
+        routes = input_route_sources(snapshot)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+    if (not isinstance(row, dict) or not outpost_current(row, snapshot)
+            or row.get('layout') != layout or row.get('state') not in {'proposed', 'building'}
+            or type(row.get('remaining')) is not int or row['remaining'] < 100
+            or provenance.get('outpost_remaining') != row['remaining']
+            or (child['kind'] == 'outpost_component'
+                and outpost_remaining_kit(row).get(kit_item) != child['quantity'])):
+        return None
+    if (snapshot.factory.get('player_connected') is not True
+            or snapshot.factory.get('player_bound') is not True):
+        return None
+
+    parent_path = parent.get('planner_item_path')
+    if not _current_item_dependency_path(snapshot, catalog, parent_path,
+                                         local_item, resource):
+        return None
+
+    # Recompute the source identity and direct-route condition from current
+    # protocol/session/tick-bound witnesses; planner annotations alone do not
+    # establish that the kit is attached to this producer.
+    source_role = OUTPOST_RESOURCES[resource]
+    producer = snapshot.factory.get('entities', {}).get(source_role)
+    producer_site = paid_sites.get(source_role)
+    if (not isinstance(producer, dict) or not isinstance(producer_site, dict)
+            or producer_site.get('state') != 'owned'
+            or type(producer.get('unit_number')) is not int or producer['unit_number'] <= 0
+            or producer_site.get('source_unit') != producer['unit_number']
+            or source_role in routes):
+        return None
+
+    outputs = []
+    for entity in snapshot.factory.get('entities', {}).values():
+        if not isinstance(entity, dict):
+            return None
+        output = entity.get('output', {})
+        if not isinstance(output, dict):
+            return None
+        count = output.get(resource, 0)
+        if type(count) is not int or count < 0:
+            return None
+        outputs.append(count)
+    paid_output_absent = not any(outputs)
+
+    policy = admission.get('classification')
+    if row['state'] == 'proposed':
+        shortage = parent['amount'] - parent['inventory_now']
+        finished = producer.get('products_finished')
+        if (policy != 'existing_proposed_outpost_policy_heuristic'
+                or admission.get('state_at_admission') != 'proposed'
+                or admission.get('source_role') != source_role
+                or admission.get('source_unit') != producer['unit_number']
+                or type(finished) is not int or finished < 20
+                or admission.get('products_finished') != finished
+                or admission.get('minimum_products_finished') != 20
+                or admission.get('direct_input_route_absent') is not True
+                or type(shortage) not in {int, float} or shortage < 10
+                or admission.get('shortage_now') != shortage
+                or admission.get('minimum_shortage') != 10
+                or not paid_output_absent
+                or admission.get('paid_output_absent') is not True
+                or admission.get('native_outpost_payback_observed') is not False
+                or admission.get('basis') !=
+                    'current_planner_direct_route_and_minimum_runway_policy'):
+            return None
+        admission_basis = 'current_proposed_outpost_policy_heuristic'
+    else:
+        paid_parts = sorted(row['parts'])
+        if (policy != 'current_paid_outpost_prefix_continuation'
+                or not paid_parts
+                or admission.get('state_at_admission') != 'building'
+                or admission.get('paid_parts') != paid_parts
+                or admission.get('current_paid_prefix') is not True
+                or admission.get('native_outpost_payback_observed') is not False
+                or admission.get('basis') != 'current_validated_outpost_component_receipts'):
+            return None
+        admission_basis = 'current_paid_outpost_prefix_continuation'
+
+    step = plan.steps[0]
+    try:
+        if not step.allowed(snapshot) or step.satisfied(snapshot):
+            return None
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+    child_path = None
+    action_start = None
+    if step.action == 'factory_gather' and step.effect == 'inventory':
+        gather = (step.parameters or {}).get('resource')
+        parameters = step.parameters or {}
+        quantity = parameters.get('quantity')
+        inventory_now = snapshot.inventory.get(gather) if isinstance(gather, str) else None
+        site = _current_native_fair_resource_target(snapshot, gather)
+        if child['kind'] == 'outpost_component':
+            raw = materials.get('raw_prerequisite')
+            child_path = raw.get('planner_item_path') if isinstance(raw, dict) else None
+            direct_product = (child_path[-2]
+                              if isinstance(child_path, list) and len(child_path) >= 2 else None)
+            try:
+                recipe = catalog.recipe_for(direct_product) if direct_product else None
+            except (KeyError, ValueError, TypeError):
+                recipe = None
+            qualified_dependency = (
+                isinstance(raw, dict)
+                and raw.get('observed_tick') == snapshot.tick
+                and raw.get('ingredient') == gather
+                and raw.get('direct_product') == direct_product
+                and raw.get('recipe') == (recipe.get('name') if isinstance(recipe, dict) else None)
+                and _current_item_dependency_path(snapshot, catalog, child_path, kit_item, gather))
+            fuel_request_matches = True
+        else:
+            raw = None
+            child_path = [kit_item]
+            direct_product = None
+            qualified_dependency = gather == 'coal' and gather == kit_item
+            fuel_request_matches = (
+                qualified_dependency and type(inventory_now) is int
+                and inventory_now < child['quantity']
+                and type(quantity) is int
+                and quantity == min(50, child['quantity'] - inventory_now))
+        quantity = (step.parameters or {}).get('quantity')
+        inventory_now = snapshot.inventory.get(gather, 0) if isinstance(gather, str) else None
+        if (child['kind'] == 'outpost_component' and not qualified_dependency
+                or child['kind'] == 'outpost_construction_fuel' and not fuel_request_matches
+                or gather != step.item
+                or type(quantity) is not int or type(inventory_now) is not int
+                or type(step.threshold) is not int
+                or step.threshold != inventory_now + quantity
+                or not isinstance(site, dict)):
+            return None
+        action_start = {
+            'kind': 'observed_raw_gather_start', 'resource': gather,
+            'quantity': quantity, 'inventory_now': inventory_now,
+            'fair_target_identity_observed': True,
+            'native_target_session_bound': True,
+            'fair_target_surface_index': site['surface_index'],
+            'travel_is_lower_bound_not_arrival_proof': True,
+            'native_harvest_requires_fresh_verification': True,
+        }
+    elif step.action == 'factory_insert' and step.effect == 'transfer':
+        if child['kind'] != 'outpost_component':
+            return None
+        transfer = _recipe_input_transfer_start_evidence(
+            snapshot, catalog, plan, path_root=kit_item)
+        if (transfer is None or not _current_item_dependency_path(
+                snapshot, catalog, transfer['planner_item_path'], kit_item,
+                transfer['ingredient'])):
+            return None
+        child_path = transfer['planner_item_path']
+        action_start = {
+            'kind': 'owned_native_recipe_input_transfer_start',
+            'transfer': transfer,
+            'receiver_capacity_observed': False,
+            'fresh_native_dispatch_capacity_check_required': True,
+            'native_dispatch_checks_receiver_insertable_count': True,
+        }
+    elif step.action == 'factory_extract' and step.effect == 'transfer':
+        pickup = _output_pickup_start_evidence(snapshot, catalog, plan, path_root=kit_item)
+        if (pickup is None or not _current_item_dependency_path(
+                snapshot, catalog, pickup['planner_item_path'], kit_item,
+                pickup['ready_output_item'])):
+            return None
+        if (child['kind'] == 'outpost_construction_fuel'
+                and (pickup['ready_output_item'] != kit_item
+                     or pickup['planned_pickup_quantity'] >
+                        child['quantity'] - snapshot.inventory.get(kit_item, 0))):
+            return None
+        child_path = pickup['planner_item_path']
+        action_start = {'kind': 'owned_native_output_pickup_start', 'pickup': pickup}
+    elif step.action in {'factory_craft', 'factory_craft_job'}:
+        if child['kind'] != 'outpost_component':
+            return None
+        craft = _craft_start_evidence(snapshot, catalog, step)
+        dependency = materials.get('craft_dependency')
+        child_path = dependency.get('planner_item_path') if isinstance(dependency, dict) else None
+        parameters = step.parameters or {}
+        if (step.effect not in {'inventory', 'craft_job_complete'}
+                or not isinstance(craft, dict) or craft.get('observed_tick') != snapshot.tick
+                or craft.get('native_recipe') != parameters.get('recipe')
+                or not isinstance(dependency, dict)
+                or dependency.get('observed_tick') != snapshot.tick
+                or dependency.get('recipe') != parameters.get('recipe')
+                or dependency.get('product') != step.item
+                or not _current_item_dependency_path(snapshot, catalog, child_path,
+                                                     kit_item, step.item)
+                or not all(craft.get(key) is True for key in (
+                    'input_costs_match_native_recipe', 'inputs_in_inventory_now',
+                    'recipe_unlocked_and_handcraftable', 'player_connected_and_bound',
+                    'crafting_queue_empty'))):
+            return None
+        if step.action == 'factory_craft_job' and craft.get('craft_job_protocol_ready') is not True:
+            return None
+        action_start = {
+            'kind': 'paid_native_handcraft_start', 'craft': craft,
+            'native_output_and_child_completion_require_verification': True,
+        }
+    else:
+        return None
+
+    return {
+        'schema': 1,
+        'observed_tick': snapshot.tick,
+        'outpost_resource': resource,
+        'outpost_layout': layout,
+        'outpost_state': row['state'],
+        'parent_target_item': local_item,
+        'parent_request_item': resource,
+        'parent_request_amount': parent['amount'],
+        'parent_inventory_now': parent['inventory_now'],
+        'parent_shortage_now': parent['amount'] - parent['inventory_now'],
+        'parent_planner_item_path': list(parent_path),
+        'parent_and_child_paths_are_separate': True,
+        'child_kit_item': kit_item,
+        'child_kit_quantity': child['quantity'],
+        'child_request_kind': child['kind'],
+        'child_planner_item_path': list(child_path),
+        'current_action': step.action,
+        'current_action_item': step.item,
+        'useful_partial_benefit_level': 1,
+        'does_not_establish_level_two_blocker_removal': True,
+        'admission_basis': admission_basis,
+        'admission_is_not_native_payback_evidence': True,
+        'outpost_placement_arrival_flow_output_and_parent_completion_unverified': True,
+        'action_start_facts': action_start,
+        'native_step_allowed_now': True,
+        'native_action_outcome_requires_verification': True,
     }
 
 
@@ -623,9 +971,9 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             if coal_marker(plan, snapshot):
                 urgency = max(urgency, 1)
                 reasons.append('explicit_coal_kit_investment')
-        target = (plan.materials or {}).get('local_objective')
-        if target is not None:
-            target = deepcopy(target)
+        local_target = (plan.materials or {}).get('local_objective')
+        if local_target is not None:
+            local_target = deepcopy(local_target)
         intent = (plan.materials or {}).get('work_intent', {})
         scope = (intent.get('scope') if isinstance(intent, dict)
                  and intent.get('observed_tick') == snapshot.tick else None)
@@ -665,7 +1013,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                 and isinstance(provenance, dict)):
             path = provenance.get('planner_item_path')
             local = (plan.materials or {}).get('local_objective')
-            target = local.get('item') if isinstance(local, dict) else None
+            craft_target_item = local.get('item') if isinstance(local, dict) else None
             step = plan.steps[0]
             if (provenance.get('observed_tick') == snapshot.tick
                     and provenance.get('recipe') == craft_start['native_recipe']
@@ -673,8 +1021,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                     and isinstance(path, list) and 1 <= len(path) <= 32
                     and all(isinstance(item, str) and item for item in path)
                     and path[-1] == step.item
-                    and isinstance(target, str) and bool(target)
-                    and path[0] == target):
+                    and isinstance(craft_target_item, str) and bool(craft_target_item)
+                    and path[0] == craft_target_item):
                 craft_dependency = {
                     'observed_tick': snapshot.tick,
                     'planner_item_path': list(path),
@@ -693,7 +1041,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                 and len(plan.steps) == 1):
             step = plan.steps[0]
             parameters = step.parameters or {}
-            target, carried = bill.get('bill_inventory_target'), bill.get('inventory_now')
+            bill_inventory_target = bill.get('bill_inventory_target')
+            carried = bill.get('inventory_now')
             produced = craft_start['expected_products_after_native_verification'].get(step.item)
             bill_batches = (plan.materials or {}).get('batches')
             bill_batches = bill_batches if isinstance(bill_batches, dict) else {}
@@ -713,19 +1062,19 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                     and type(bill.get('local_target_amount')) is int
                     and bill['local_target_amount'] > 0
                     and bill_batches.get(parameters.get('recipe')) == parameters.get('batches')
-                    and type(target) is int and target > 0
-                    and type(carried) is int and 0 <= carried < target
+                    and type(bill_inventory_target) is int and bill_inventory_target > 0
+                    and type(carried) is int and 0 <= carried < bill_inventory_target
                     and snapshot.inventory.get(step.item, 0) == carried
                     and type(produced) is int and produced > 0
                     and bill.get('planned_product_units') == produced
-                    and produced >= target - carried):
+                    and produced >= bill_inventory_target - carried):
                 shared_bill_craft = {
                     'observed_tick': snapshot.tick,
                     'local_target_item': local['item'],
                     'craft_item': step.item,
-                    'bounded_bill_inventory_target': target,
+                    'bounded_bill_inventory_target': bill_inventory_target,
                     'inventory_now': carried,
-                    'unfilled_bill_units': target - carried,
+                    'unfilled_bill_units': bill_inventory_target - carried,
                     'expected_products_after_native_verification': produced,
                     'basis': 'current_catalog_shared_material_bill_and_native_recipe',
                     'forecast_is_not_paid_stock_or_completed_output': True,
@@ -915,12 +1264,14 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             highest = max((step.threshold for step in plan.steps
                            if step.action == 'mine_coal'), default=0)
             scope = 'immediate' if highest <= 5 else 'lookahead'
+        outpost_kit_start = _outpost_kit_prerequisite_start_evidence(
+            snapshot, catalog, plan)
         passive = all(s.action in {'factory_wait', 'idle'} for s in plan.steps)
         result[plan.id] = {
             'work_scope': scope,
             'processed_units_basis': 'handling_volume_not_useful_production',
             'compiler_order': index, 'passive': passive, 'urgency': urgency,
-            'reasons': sorted(set(reasons)), 'local_target': target,
+            'reasons': sorted(set(reasons)), 'local_target': local_target,
             'travel_tiles_lower_bound': None if any(x.startswith('travel:') for x in unknown) else round(travel, 3),
             'actor_ticks_estimate': None if unknown else math.ceil(actor),
             'processed_units': quantities, 'material_costs': costs,
@@ -937,6 +1288,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'placement_dependency': placement_dependency,
             'utility_lab_research_dependency': utility_lab_dependency,
             'recipe_input_transfer_start_evidence': recipe_input_transfer_start,
+            'outpost_kit_prerequisite_start_evidence': outpost_kit_start,
             'output_pickup_start_evidence': output_pickup_start,
             'research_deadline_tick': min((row['deadline_tick'] for row in schedules
                 if row['item'] in outputs and row['deadline_tick'] is not None), default=None),
