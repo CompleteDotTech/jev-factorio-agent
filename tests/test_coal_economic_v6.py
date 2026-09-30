@@ -9,11 +9,12 @@ from jev_factorio.coal_economic_v6 import (
     fixed_query, query_sha256,
 )
 from jev_factorio.backends.native_attachment import (
-    connector_observer_bridge_sha256, manual_journal_sha256)
+    PINNED_ASSETS, connector_observer_bridge_sha256, manual_journal_sha256)
 from test_coal_native_evidence import example, lua_runtime, plain
 
 
 def _installed_v6_mock(lua):
+    lua.globals().coal_supply_hash = PINNED_ASSETS['coal_supply']
     lua.globals().v1_hash = manual_journal_sha256()
     lua.globals().v2_hash = CYCLE_SOURCE_SHA256
     lua.globals().bridge_hash = connector_observer_bridge_sha256()
@@ -34,8 +35,11 @@ def _installed_v6_mock(lua):
             snapshot_tick=9000,snapshot_ownership={protocol=1,
                 session_id=rt.jev_session_id,tick=9000,routes={}}}
         rt.native_installation={
+            schema='jev.native-installation.v2',
+            session_id=rt.jev_session_id,actor_unit=actor.unit_number,
             profile='e759-observation-v2-water-origin-v4-manual-cycle-v6-connector-observer-v1',
-            assets={coal_manual_journal_v1=v1_hash,coal_manual_cycle_v2=v2_hash,
+            assets={coal_supply=coal_supply_hash,
+                coal_manual_journal_v1=v1_hash,coal_manual_cycle_v2=v2_hash,
                 connector_observer_bridge_v1=bridge_hash},
             callbacks={journal_tick=journal.tick_handler,
                 cycle_tick=cycle.combined_tick_handler}}

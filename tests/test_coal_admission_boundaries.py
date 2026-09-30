@@ -23,6 +23,11 @@ def carried_backend(version):
     return backend
 
 
+def allow_synthetic_selection(loop, patch):
+    """Seed controller-boundary fixtures without faking native v7 evidence."""
+    patch.setattr(loop, '_coal_admission_allows_start', lambda _snapshot: True)
+
+
 @pytest.mark.parametrize("version", [1, 2])
 def test_unqualified_carried_kit_never_starts_or_pays(version, tmp_path):
     backend = carried_backend(version)
@@ -85,10 +90,11 @@ def test_legacy_carried_policy_still_builds(version, tmp_path):
 def test_changed_economic_observation_rechecked_after_selection(monkeypatch, tmp_path):
     backend = carried_backend(2)
     loop = controller(backend, tmp_path, coal_economic_admission=True)
-    # Controlled policy input exercises a formerly selected plan. It does not
-    # change the native protocol, whose positive economic path remains absent.
+    # The composed-controller double has no qualified native profile. Inject
+    # only the selection boundary so this test can verify the fresh-snapshot
+    # recheck; the public typed evaluator remains untouched and still defers.
     with monkeypatch.context() as patch:
-        patch.setattr(coal_admission, 'evaluate', lambda snapshot: {'eligible': True})
+        allow_synthetic_selection(loop, patch)
         snapshot, plans = offers(loop)
         plan = next(plan for plan in plans if plan.steps[0].action == coal_supply.COMMAND)
         loop._commit_solid(plan, snapshot)
@@ -105,10 +111,11 @@ def test_retained_network_continues_after_economics_defers(recovery, monkeypatch
     backend.prepared_once = recovery == 'prepared'
     backend.lost_ack = recovery == 'lost_ack'
     loop = controller(backend, tmp_path, coal_economic_admission=True)
-    # Seed owned work through the real paid/prepared controller path. This
-    # synthetic positive input is scoped to setup and is never native evidence.
+    # Seed a controller transaction with the fixture-only selection seam. The
+    # production same-RPC first-payment check is separately covered by the Lua
+    # contract tests; this double does not claim positive native economics.
     with monkeypatch.context() as patch:
-        patch.setattr(coal_admission, 'evaluate', lambda snapshot: {'eligible': True})
+        allow_synthetic_selection(loop, patch)
         first = loop.step()
     assert first['verified'] is (recovery == 'paid')
     assert len(backend.calls) == 1
@@ -128,11 +135,33 @@ def test_retained_network_continues_after_economics_defers(recovery, monkeypatch
     assert resumed.memory.coal_commitments
 
 
+def test_prepared_retry_exception_is_bound_to_checkpoint_and_native_receipt(monkeypatch, tmp_path):
+    backend = carried_backend(2)
+    backend.prepared_once = True
+    loop = controller(backend, tmp_path, coal_economic_admission=True)
+    with monkeypatch.context() as patch:
+        allow_synthetic_selection(loop, patch)
+        first = loop.step()
+    assert not first['verified'] and loop.memory.pending['dispatch'] == 'ambiguous'
+
+    resumed = controller(backend, tmp_path, resume=True, coal_economic_admission=True)
+    snapshot = resumed._observe()
+    from jev_factorio.skills import Plan
+    step = Plan.from_dict(resumed.memory.active_plan).steps[resumed.memory.step_index]
+    assert resumed._coal_prepared_first_payment_retry(step, snapshot)
+
+    changed = deepcopy(snapshot)
+    row = changed.factory['coal_supply']['sources'][step.parameters['target']]
+    row['pending']['receipt'] = 'not-the-checkpoint-receipt'
+    assert not resumed._coal_prepared_first_payment_retry(step, changed)
+    assert len(backend.calls) == 1
+
+
 def test_paid_funding_continues_when_new_admission_defers(monkeypatch, tmp_path):
     backend = Backend()
     loop = controller(backend, tmp_path, coal_economic_admission=True)
     with monkeypatch.context() as patch:
-        patch.setattr(coal_admission, 'evaluate', lambda snapshot: {'eligible': True})
+        allow_synthetic_selection(loop, patch)
         assert loop.step()['verified']
     assert len(backend.calls) == 1 and loop.memory.coal_funding is not None
     assert coal_admission.evaluate(backend.state)['eligible'] is False

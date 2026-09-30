@@ -169,7 +169,8 @@ def _items(value):
 
 def decode_v6(raw: dict, *, expected_epoch: dict, expected_bundle: dict,
               unit_qualification: dict, expected_connectors=None,
-              expected_routes=None, expected_journal_asset_sha256=None) -> V6Observation:
+              expected_routes=None, expected_journal_asset_sha256=None,
+              allow_uninstalled_cycle_v2: bool = False) -> V6Observation:
     """Reject incomplete/foreign census rows; never infer economic authority."""
     require(type(raw) is dict and set(raw) == ROOT_KEYS | {EXTRA_KEY, 'cycle_v2'},
             'invalid_v6_native_fields')
@@ -190,7 +191,9 @@ def decode_v6(raw: dict, *, expected_epoch: dict, expected_bundle: dict,
             and value['reason'] == 'bounded_owned_surface'
             and value['owned_surface_coverage_complete'] is True
             and value['actor_unit'] == graph.actor_unit
-            and value['cycle_asset_sha256'] == CYCLE_SOURCE_SHA256
+            and (value['cycle_asset_sha256'] == CYCLE_SOURCE_SHA256
+                 or (allow_uninstalled_cycle_v2
+                     and value['cycle_asset_sha256'] is False))
             and value['ground_items'] == 0 and value['trees'] == 0
             and value['crafting_queue'] == 0,
             'material_census_incomplete')
@@ -241,64 +244,71 @@ def decode_v6(raw: dict, *, expected_epoch: dict, expected_bundle: dict,
             'material_census_set_mismatch')
     cycle = raw['cycle_v2']
     fields(cycle, 'status journal_asset_sha256 cycle_complete rows')
-    require(cycle['status'] == 'observed'
-            and cycle['journal_asset_sha256'] == CYCLE_SOURCE_SHA256
-            and cycle['cycle_complete'] is False
-            and graph.manual_cycle is not None,
-            'cycle_v2_unqualified')
-    gathers = {row.receipt: row for row in graph.manual_cycle.gathers}
-    transfers = {row.receipt: row for row in graph.manual_cycle.deliveries}
-    targets = tuple((row.target_role, row.target_unit) for row in graph.sources)
     cycle_rows = []
-    seen = set()
-    for row in rows(cycle['rows'], 0, 32):
-        fields(row, 'receipt gather_receipt started_tick finished_tick '
-                    'gathered_coal delivered_coal gather_mining_ticks deliveries')
-        receipt = identity(row['receipt'])
-        gather_receipt = identity(row['gather_receipt'])
-        require(receipt not in seen and gather_receipt not in seen,
-                'cycle_v2_receipt_alias')
-        seen.update((receipt, gather_receipt))
-        gather = gathers.get(gather_receipt)
-        require(gather is not None, 'cycle_v2_gather_mismatch')
-        start = integer(row['started_tick'], 0, graph.epoch.tick)
-        finish = integer(row['finished_tick'], start + 1, graph.epoch.tick)
-        require(start <= gather.started_tick < gather.finished_tick <= finish
-                and gather.coal_before == 0
-                and row['gathered_coal'] == gather.coal_after
-                and row['gather_mining_ticks'] == gather.mining_ticks,
-                'cycle_v2_gather_mismatch')
-        deliveries = []
-        previous = gather.finished_tick
-        for item in rows(row['deliveries'], len(targets), len(targets)):
-            fields(item, 'receipt role unit coal tick started_tick finished_tick walking_ticks')
-            transfer_receipt = identity(item['receipt'])
-            require(transfer_receipt not in seen, 'cycle_v2_receipt_alias')
-            seen.add(transfer_receipt)
-            role = identity(item['role'])
-            unit = integer(item['unit'], 1)
-            coal = integer(item['coal'], 1, 200)
-            tick = integer(item['tick'], gather.finished_tick, finish)
-            begin = integer(item['started_tick'], previous, finish)
-            end = integer(item['finished_tick'], begin, finish)
-            walking = integer(item['walking_ticks'], 0, end - begin)
-            require(begin <= tick <= end, 'cycle_v2_delivery_interval')
-            native = transfers.get(transfer_receipt)
-            require(native is not None and (native.role, native.unit, native.coal, native.tick)
-                    == (role, unit, coal, tick), 'cycle_v2_delivery_mismatch')
-            deliveries.append(CycleDelivery(transfer_receipt, role, unit,
-                                            coal, tick, begin, end, walking))
-            previous = end
-        require(tuple((d.role, d.unit) for d in deliveries) == targets
-                and sum(d.coal for d in deliveries) == row['delivered_coal']
-                and 0 < row['delivered_coal'] <= gather.coal_after,
-                'cycle_v2_conservation')
-        cycle_rows.append(CycleRow(receipt, gather_receipt, start, finish,
-                                   gather.coal_after, row['delivered_coal'],
-                                   gather.mining_ticks, tuple(deliveries)))
-    require(all(left.finished_tick <= right.started_tick
-                for left, right in zip(cycle_rows, cycle_rows[1:])),
-            'cycle_v2_overlap')
+    if (allow_uninstalled_cycle_v2 and cycle['status'] == 'not_installed'):
+        require(cycle['journal_asset_sha256'] is False
+                and cycle['cycle_complete'] is False
+                and rows(cycle['rows'], 0, 0) == []
+                and graph.manual_cycle is not None,
+                'cycle_v2_legacy_v1_history')
+    else:
+        require(cycle['status'] == 'observed'
+                and cycle['journal_asset_sha256'] == CYCLE_SOURCE_SHA256
+                and cycle['cycle_complete'] is False
+                and graph.manual_cycle is not None,
+                'cycle_v2_unqualified')
+        gathers = {row.receipt: row for row in graph.manual_cycle.gathers}
+        transfers = {row.receipt: row for row in graph.manual_cycle.deliveries}
+        targets = tuple((row.target_role, row.target_unit) for row in graph.sources)
+        seen = set()
+        for row in rows(cycle['rows'], 0, 32):
+            fields(row, 'receipt gather_receipt started_tick finished_tick '
+                        'gathered_coal delivered_coal gather_mining_ticks deliveries')
+            receipt = identity(row['receipt'])
+            gather_receipt = identity(row['gather_receipt'])
+            require(receipt not in seen and gather_receipt not in seen,
+                    'cycle_v2_receipt_alias')
+            seen.update((receipt, gather_receipt))
+            gather = gathers.get(gather_receipt)
+            require(gather is not None, 'cycle_v2_gather_mismatch')
+            start = integer(row['started_tick'], 0, graph.epoch.tick)
+            finish = integer(row['finished_tick'], start + 1, graph.epoch.tick)
+            require(start <= gather.started_tick < gather.finished_tick <= finish
+                    and gather.coal_before == 0
+                    and row['gathered_coal'] == gather.coal_after
+                    and row['gather_mining_ticks'] == gather.mining_ticks,
+                    'cycle_v2_gather_mismatch')
+            deliveries = []
+            previous = gather.finished_tick
+            for item in rows(row['deliveries'], len(targets), len(targets)):
+                fields(item, 'receipt role unit coal tick started_tick finished_tick walking_ticks')
+                transfer_receipt = identity(item['receipt'])
+                require(transfer_receipt not in seen, 'cycle_v2_receipt_alias')
+                seen.add(transfer_receipt)
+                role = identity(item['role'])
+                unit = integer(item['unit'], 1)
+                coal = integer(item['coal'], 1, 200)
+                tick = integer(item['tick'], gather.finished_tick, finish)
+                begin = integer(item['started_tick'], previous, finish)
+                end = integer(item['finished_tick'], begin, finish)
+                walking = integer(item['walking_ticks'], 0, end - begin)
+                require(begin <= tick <= end, 'cycle_v2_delivery_interval')
+                native = transfers.get(transfer_receipt)
+                require(native is not None and (native.role, native.unit, native.coal, native.tick)
+                        == (role, unit, coal, tick), 'cycle_v2_delivery_mismatch')
+                deliveries.append(CycleDelivery(transfer_receipt, role, unit,
+                                                coal, tick, begin, end, walking))
+                previous = end
+            require(tuple((d.role, d.unit) for d in deliveries) == targets
+                    and sum(d.coal for d in deliveries) == row['delivered_coal']
+                    and 0 < row['delivered_coal'] <= gather.coal_after,
+                    'cycle_v2_conservation')
+            cycle_rows.append(CycleRow(receipt, gather_receipt, start, finish,
+                                       gather.coal_after, row['delivered_coal'],
+                                       gather.mining_ticks, tuple(deliveries)))
+        require(all(left.finished_tick <= right.started_tick
+                    for left, right in zip(cycle_rows, cycle_rows[1:])),
+                'cycle_v2_overlap')
     # This is a positive *inventory coverage* claim only. Open-world resource
     # substitutes, future goal commitment, complete manual work and same-RPC
     # first payment remain unsupported.

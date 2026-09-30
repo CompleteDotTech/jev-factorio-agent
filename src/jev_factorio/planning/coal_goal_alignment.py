@@ -75,7 +75,7 @@ def evaluate(snapshot: GameSnapshot, memory: CampaignMemory, catalog: Catalog,
                 or runtime.get('tick') != snapshot.tick
                 or type(runtime.get('actor_unit')) is not int
                 or runtime['actor_unit'] != native.actor_unit
-                or epoch.session_id != snapshot.session_id or epoch.tick != snapshot.tick
+                or epoch.session_id != snapshot.session_id or epoch.tick < snapshot.tick
                 or epoch.actor_index != runtime.get('player_index')
                 or epoch.surface_index != runtime.get('surface_index')
                 or epoch.force_index != runtime.get('force_index')
