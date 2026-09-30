@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from .backends.mock import MockBackend
 from .judgments import (DEFAULT_MAX_REQUEST_BYTES, MAX_MAX_REQUEST_BYTES,
                         MIN_MAX_REQUEST_BYTES)
+from .blocked_persistence import DEFAULT_IDLE_OBSERVATIONS, MAX_IDLE_OBSERVATIONS
 from .loop import AgentLoop
 from .research_log import ResearchLog, RunConfiguration, validate_output_paths
 
@@ -69,6 +70,11 @@ def cli() -> None:
                                               str(DEFAULT_MAX_REQUEST_BYTES))),
                    help="Serialized decision-request byte budget (not provider tokens); "
                         "candidates that do not fit are pruned and reported")
+    p.add_argument("--persistent-idle-observations", type=int,
+                   default=DEFAULT_IDLE_OBSERVATIONS,
+                   help="With --persist-recoverable-blocks, stop the invocation after this many "
+                        "consecutive maximum-delay waits with unchanged decision evidence "
+                        "(0 disables the bound); the blocked checkpoint is preserved")
     p.add_argument("--log-file", default=os.environ.get("JEV_LOG_FILE"))
     p.add_argument("--run-dir", default=os.environ.get("JEV_RUN_DIR"),
                    help="Create a new, exclusive research evidence directory (never append/resume)")
@@ -255,6 +261,8 @@ def cli() -> None:
         p.error("--confidence-floor must be finite and in [0, 1]")
     if not MIN_MAX_REQUEST_BYTES <= args.max_request_bytes <= MAX_MAX_REQUEST_BYTES:
         p.error(f"--max-request-bytes must be in [{MIN_MAX_REQUEST_BYTES}, {MAX_MAX_REQUEST_BYTES}]")
+    if not 0 <= args.persistent_idle_observations <= MAX_IDLE_OBSERVATIONS:
+        p.error(f"--persistent-idle-observations must be in [0, {MAX_IDLE_OBSERVATIONS}]")
     if args.backend not in {"mock", "play_api", "fle"}:
         p.error(f"unknown backend: {args.backend}")
     if args.dashboard_events and args.controller != "hierarchical":
@@ -461,6 +469,7 @@ def cli() -> None:
                 )
             if args.persist_recoverable_blocks:
                 options["persist_recoverable_blocks"] = True
+                options["persistent_idle_observations"] = args.persistent_idle_observations
             loop_type = HierarchicalLoop
             if args.background_work:
                 from .background import BackgroundWorkLoop

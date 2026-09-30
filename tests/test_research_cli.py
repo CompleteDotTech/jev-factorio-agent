@@ -178,6 +178,8 @@ def test_invalid_cli_creates_no_research_artifacts(tmp_path, monkeypatch):
     ["--furnace-input-belts"],
     ["--max-request-bytes", "100"],
     ["--max-request-bytes", "99999999"],
+    ["--persistent-idle-observations", "-1"],
+    ["--persistent-idle-observations", "1001"],
 ])
 def test_invalid_cli_creates_no_dashboard_or_research(tmp_path, monkeypatch, invalid):
     monkeypatch.setattr(main, "make_backend", lambda *a, **kw: pytest.fail("Backend started"))

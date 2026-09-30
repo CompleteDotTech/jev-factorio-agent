@@ -21,6 +21,7 @@ from .operational_safety import MaintenanceAdmissionClosed, StoragePressure
 from .provider_health import ProviderCircuit
 from .backends.errors import ConnectionPreflightRejected
 from .research_log import EventSink, ResearchLogError, validate_output_paths
+from .blocked_persistence import DEFAULT_IDLE_OBSERVATIONS, IDLE_DELAY_SECONDS, MAX_IDLE_OBSERVATIONS
 from .judgments import DEFAULT_MAX_REQUEST_BYTES, Decision, select_plan
 from .loop import AgentLoop
 from .memory import CampaignMemory
@@ -55,7 +56,8 @@ class HierarchicalLoop(AgentLoop):
                  reevaluate_blocked_once: bool = False,
                  exact_checkpoint_sha256: str | None = None,
                  blocked_source_revision: str | None = None,
-                 persist_recoverable_blocks: bool = False):
+                 persist_recoverable_blocks: bool = False,
+                 persistent_idle_observations: int = DEFAULT_IDLE_OBSERVATIONS):
         if factory_scheduling not in {"serial", "ready-work"}:
             raise ValueError("Unknown factory scheduling policy")
         self.factory_scheduling = factory_scheduling
@@ -82,6 +84,14 @@ class HierarchicalLoop(AgentLoop):
         if type(persist_recoverable_blocks) is not bool:
             raise ValueError("Persistent blocked recovery must be a boolean")
         self.persist_recoverable_blocks = persist_recoverable_blocks
+        if (type(persistent_idle_observations) is not int
+                or not 0 <= persistent_idle_observations <= MAX_IDLE_OBSERVATIONS):
+            raise ValueError("Persistent idle observations must be an integer in [0, 1000]")
+        self.persistent_idle_observations = persistent_idle_observations
+        # Process-local: consecutive waits already at the maximum delay with an
+        # unchanged decision fingerprint. A restarted invocation starts again.
+        self._persistent_idle_waits = 0
+        self._persistent_idle_exhausted = False
         self._persistent_recovery_status = None
         self._persistent_runtime_wait_level = 0
         if resume_controller and (self.checkpoint is None or not self.checkpoint.is_file()):
@@ -189,7 +199,8 @@ class HierarchicalLoop(AgentLoop):
                 or memory.active_plan is not None or memory.transfer_recovery is not None
                 or getattr(memory, "background_job", None) is not None
                 or getattr(memory, "background_attempt", None) is not None
-                or self._persistence_failed or self._capital_fault):
+                or self._persistence_failed or self._capital_fault
+                or self._persistent_idle_exhausted):
             return False
         if isinstance(self.jev, ProviderCircuit) and self.jev.state.get("phase") != "healthy":
             return False
@@ -238,6 +249,27 @@ class HierarchicalLoop(AgentLoop):
         attempt = find_attempt(self.memory, source, input_sha256,
                                archive_index=self._blocked_recovery_archive_index)
         unresolved = attempt is not None and attempt.get("outcome") == "pending"
+        # An unresolved (possibly billed) decision is never abandoned here; only a
+        # resolved, unchanged fingerprint already at the longest delay counts as idle.
+        if unresolved or delay < IDLE_DELAY_SECONDS:
+            self._persistent_idle_waits = 0
+        else:
+            self._persistent_idle_waits += 1
+        if (not unresolved and self.persistent_idle_observations
+                and self._persistent_idle_waits >= self.persistent_idle_observations):
+            self._persistent_idle_exhausted = True
+            self._persistent_recovery_status = {
+                "phase": "idle_wait_exhausted",
+                "reason": self.memory.reason,
+                "next_observation_seconds": 0.0,
+                "model_call": False,
+                "decision_input_sha256": input_sha256,
+                "recorded_attempts": self._blocked_recovery_attempt_count(),
+            }
+            return self._record(
+                snapshot, "observe",
+                "Blocked; idle wait exhausted without changed game evidence "
+                f"after {self._persistent_idle_waits} observations at {delay:g}s")
         self._persistent_recovery_status = {
             "phase": ("evaluation_outcome_unknown_waiting" if unresolved
                       else "waiting_for_changed_game_evidence"),
@@ -1457,6 +1489,7 @@ class HierarchicalLoop(AgentLoop):
                     else:
                         self._record_persistent_attempt(snapshot, persistent_input_sha256)
                     self._persistent_runtime_wait_level = 0
+                    self._persistent_idle_waits = 0
                     self._persistent_recovery_status = {
                         "phase": "evaluating_changed_game_evidence",
                         "reason": self.memory.reason,

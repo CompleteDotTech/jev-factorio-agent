@@ -738,3 +738,136 @@ def test_persistent_mode_needs_a_continuous_live_resume_configuration():
         _configuration(asdict(replace(valid, until_complete=False)))
     with pytest.raises(ValueError, match="Persistent blocked recovery"):
         _configuration(asdict(replace(valid, backend="mock")))
+
+
+def _idle_loop(tmp_path, monkeypatch, *, idle_observations, backend=None):
+    import jev_factorio.controller as controller
+
+    monkeypatch.setattr(controller, "gameplay_context", lambda: {"code_revision": SOURCE})
+    backend = backend or LiveMockBackend()
+    checkpoint = tmp_path / "checkpoint.json"
+    if not checkpoint.exists():
+        memory = CampaignMemory(backend.session_id, "bootstrap_mining",
+                                active_goal="bootstrap_mining", last_tick=0,
+                                status="blocked", reason="Candidate evidence insufficient",
+                                stalled_decisions=5)
+        persistence.record_attempt(memory, SOURCE, "e" * 64, memory.reason, 0)
+        memory.save(checkpoint)
+    loop = HierarchicalLoop(
+        backend, jev=LiveClient(), policy="jev", target="bootstrap_mining",
+        checkpoint=str(checkpoint), resume_controller=True, tick_seconds=0,
+        persist_recoverable_blocks=True, persistent_idle_observations=idle_observations)
+    if loop._safety is not None:
+        loop._safety.admission = lambda *_args: None
+    current = {"id": "same-plan"}
+    loop._work_candidates = lambda snapshot: ([Plan(
+        current["id"], "bootstrap_mining", "Same candidate",
+        (Step("walk_to_iron", "near", "iron-ore"),))], "")
+    requests = []
+
+    def reject(*_args):
+        requests.append(True)
+        return Decision(None, "observe", "Candidate evidence insufficient",
+                        model_called=True,
+                        diagnostics={"schema": 1, "outcome": "all_candidates_rejected"})
+
+    monkeypatch.setattr(controller, "select_plan", reject)
+    return loop, backend, checkpoint, requests, current
+
+
+def test_idle_wait_bound_ends_the_invocation_and_preserves_the_blocked_checkpoint(
+        tmp_path, monkeypatch):
+    import jev_factorio.loop as loop_module
+
+    loop, backend, checkpoint, requests, _ = _idle_loop(
+        tmp_path, monkeypatch, idle_observations=3)
+    waits = []
+    monkeypatch.setattr(loop_module, "_interruptible_sleep", waits.append)
+    loop.run(until_complete=True)
+
+    assert loop.terminal is True
+    assert requests == [True] and backend.actions == []
+    assert waits[:8] == [2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0]
+    assert all(delay >= 256.0 for delay in waits[7:])
+    # The exhausting observation ends the run before another sleep.
+    assert len(waits) == 9
+    assert loop.memory.status == "blocked"
+    assert loop.memory.reason == "Candidate evidence insufficient"
+    assert loop.memory.stalled_decisions == 6
+    assert loop.memory.active_plan is None and loop.memory.pending is None
+    assert loop._persistent_recovery_status["phase"] == "idle_wait_exhausted"
+    assert loop._persistent_recovery_status["model_call"] is False
+    assert loop.persistent_recovery_wait_seconds() == 0.0
+
+    saved = CampaignMemory.load(checkpoint, backend.session_id, "bootstrap_mining")
+    assert saved.status == "blocked" and saved.stalled_decisions == 6
+    assert saved.reason == "Candidate evidence insufficient"
+    assert len(saved.blocked_recovery["attempts"]) == 2
+
+
+def test_idle_bound_is_process_local_so_a_restart_waits_again(tmp_path, monkeypatch):
+    import jev_factorio.loop as loop_module
+
+    loop, backend, checkpoint, requests, _ = _idle_loop(
+        tmp_path, monkeypatch, idle_observations=2)
+    monkeypatch.setattr(loop_module, "_interruptible_sleep", lambda delay: None)
+    loop.run(until_complete=True)
+    assert loop.terminal is True
+
+    restarted, _, _, more_requests, _ = _idle_loop(
+        tmp_path, monkeypatch, idle_observations=2, backend=backend)
+    restarted.step()
+    assert restarted.terminal is False
+    assert more_requests == []  # the unchanged fingerprint is already recorded; no new bill
+
+
+def test_zero_idle_observations_disables_the_bound(tmp_path, monkeypatch):
+    import jev_factorio.loop as loop_module
+
+    loop, _, _, requests, _ = _idle_loop(tmp_path, monkeypatch, idle_observations=0)
+    waits = []
+
+    def stop_after_many(delay):
+        waits.append(delay)
+        if len(waits) == 25:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(loop_module, "_interruptible_sleep", stop_after_many)
+    with pytest.raises(KeyboardInterrupt):
+        loop.run(until_complete=True)
+    assert loop.terminal is False
+    assert waits[-1] == 300.0 and requests == [True]
+
+
+def test_changed_evidence_resets_the_idle_count_and_bills_one_new_decision(
+        tmp_path, monkeypatch):
+    loop, _, _, requests, current = _idle_loop(tmp_path, monkeypatch, idle_observations=3)
+    for _ in range(9):
+        loop.step()
+        assert loop.terminal is False
+    assert loop._persistent_idle_waits == 2 and requests == [True]
+
+    current["id"] = "different-plan"  # a changed decision fingerprint
+    loop.step()
+    assert requests == [True, True]
+    assert loop._persistent_idle_waits == 0
+    assert loop.terminal is False
+
+
+def test_unresolved_decision_outcome_is_never_abandoned_by_the_idle_bound(
+        tmp_path, monkeypatch):
+    loop, _, checkpoint, requests, _ = _idle_loop(tmp_path, monkeypatch, idle_observations=1)
+    loop.step()
+    loop.memory.blocked_recovery["attempts"][-1]["outcome"] = "pending"
+    loop.memory.blocked_recovery["wait_level"] = 9
+    for _ in range(4):
+        loop.step()
+        assert loop.terminal is False
+        assert loop._persistent_recovery_status["phase"] == "evaluation_outcome_unknown_waiting"
+    assert loop._persistent_idle_waits == 0
+
+
+@pytest.mark.parametrize("bad", [-1, 1001, True, 6.0, "6", None])
+def test_idle_observation_bound_is_validated(tmp_path, monkeypatch, bad):
+    with pytest.raises(ValueError, match="idle observations"):
+        _idle_loop(tmp_path, monkeypatch, idle_observations=bad)
