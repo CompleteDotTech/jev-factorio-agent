@@ -29,6 +29,13 @@ from .state import GameSnapshot
 from .provenance import gameplay_context
 
 
+class _DefaultSteps:
+    """Distinguish an omitted step limit from an explicit ``None``."""
+
+
+_DEFAULT_STEPS = _DefaultSteps()
+
+
 def fallback_policy(snapshot: GameSnapshot) -> str:
     """Deterministic policy for low-confidence ticks (and the mock demo)."""
     inventory = snapshot.inventory
@@ -111,13 +118,25 @@ class AgentLoop:
               f"(conf {record['confidence']:.2f})  {outcome}", flush=True)
         return record
 
-    def run(self, steps: int | None = 10, duration_seconds: float | None = None,
-            *, after_step: Callable[[AgentLoop, int, dict], bool] | None = None) -> None:
-        if steps is None and duration_seconds is None:
+    def run(self, steps: int | None | _DefaultSteps = _DEFAULT_STEPS,
+            duration_seconds: float | None = None, *, until_complete: bool = False,
+            after_step: Callable[[AgentLoop, int, dict], bool] | None = None) -> None:
+        if type(until_complete) is not bool:
+            raise ValueError("until_complete must be a boolean")
+        if steps is _DEFAULT_STEPS:
+            steps = None if until_complete else 10
+        if until_complete:
+            if steps is not None or duration_seconds is not None:
+                raise ValueError("until_complete cannot be combined with a step or duration limit")
+            if type(getattr(self, "terminal", None)) is not bool:
+                raise ValueError("until_complete requires a controller with terminal status")
+            if after_step is not None:
+                raise ValueError("until_complete cannot use an owner step gate")
+        if steps is None and duration_seconds is None and not until_complete:
             raise ValueError("A step or duration limit is required")
         deadline = time.monotonic() + duration_seconds if duration_seconds is not None else None
         completed = 0
-        while steps is None or completed < steps:
+        while until_complete or steps is None or completed < steps:
             if getattr(self, "terminal", False):
                 break
             if deadline is not None and time.monotonic() >= deadline:
@@ -139,6 +158,8 @@ class AgentLoop:
                 print(f"Transient API failure ({status or type(error).__name__}); retrying.",
                       flush=True)
                 delay = max(30, delay)
+            if until_complete and step_succeeded and getattr(self, "terminal", False):
+                break
             if (step_succeeded and after_step is not None
                     and (steps is None or completed < steps)
                     and not getattr(self, "terminal", False)):

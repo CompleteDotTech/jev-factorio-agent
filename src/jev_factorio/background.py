@@ -107,6 +107,10 @@ class BackgroundWorkLoop(HierarchicalLoop):
         job = self._job()
         if job:
             attempt = self.memory.background_attempt
+            prior_verified_attempts = {
+                outcome["id"] for outcome in self.memory.attempt_outcomes
+                if outcome.get("outcome") == "verified"
+            }
             evidence = {**self._trace.attempt_ref(attempt["id"] if attempt else None),
                         "plan_id": job.plan_id, "receipt": job.parameters["receipt"]}
             try:
@@ -119,10 +123,16 @@ class BackgroundWorkLoop(HierarchicalLoop):
                 self.memory.status, self.memory.reason = "uncertain", job.failed
                 self.memory.event("background_job_uncertain", job=job.parameters["receipt"],
                                   reason=job.failed, tick=snapshot.tick)
+                self._last_background_observation = {
+                    "background_state": "uncertain", "verified_attempt_added": False,
+                }
             else:
                 self.memory.background_job = None if complete else job.to_dict()
                 if complete:
                     attempt = self.memory.background_attempt
+                    verified_attempt_added = bool(
+                        attempt is not None and attempt["id"] not in prior_verified_attempts
+                    )
                     if attempt is not None:
                         self.memory.attempt_outcomes.append({
                             **deepcopy(attempt), "outcome": "verified", "finished_tick": snapshot.tick,
@@ -133,6 +143,14 @@ class BackgroundWorkLoop(HierarchicalLoop):
                     self.memory.background_schema = 2
                     self.memory.event("background_job_completed", job=job.parameters["receipt"],
                                       plan=job.plan_id, outputs=job.outputs, tick=snapshot.tick)
+                    self._last_background_observation = {
+                        "background_state": "verified_completed",
+                        "verified_attempt_added": verified_attempt_added,
+                    }
+                else:
+                    self._last_background_observation = {
+                        "background_state": "pending", "verified_attempt_added": False,
+                    }
             # Persist updates before another action; this also protects the
             # release of output locks when completion is observed after restart.
             self._save()
@@ -140,7 +158,35 @@ class BackgroundWorkLoop(HierarchicalLoop):
                 self._trace.emit("background_job_completed", {**evidence, "verified": True,
                                                               "outputs": job.outputs})
                 self._trace.release_attempt(evidence["attempt_id"])
+        else:
+            self._last_background_observation = {
+                "background_state": "none", "verified_attempt_added": False,
+            }
         return snapshot
+
+    def reconcile_only(self) -> dict:
+        """Observe and durably reconcile one resumed background job, without acting.
+
+        The normal hierarchical observation path validates session identity,
+        connector/capital state, and native receipts. The background override
+        above then verifies the persisted craft receipt and saves any outcome.
+        This method deliberately does not plan, call Jev, or dispatch an action.
+        """
+        if not self.resume_controller or self.checkpoint is None:
+            raise ValueError("Reconcile-only requires a resumed controller checkpoint")
+        if self.factory_scheduling != "ready-work":
+            raise ValueError("Reconcile-only requires ready-work scheduling")
+        self._last_background_observation = None
+        snapshot = self._observe(stage="reconcile")
+        self._save()
+        reconciliation = self._last_background_observation or {
+            "background_state": "none", "verified_attempt_added": False,
+        }
+        return {
+            "status": self.memory.status,
+            "tick": snapshot.tick,
+            **reconciliation,
+        }
 
     def _execution_barrier(self, snapshot) -> bool:
         job = self._job()

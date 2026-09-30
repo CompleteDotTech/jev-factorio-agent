@@ -157,6 +157,22 @@ physical fluid and electricity connections. Native crafting, inventories,
 research, and the force rocket-launch counter verify progress. Movement and
 resource gathering still use FLE acceleration, not keyboard/mouse gameplay.
 
+For an authorized hierarchical campaign without a step or duration cutoff, use
+`--until-complete`:
+
+```bash
+python -m jev_factorio --controller hierarchical --backend fle --resume \
+  --target rocket_launch --policy hybrid --until-complete --tick-seconds 2 \
+  --checkpoint runs/campaign-state.json --log-file runs/campaign.jsonl
+```
+
+This mode requires the hierarchical controller's durable target state. It stops
+when that target is verified or the controller reaches its existing `blocked`
+or `uncertain` terminal state; those two states are not successful completion.
+Unexpected API, observation, dispatch, and persistence failures still propagate
+through the existing recovery guards. No retry policy is added. The default
+step limit and `--duration-hours` mode remain bounded.
+
 **Experimental: no complete native rocket-launch playthrough is verified.**
 Native hand-crafting requires a connected viewer controlling the agent character.
 Live-session resume does not support server reloads or viewer reconnection;

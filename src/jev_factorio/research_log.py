@@ -44,6 +44,9 @@ _TREATMENT_FIELDS = {"factory_scheduling", "background_work",
                      "furnace_output_buffers", "furnace_input_belts", "mining_outposts",
                      "campaign_diagnostics", "profile_observations", "consolidated_observations",
                      "lead_time_supply", "coverage_margin_lookahead", "solid_routes", "solid_science_policy", "coal_supply", "coal_kit_policy", "coal_economic_admission"}
+_OPTIONAL_CONFIGURATION_FIELDS = _TREATMENT_FIELDS | {
+    "treatment_sha256", "until_complete", "reconcile_only",
+}
 
 
 class ResearchLogError(RuntimeError):
@@ -111,6 +114,8 @@ class RunConfiguration:
     coal_kit_policy: bool = False
     coal_economic_admission: bool = False
     treatment_sha256: str | None = None
+    until_complete: bool = False
+    reconcile_only: bool = False
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -341,7 +346,7 @@ def _optional_text(value: object) -> None:
 
 def _configuration(configuration: dict) -> None:
     expected = set(RunConfiguration.__dataclass_fields__)
-    if (type(configuration) is not dict or not expected - _TREATMENT_FIELDS - {'treatment_sha256'} <= set(configuration)
+    if (type(configuration) is not dict or not expected - _OPTIONAL_CONFIGURATION_FIELDS <= set(configuration)
             or not set(configuration) <= expected):
         raise ValueError("Unexpected evidence schema fields")
     if configuration.get("factory_scheduling", "serial") not in ("serial", "ready-work"):
@@ -381,9 +386,28 @@ def _configuration(configuration: dict) -> None:
     if configuration["steps"] is not None and configuration["duration_seconds"] is not None:
         raise ValueError("Run configuration has conflicting limits")
     for key in ("resume", "resume_controller", "adopt_session", "mock_model",
-                "legacy_log_enabled", "checkpoint_enabled"):
-        if type(configuration[key]) is not bool:
+                "legacy_log_enabled", "checkpoint_enabled", "until_complete", "reconcile_only"):
+        value = configuration.get(key, False) if key in {"until_complete", "reconcile_only"} else configuration[key]
+        if type(value) is not bool:
             raise ValueError("Invalid run configuration flag")
+    until_complete = configuration.get("until_complete", False)
+    reconcile_only = configuration.get("reconcile_only", False)
+    if until_complete and reconcile_only:
+        raise ValueError("Run configuration has conflicting execution modes")
+    if (until_complete or reconcile_only) and (
+        configuration["steps"] is not None or configuration["duration_seconds"] is not None
+    ):
+        raise ValueError("Run configuration mode conflicts with bounded limits")
+    if until_complete and configuration["controller"] != "hierarchical":
+        raise ValueError("Until-complete requires hierarchical terminal status")
+    if reconcile_only and (
+        configuration["backend"] != "fle" or configuration["controller"] != "hierarchical"
+        or configuration["factory_scheduling"] != "ready-work"
+        or not configuration["background_work"] or not configuration["resume"]
+        or not configuration["resume_controller"] or not configuration["checkpoint_enabled"]
+        or configuration["target"] == "bootstrap_mining"
+    ):
+        raise ValueError("Reconcile-only requires a resumed native background-work campaign")
 
 
 def _provenance(provenance: dict) -> None:

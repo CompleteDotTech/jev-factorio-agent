@@ -96,9 +96,11 @@ The stored line is canonical bytes plus one LF. Each document/event is at most
 The manifest uses schema `jev-factorio.manifest.v1`. Its hash is the first event's
 `prev_hash`. New manifests also record treatment settings `factory_scheduling`,
 `background_work`, `furnace_output_buffers` and `furnace_input_belts` in
-configuration. For original V1 manifests these four fields may be absent
-(historical defaults: serial scheduling and disabled opt-ins); all other
-configuration fields remain required and unknown fields are rejected.
+configuration, plus the explicit run-mode fields `until_complete` and
+`reconcile_only`. Older V1 manifests may omit additive treatment/run-mode fields;
+their historical defaults are serial scheduling, disabled opt-ins, and both run
+modes disabled. Core configuration fields remain required and unknown fields are
+rejected.
 Each event hashes its entire envelope **except `event_hash`**;
 `prev_hash` points to the previous event hash. The start payload also names the
 manifest hash. Redaction happens **before** hashing and writing. The final seal

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from contextlib import ExitStack
 from pathlib import Path
@@ -11,6 +12,15 @@ from dotenv import load_dotenv
 from .backends.mock import MockBackend
 from .loop import AgentLoop
 from .research_log import ResearchLog, RunConfiguration, validate_output_paths
+
+
+class _ReconcileOnlyDecisionClient:
+    """Fail closed if reconciliation ever reaches a model decision path."""
+
+    is_mock = False
+
+    def evaluate(self, *args, **kwargs):
+        raise RuntimeError("Model calls are disabled in reconcile-only mode")
 
 
 def make_backend(name: str, resume: bool = False, adopt_session: bool = False,
@@ -42,6 +52,10 @@ def cli() -> None:
     limits = p.add_mutually_exclusive_group()
     limits.add_argument("--steps", type=int)
     limits.add_argument("--duration-hours", type=float)
+    limits.add_argument("--until-complete", action="store_true",
+                        help="Run hierarchical decisions until the configured target is terminal")
+    limits.add_argument("--reconcile-only", action="store_true",
+                        help="Observe and durably settle resumed background work without acting")
     p.add_argument("--resume", action="store_true",
                    help="Resume an existing live FLE session without resetting its world")
     p.add_argument("--tick-seconds", type=float,
@@ -111,6 +125,16 @@ def cli() -> None:
         not 0 < args.duration_hours < float("inf")
     ):
         p.error("--duration-hours must be finite and positive")
+    if args.until_complete and args.controller != "hierarchical":
+        p.error("--until-complete requires --controller hierarchical")
+    if args.reconcile_only and (
+        args.controller != "hierarchical" or args.backend != "fle"
+        or not args.resume or not args.resume_controller or not args.checkpoint
+        or not args.background_work or args.factory_scheduling != "ready-work"
+        or args.target == "bootstrap_mining"
+    ):
+        p.error("--reconcile-only requires resumed hierarchical FLE background-work, "
+                "ready-work scheduling, and a checkpoint")
     if args.tick_seconds < 0 or not args.tick_seconds < float("inf"):
         p.error("--tick-seconds must be finite and nonnegative")
     if args.resume and args.backend != "fle":
@@ -128,6 +152,7 @@ def cli() -> None:
     if args.owner_step_gate_dir is not None:
         if (args.backend != 'fle' or args.controller != 'hierarchical'
                 or not args.resume or not args.resume_controller
+                or args.until_complete or args.reconcile_only
                 or args.duration_hours is not None or args.steps is None
                 or not 2 <= args.steps <= 10 or args.setup_timing_file
                 or args.owner_step_lock_path is None or args.owner_step_lock_fd is None
@@ -237,7 +262,8 @@ def cli() -> None:
                 p.error('Successor checkpoint preflight failed; backend not started')
         # Resolve credentials before starting a backend that initializes a world.
         try:
-            client = (None if args.policy == "deterministic" else
+            client = (_ReconcileOnlyDecisionClient() if args.reconcile_only else
+                      None if args.policy == "deterministic" else
                       MockJevClient() if args.mock_model else
                       make_client(allow_mock=False, model=args.model))
         except ValueError as error:
@@ -264,8 +290,10 @@ def cli() -> None:
             backend=args.backend, controller=args.controller, policy=args.policy,
             target=args.target if args.controller == "hierarchical" else None,
             requested_model=args.model,
-            steps=(args.steps if args.steps is not None else 8) if args.duration_hours is None else None,
+            steps=(args.steps if args.steps is not None else 8)
+            if args.duration_hours is None and not (args.until_complete or args.reconcile_only) else None,
             duration_seconds=args.duration_hours * 3600 if args.duration_hours is not None else None,
+            until_complete=args.until_complete, reconcile_only=args.reconcile_only,
             tick_seconds=args.tick_seconds, confidence_floor=args.confidence_floor,
             resume=args.resume, resume_controller=args.resume_controller,
             adopt_session=args.adopt_session, mock_model=args.mock_model,
@@ -440,7 +468,12 @@ def cli() -> None:
                 Path(__file__).resolve().parents[2], args.owner_step_lock_path,
                 args.owner_step_lock_fd, wait_seconds=args.owner_step_wait_seconds)
         try:
-            if args.duration_hours is not None:
+            if args.reconcile_only:
+                result = loop.reconcile_only()
+                print(json.dumps({"reconciliation": result}, sort_keys=True), flush=True)
+            elif args.until_complete:
+                loop.run(until_complete=True)
+            elif args.duration_hours is not None:
                 loop.run(steps=None, duration_seconds=args.duration_hours * 3600)
             else:
                 if step_gate is None:
