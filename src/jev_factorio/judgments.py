@@ -146,6 +146,204 @@ def _qualified_utility_lab_dependency(plan, row, local, tick) -> bool:
     )
 
 
+def _qualified_power_child(step, row, evidence, tick):
+    child = evidence.get('child_start_evidence')
+    kind = evidence.get('next_action_kind')
+    contracts = {
+        'utility_chain_raw_gather_start': ('factory_gather', {'gather_start_evidence', 'raw_prerequisite'}),
+        'utility_chain_furnace_fuel_gather_start': ('factory_gather', {'gather_start_evidence', 'fuel_prerequisite'}),
+        'utility_chain_handcraft_start': (step.action if step.action in {'factory_craft', 'factory_craft_job'} else None, {'craft_start_evidence'}),
+        'utility_chain_output_pickup_start': ('factory_extract', {'output_pickup_start_evidence'}),
+        'utility_chain_recipe_input_transfer_start': ('factory_insert', {'recipe_input_transfer_start_evidence'}),
+        'utility_chain_furnace_fuel_transfer_start': ('factory_insert', {'fuel_transfer_start_evidence'}),
+    }
+    if kind not in contracts or not isinstance(child, dict):
+        return False
+    action, fields = contracts[kind]
+    parameters = step.parameters or {}
+    witnesses = child.get('witnesses')
+    path = child.get('planner_item_path')
+    if (step.action != action or child.get('action') != action or child.get('kind') != kind
+            or type(child.get('observed_tick')) is not int or child['observed_tick'] != tick
+            or child.get('item') != step.item
+            or child.get('role') != (parameters.get('role') or parameters.get('resource'))
+            or child.get('quantity') != parameters.get('quantity')
+            or child.get('step_costs') != (step.costs or {})
+            or child.get('witness_fields') != sorted(fields)
+            or not isinstance(witnesses, dict) or set(witnesses) != fields
+            or any(not isinstance(witness, dict) or row.get(name) != witness
+                   for name, witness in witnesses.items())
+            or not isinstance(path, list) or len(path) > 32
+            or any(not isinstance(item, str) or not item for item in path)
+            or child.get('completion_requires_fresh_native_receipt_or_inventory') is not True):
+        return False
+    if any(type(w.get('observed_tick')) is not int or w.get('observed_tick') != tick
+           for w in witnesses.values()):
+        return False
+    if action == 'factory_gather':
+        gather = witnesses['gather_start_evidence']
+        quantity = parameters.get('quantity')
+        if (type(quantity) is not int or not 1 <= quantity <= 50
+                or gather.get('session_id') != evidence.get('session_id')
+                or gather.get('resource_in_current_observation') is not True
+                or gather.get('fair_target_identity_observed') is not True
+                or type(gather.get('resource_inventory_now')) is not int
+                or step.item != parameters.get('resource')
+                or step.threshold != gather['resource_inventory_now'] + quantity):
+            return False
+        if kind == 'utility_chain_raw_gather_start':
+            raw = witnesses['raw_prerequisite']
+            return (raw.get('basis') == 'current_planner_dependency_and_native_catalog_recipe'
+                    and raw.get('planner_item_path') == path and path[-1:] == [step.item])
+        fuel = witnesses['fuel_prerequisite']
+        return (fuel.get('basis') == 'current_planner_fuel_need_and_owned_native_burner'
+                and step.item == 'coal' and fuel.get('planned_gather_units') == quantity
+                and type(fuel.get('current_unfunded_units')) is int
+                and fuel['current_unfunded_units'] > 0)
+    if action in {'factory_craft', 'factory_craft_job'}:
+        craft = witnesses['craft_start_evidence']
+        return (craft.get('native_recipe') == parameters.get('recipe')
+                and type(parameters.get('batches')) is int and parameters['batches'] > 0
+                and all(craft.get(key) is True for key in (
+                    'input_costs_match_native_recipe', 'inputs_in_inventory_now',
+                    'recipe_unlocked_and_handcraftable', 'player_connected_and_bound',
+                    'crafting_queue_empty'))
+                and (action != 'factory_craft_job' or all(craft.get(key) is True for key in (
+                    'craft_job_protocol_ready', 'native_receipt_required_for_completion'))))
+    witness = next(iter(witnesses.values()))
+    role, item, quantity = parameters.get('role'), parameters.get('item'), parameters.get('quantity')
+    receipt = f'{tick}:{action}:{role}:{item}'
+    if type(quantity) is not int or quantity < 1 or parameters.get('receipt') != receipt:
+        return False
+    if action == 'factory_extract':
+        return (witness.get('basis') == 'current_planner_output_and_owned_native_machine'
+                and witness.get('owned_source_role') == role and witness.get('ready_output_item') == item
+                and witness.get('planned_pickup_quantity') == quantity
+                and witness.get('planned_native_receipt_id') == receipt)
+    if kind == 'utility_chain_recipe_input_transfer_start':
+        return (witness.get('basis') == 'current_planner_recipe_input_and_owned_native_machine'
+                and witness.get('owned_source_role') == role and witness.get('ingredient') == item
+                and witness.get('paid_quantity_to_transfer') == quantity
+                and witness.get('planned_native_receipt_id') == receipt)
+    return (witness.get('basis') == 'current_planner_need_owned_burner_and_paid_inventory'
+            and witness.get('burner_role') == role and item == 'coal'
+            and witness.get('coal_to_transfer') == quantity and witness.get('native_receipt') == receipt)
+
+
+def _qualified_utility_power_dependency(plan, row, tick):
+    """Give prerequisite guidance only for a current, action-bound witness."""
+    evidence = row.get('utility_power_prerequisite_start_evidence')
+    annotation = (plan.materials or {}).get('utility_power_prerequisite')
+    if (len(plan.steps) != 1 or not isinstance(evidence, dict)
+            or not isinstance(annotation, dict) or type(tick) is not int
+            or type(evidence.get('observed_tick')) is not int
+            or evidence.get('observed_tick') != tick
+            or evidence.get('basis') != 'exact_current_power_planner_step_and_coherent_native_chain'
+            or evidence.get('does_not_establish_electricity_or_research_completion') is not True
+            or evidence.get('boiler_catalog_burner_current') is not True
+            or evidence.get('placement_or_connection_rechecks_native_preconditions') is not True
+            or not isinstance(evidence.get('session_id'), str) or not evidence['session_id']
+            or row.get('work_scope') != 'immediate'):
+        return False
+    role, unit = evidence.get('consumer_role'), evidence.get('consumer_unit')
+    path, research = evidence.get('planner_path'), evidence.get('research')
+    if (not isinstance(role, str) or not role or type(unit) is not int or unit < 1
+            or not isinstance(path, list) or len(path) > 32
+            or any(not isinstance(entry, str) or not entry for entry in path)
+            or annotation != {'observed_tick': tick, 'consumer_role': role,
+                              'consumer_unit': unit, 'planner_path': path, 'research': research}
+            or research != next((entry.removeprefix('technology:')
+                                 for entry in reversed(path)
+                                 if entry.startswith('technology:')), None)):
+        return False
+    demand = evidence.get('consumer_demand')
+    if not isinstance(demand, dict):
+        return False
+    if role == 'utility:lab':
+        if research is None:
+            if plan.goal != 'steam_power' or demand.get('kind') != 'explicit_steam_power_goal':
+                return False
+        elif (plan.goal != 'rocket_launch' or demand.get('kind') != 'current_technology_lab_demand'
+              or demand.get('technology') != research
+              or demand.get('technology_not_researched_now') is not True
+              or demand.get('technology_prerequisites_satisfied_now') is not True):
+            return False
+    elif (not role.startswith('recipe:') or plan.goal != 'rocket_launch'
+          or demand.get('kind') != 'current_native_recipe_demand'
+          or demand.get('recipe') != role.removeprefix('recipe:')
+          or demand.get('recipe_enabled_now') is not True
+          or demand.get('machine_recipe_matches_now') is not True):
+        return False
+    connections, units = evidence.get('connections_current'), evidence.get('utility_units_current')
+    if (not isinstance(connections, dict) or set(connections) != {
+            'water_to_boiler', 'boiler_to_engine_steam', 'engine_to_consumer_electricity'}
+            or any(type(value) is not bool for value in connections.values())
+            or not isinstance(units, dict) or set(units) != {'water_pump', 'boiler', 'steam_engine'}
+            or any(value is not None and (type(value) is not int or value < 1)
+                   for value in units.values())):
+        return False
+    observed_units = [unit, *(value for value in units.values() if value is not None)]
+    if len(observed_units) != len(set(observed_units)):
+        return False
+    step = plan.steps[0]
+    if evidence.get('next_action') != step.action:
+        return False
+    kind = evidence.get('next_action_kind')
+    if _qualified_power_child(step, row, evidence, tick):
+        return True
+    if kind in {'boiler_fuel_transfer_start', 'boiler_fuel_gather_start'}:
+        fuel, deficit, carried = (evidence.get('boiler_coal_now'),
+                                  evidence.get('boiler_coal_deficit_to_five'),
+                                  evidence.get('actor_coal_now'))
+        if (not all(connections.values()) or any(type(value) is not int for value in units.values())
+                or len({unit, *units.values()}) != 4
+                or type(fuel) is not int or not 0 <= fuel < 5
+                or type(carried) is not int or carried < 0 or type(deficit) is not int
+                or row.get('unknowns') != []):
+            return False
+        if kind == 'boiler_fuel_transfer_start':
+            receipt = f'{tick}:factory_insert:utility:boiler:coal'
+            return (step.action == 'factory_insert' and step.effect == 'transfer'
+                    and deficit == 5 - fuel and carried >= deficit
+                    and step.parameters == {'role': 'utility:boiler', 'item': 'coal',
+                                            'quantity': deficit, 'receipt': receipt}
+                    and step.costs == {'coal': deficit}
+                    and evidence.get('planned_native_receipt') == receipt
+                    and evidence.get('planned_receipt_absent_now') is True
+                    and evidence.get('transfer_receipt_observed_now') is False
+                    and evidence.get('paid_inventory_sufficient_now') is True
+                    and evidence.get('native_transfer_rechecks_reach_capacity_receipt_and_postcondition') is True)
+        gather = evidence.get('gather_start_evidence')
+        return (step.action == 'factory_gather' and deficit == 5 - fuel - carried and deficit > 0
+                and (step.parameters or {}).get('resource') == 'coal'
+                and (step.parameters or {}).get('quantity') == deficit
+                and step.threshold == carried + deficit and isinstance(gather, dict)
+                and gather.get('observed_tick') == tick and gather.get('target_item') == 'coal'
+                and gather.get('would_close_current_shortfall_if_native_inventory_verifies') is True
+                and gather.get('inventory_basis') == 'coherent_snapshot_and_atomic_native_inventory')
+    if kind == 'utility_entity_construction_start' and step.action == 'factory_place':
+        expected = next((parameters for key, parameters in (
+            ('water_pump', {'role': 'utility:water', 'name': 'offshore-pump', 'anchor': 'water'}),
+            ('boiler', {'role': 'utility:boiler', 'name': 'boiler', 'anchor': 'utility:water'}),
+            ('steam_engine', {'role': 'utility:engine', 'name': 'steam-engine', 'anchor': 'utility:boiler'}),
+        ) if units[key] is None), None)
+        return (expected is not None and step.parameters == expected
+                and step.costs == {expected['name']: 1})
+    if kind == 'utility_connection_start' and step.action == 'factory_connect':
+        if any(type(value) is not int for value in units.values()):
+            return False
+        expected = next((parameters for key, parameters in (
+            ('water_to_boiler', {'source': 'utility:water', 'target': 'utility:boiler',
+                                 'kind': 'pipe', 'fluid': 'water'}),
+            ('boiler_to_engine_steam', {'source': 'utility:boiler', 'target': 'utility:engine',
+                                       'kind': 'pipe', 'fluid': 'steam'}),
+            ('engine_to_consumer_electricity', {'source': 'utility:engine', 'target': role,
+                                               'kind': 'small-electric-pole', 'fluid': 'electricity'}),
+        ) if not connections[key]), None)
+        return expected is not None and step.parameters == expected
+    return False
+
+
 def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                    max_candidates: int = 16) -> tuple[dict, dict, list[Plan]]:
     """Bound serialized request bytes, NOT estimated tokens or provider limits."""
@@ -772,6 +970,23 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "can lower the score."
                 if qualified_utility_lab else ""
             )
+            power_hint = (
+                " `utility_power_prerequisite_start_evidence` binds this step to "
+                "the current consumer's native power prerequisite and observed "
+                "research or production demand. This dependency alone supports "
+                "useful prerequisite progress (score level 1). Separately qualified "
+                "local-target closure can support score level 2 under the usual "
+                "rubric; use that closure evidence when present. Neither establishes "
+                "electricity generation, science consumption, or completed research. "
+                "Boiler fuel evidence requires an "
+                "observed connected water, steam and electrical chain. A fuel "
+                "transfer also requires paid carried coal; a gather only prepares "
+                "the current shortfall and leaves that later transfer unverified. "
+                "Construction still needs the existing native site, "
+                "receipt and fresh postcondition checks. A contrary current "
+                "fact can lower the score."
+                if _qualified_utility_power_dependency(plan, row, tick) else ""
+            )
             fuel = row.get('fuel_prerequisite')
             fuel_step = plan.steps[0] if len(plan.steps) == 1 else None
             fuel_path = fuel.get('planner_item_path') if isinstance(fuel, dict) else None
@@ -1130,7 +1345,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "`raw_prerequisite` is evidence that gathering supplies an input to "
                     "the named native recipe, not that the later craft already happened."
                     + raw_gather_hint + craft_hint + bill_craft_hint + place_hint + fuel_hint
-                    + utility_lab_hint + transfer_hint + input_hint
+                    + utility_lab_hint + power_hint + transfer_hint + input_hint
                     + outpost_kit_hint + pickup_hint + research_trigger_hint
                     + local_target_completion_hint
                 ),

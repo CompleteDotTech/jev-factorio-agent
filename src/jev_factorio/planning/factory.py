@@ -316,7 +316,8 @@ class FactoryPlanner:
         # A new burner needs a five-coal startup, not an immediate stack-sized
         # mining trip. Established producers retain the existing bulk service.
         startup = current == 0 and machine.get('products_finished', 0) == 0
-        target = min(5 if startup else 50, self.catalog.stack_sizes.get("coal", 50))
+        target = min(5 if startup or role == "utility:boiler" else 50,
+                     self.catalog.stack_sizes.get("coal", 50))
         if current >= min(5, target):
             return None
         needed = target - current
@@ -350,14 +351,31 @@ class FactoryPlanner:
         prerequisite = self._connect("utility:water", "utility:boiler", "pipe", "water", path)
         if prerequisite:
             return prerequisite
-        prerequisite = self._connect("utility:boiler", "utility:engine", "pipe", "steam", path)
-        return prerequisite or self._fuel("utility:boiler", path)
+        return self._connect("utility:boiler", "utility:engine", "pipe", "steam", path)
 
     def _powered(self, role, path):
-        prerequisite = self._power(path)
-        return prerequisite or self._connect(
+        # Pay for the complete physical chain before consuming its fuel. An
+        # empty, unconnected boiler cannot justify preempting engine or pipe
+        # construction, or electricity delivery to the actual consumer.
+        prerequisite = (self._power(path) or self._connect(
             "utility:engine", role, "small-electric-pole", "electricity", path
-        )
+        ) or self._fuel("utility:boiler", path))
+        if prerequisite is None:
+            return None
+        research = next((entry.removeprefix("technology:")
+                         for entry in reversed(path)
+                         if entry.startswith("technology:")), None)
+        consumer = self.entities.get(role, {})
+        return replace(prerequisite, materials={
+            **(prerequisite.materials or {}),
+            "utility_power_prerequisite": {
+                "observed_tick": self.snapshot.tick,
+                "consumer_role": role,
+                "consumer_unit": consumer.get("unit_number"),
+                "planner_path": list(path),
+                "research": research,
+            },
+        })
 
     def _machine_type(self, recipe):
         preferences = {
@@ -553,10 +571,6 @@ class FactoryPlanner:
                               description="Bind the existing viewer to the existing agent for native crafting")
         if self.factory.get("crafting_queue", 0):
             return self._wait("crafting_idle")
-        if "utility:boiler" in self.entities:
-            prerequisite = self._fuel("utility:boiler", ())
-            if prerequisite:
-                return prerequisite
         if self.goal == "iron_smelting":
             return self._need("iron-plate", 10)
         if self.goal == "automation_science":

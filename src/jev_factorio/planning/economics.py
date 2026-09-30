@@ -91,13 +91,11 @@ class EconomicProduction:
             'basis': 'catalog-and-policy-estimate', **details}})
 
     def plan(self):
-        # Keep the existing client/binding, crafting, boiler, and active-research
+        # Keep the existing client/binding, crafting, and active-research
         # barriers. Research startup itself still pays every native prerequisite.
         if (self.goal == 'rocket_launch' and self.factory.get('player_bound') is True
                 and self.factory.get('player_connected') is True and not self.factory.get('crafting_queue', 0)
-                and not self.factory.get('research')
-                and not (self.entities.get('utility:boiler') and
-                         self.entities['utility:boiler'].get('fuel', {}).get('coal', 0) < 5)):
+                and not self.factory.get('research')):
             technology = capability_technology(self.catalog, self.researched)
             if technology:
                 plan = self._research(technology)

@@ -78,6 +78,24 @@ def _canonical_planned_id(value: str) -> str:
 def _stable(value, *, path: tuple = (), current_tick: int | None = None,
             background_wait: bool = False):
     if isinstance(value, dict):
+        candidate_step = (
+            (len(path) == 4 and path[0] == "plans" and type(path[1]) is int
+             and path[2] == "steps" and type(path[3]) is int)
+            or (len(path) == 4 and path[0] == "candidate_plans"
+                and type(path[1]) is str and path[2] == "steps"
+                and type(path[3]) is int)
+        )
+        parameters = value.get("parameters")
+        if (candidate_step and value.get("action") == "factory_craft_job"
+                and value.get("effect") == "craft_job_complete"
+                and isinstance(parameters, dict)
+                and type(parameters.get("receipt")) is str
+                and re.fullmatch(r"[0-9a-f]{32}", parameters["receipt"])):
+            # Background compilation allocates a fresh UUID before selection.
+            # Its random value is not new evidence for a rejected candidate.
+            # Keep the actual dispatched/native receipt and pending jobs intact.
+            value = {**value, "parameters": {
+                **parameters, "receipt": "<planned-craft-job-receipt>"}}
         route_diagnostic = (
             (len(path) >= 4 and path[0] == "candidate_plans"
              and type(path[1]) is str
@@ -134,6 +152,16 @@ def _stable(value, *, path: tuple = (), current_tick: int | None = None,
                 item = _canonical_planned_id(item)
             if (key in _PLANNED_RECEIPT_KEYS and type(item) is str
                     and ("steps" in path or key == "planned_native_receipt_id")):
+                item = _canonical_receipt(item)
+            if (type(item) is str and path[:1] == ("candidate_evidence",)
+                    and ((key == "planned_native_receipt"
+                          and "utility_power_prerequisite_start_evidence" in path)
+                         or (key == "native_receipt"
+                             and path[-1:] == ("fuel_transfer_start_evidence",)))):
+                # These witnesses describe a future paid transfer, including
+                # the same witness nested under a power prerequisite. Keep
+                # observed receipt journals intact; only planned clock prefixes
+                # are irrelevant to an unchanged blocked decision.
                 item = _canonical_receipt(item)
             result[key] = _stable(item, path=(*path, key), current_tick=current_tick,
                                   background_wait=background_wait)

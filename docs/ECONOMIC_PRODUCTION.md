@@ -5,7 +5,31 @@ before recursively pursuing the rocket-silo dependency chain. Existing research
 is never cancelled. Player binding, native handcraft queues, boiler service,
 research prerequisites, recipe unlocks, material payment, and normal research
 completion still belong to the existing engine-facing contract. The serial policy
-is unchanged. The next-research preview uses the same capability priority.
+uses the same physical power dependency order. The next-research preview uses the
+same capability priority.
+
+## Power prerequisites
+
+An empty boiler does not preempt goal planning or suppress capability research.
+Power-dependent work first pays for the pump, boiler, steam engine, water and
+steam pipes, and the electrical connection to its actual consumer. Only then
+does it request the boiler's bounded five-coal operating deficit. Background
+maintenance can service an existing connected plant while handcrafting; it does
+not construct a new plant through that maintenance shortcut.
+
+Same-tick `utility_power_prerequisite` metadata records the consumer identity,
+recursive planner path, and research dependency. Decision evidence independently
+checks those facts against the current snapshot and native catalog. For fueling,
+it also checks the actual water, steam and electrical topology, the boiler burner
+prototype, carried coal, exact quantity and receipt. This is evidence of a useful
+prerequisite, not proof of electricity generation or research progress. Native
+payment, capacity, receipt and fresh postcondition checks remain authoritative.
+
+The same dependency evidence follows the next paid or observed material step for
+an engine, pipe, or pole kit. Planned receipt timestamps and newly allocated
+candidate craft-job UUIDs do not count as changed decision evidence during
+blocked recovery; actual receipt journals, pending jobs, inventory, quantity,
+consumer identity and topology changes remain significant.
 
 ## Recurring work
 

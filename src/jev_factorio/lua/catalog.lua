@@ -53,4 +53,15 @@ for _, name in ipairs({
         }
     end
 end
+-- Utility fuel admission needs the actual native burner prototype too. A
+-- boiler is not a crafting machine; do not call get_crafting_speed on it.
+local boiler = prototypes.entity.boiler
+if boiler then
+    catalog.machines.boiler = {
+        categories = {},
+        speed = 0,
+        burner = boiler.burner_prototype ~= nil,
+        electric = boiler.electric_energy_source_prototype ~= nil
+    }
+end
 rcon.print(helpers.table_to_json(catalog))
