@@ -113,7 +113,7 @@ def project_record(value: dict) -> dict:
             "phase": phase if phase in {
                 "waiting_for_changed_game_evidence", "evaluating_changed_game_evidence",
                 "selected_plan_entered_normal_execution", "provider_blocked",
-                "evaluation_outcome_unknown_waiting",
+                "evaluation_outcome_unknown_waiting", "idle_wait_exhausted",
             } else "unknown",
             "reason": recovery.get("reason") if isinstance(recovery.get("reason"), str) else None,
             "next_observation_seconds": (

@@ -151,3 +151,18 @@ def test_persistent_recovery_display_is_truthful_and_omits_decision_fingerprint(
         "reason": "prior running reason", "next_observation_seconds": 32.0,
         "model_call": False, "recorded_attempts": 1,
     }
+
+
+def test_idle_wait_exhausted_phase_is_displayed_without_the_fingerprint():
+    record = project_record({
+        "tick": 456, "status": "blocked", "reason": "Candidate evidence insufficient",
+        "persistent_recovery": {
+            "phase": "idle_wait_exhausted", "reason": "Candidate evidence insufficient",
+            "next_observation_seconds": 0.0, "model_call": False,
+            "recorded_attempts": 1028, "decision_input_sha256": "c" * 64,
+        },
+    })
+    assert record["persistent_recovery"] == {
+        "phase": "idle_wait_exhausted", "reason": "Candidate evidence insufficient",
+        "next_observation_seconds": 0.0, "model_call": False, "recorded_attempts": 1028,
+    }

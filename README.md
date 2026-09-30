@@ -204,6 +204,17 @@ is bypassed, and progress still requires the existing native verification.
 If the process stops after saving a request fingerprint but before committing its
 model outcome, the next resume marks the evaluation outcome unknown and continues
 observing; it never repeats that same request fingerprint.
+Waiting cannot produce new evidence when the blocked decision is the actor's only
+pending work, so the wait is bounded. After `--persistent-idle-observations`
+consecutive observations (default 6, about 30 minutes) at the longest delay with an
+unchanged, resolved fingerprint, the invocation ends normally with the recovery phase
+`idle_wait_exhausted`. The blocked status, attempts, stall and failure history are
+preserved and no model request is made; the checkpoint stays resumable with
+`--reevaluate-blocked-once` after a decision-contract change. The count is
+process-local, so a new invocation waits again. `0` disables the bound. The
+invocation exits normally in this case, but that is not success: the campaign is still
+blocked, and a launcher must not treat the exit as completion. An
+unresolved evaluation outcome is never abandoned by this bound.
 Provider, native, checkpoint, or owner-gate faults stop through the normal
 failure path. The mode requires resumed live FLE Jev control, a supervisor-pinned
 source revision, the existing external single-owner lock, and an operator-owned
