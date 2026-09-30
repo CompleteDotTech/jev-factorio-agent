@@ -6,7 +6,7 @@ Choice/Score/Noul questions; deterministic code owns game rules, option
 filtering, and actuation. To our knowledge this is the first Jev-driven
 game agent.
 
-Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) | [BUILD PLAN](docs/BUILD_PLAN.md)
+Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) | [BUILD PLAN](docs/BUILD_PLAN.md) | [Latency attribution](docs/LATENCY_ATTRIBUTION.md)
 
 For bounded native runs with error-triggered Codex repair and guarded relaunch,
 see [Autonomous campaign supervision](docs/AUTONOMOUS_SUPERVISION.md).

@@ -13,6 +13,7 @@ import requests
 
 from .research_log import EventSink, ResearchLogError, _safe_observation_payload, safe_payload
 from .iteration_timing import profiled_iteration, measured, span
+from .timing_attribution import elapsed_clocks, sample_clocks
 
 class TraceStorageError(ResearchLogError):
     failure_class = "storage_pressure"
@@ -73,7 +74,8 @@ def traced_step(method):
 
 
 class CausalTrace:
-    def __init__(self, sink: EventSink | None, controller: str, client=None, *, provenance=None):
+    def __init__(self, sink: EventSink | None, controller: str, client=None, *, provenance=None,
+                 timing_clock=None):
         self.metrics = None
         self.admission_check = None
         self.sink, self.controller = sink, controller
@@ -86,10 +88,38 @@ class CausalTrace:
         self._session_id = self._world_kind = self._tick = None
         self._pending_key = self._pending_action_id = None
         self._attempt_actions: dict[str, str] = {}
+        self.profile_latency = False
+        self._model_gap_start = None
+        self._iteration_timing = None
+        self._timing_clock = sample_clocks if timing_clock is None else timing_clock
         self.provenance = deepcopy(provenance or {})
         self._secrets = tuple(value for name in ("api_key", "api_token")
                               if isinstance(value := getattr(client, name, None), str) and value) \
             if self.enabled else ()
+
+    def set_iteration_timing(self, value) -> None:
+        """Keep only a detached prior-step diagnostic for the next request event."""
+        if not self.profile_latency:
+            return
+        try:
+            from .iteration_timing import validate_timing
+            copied = deepcopy(value)
+            self._iteration_timing = validate_timing(copied) if copied is not None else None
+        except Exception:
+            self._iteration_timing = None
+
+    def _finish_inter_request_timing(self) -> dict | None:
+        start = self._model_gap_start
+        self._model_gap_start = None
+        if not self.profile_latency or not isinstance(start, dict):
+            return None
+        return elapsed_clocks(
+            start, self._timing_clock(),
+            'clock_sample_after_model_response_event_emission_to_clock_sample_after_next_model_request_emission_before_client_evaluate')
+
+    def _start_inter_request_timing(self) -> None:
+        if self.profile_latency:
+            self._model_gap_start = self._timing_clock()
 
     def identity(self, kind: str) -> str | None:
         if not self.enabled:
@@ -208,6 +238,8 @@ class CausalTrace:
                 # Metric updates and argument assembly are secondary recording
                 # work too. Preserve the actual operation failure unchanged.
                 self._failed = True
+            if self.profile_latency and event_type == 'model_response':
+                self._start_inter_request_timing()
             raise
         try:
             elapsed = time.perf_counter_ns() - start
@@ -326,13 +358,39 @@ class TracedClient:
     def evaluate(self, state: dict, questions: dict) -> dict:
         trace, client = self._trace, self._client
         trace.model_call_id = trace.identity("model")
-        trace.emit("model_request", {"state": state, "questions": questions,
-                                     "requested_model": getattr(client, "model", None),
-                                     "is_mock": getattr(client, "is_mock", False),
-                                     "dispatch": "prepared"})
-        return trace.call("model_response", lambda: client.evaluate(state, questions),
-                          details={"requested_model": getattr(client, "model", None),
-                                   "resolved_model": None, "usage": None},
-                          result=lambda answers: {"answers": answers,
-                                                  "resolved_model": getattr(client, "last_model", None),
-                                                  "usage": getattr(client, "last_usage", None)})
+        payload = {"state": state, "questions": questions,
+                   "requested_model": getattr(client, "model", None),
+                   "is_mock": getattr(client, "is_mock", False),
+                   "dispatch": "prepared"}
+        if trace.profile_latency and trace._iteration_timing is not None:
+            payload['previous_iteration_timing'] = deepcopy(trace._iteration_timing)
+        trace.emit("model_request", payload)
+        # Stop the between-call timer only after the request event is durable,
+        # immediately before entering the client operation. Thus the measured
+        # interval includes request record construction and its append/fsync.
+        details = {"requested_model": getattr(client, "model", None),
+                   "resolved_model": None, "usage": None}
+        inter_request = (trace._finish_inter_request_timing()
+                         if trace.profile_latency else None)
+        if inter_request is not None:
+            details['inter_request_timing'] = inter_request
+
+        def invoke_client():
+            if not trace.profile_latency:
+                return client.evaluate(state, questions)
+            call_start = sample_clocks()
+            try:
+                return client.evaluate(state, questions)
+            finally:
+                details['client_evaluate_timing'] = elapsed_clocks(
+                    call_start, sample_clocks(),
+                    'clock_samples_around_client_evaluate_call')
+
+        answers = trace.call("model_response", invoke_client,
+                             details=details,
+                             result=lambda value: {"answers": value,
+                                                   "resolved_model": getattr(client, "last_model", None),
+                                                   "usage": getattr(client, "last_usage", None)})
+        if trace.profile_latency:
+            trace._start_inter_request_timing()
+        return answers
