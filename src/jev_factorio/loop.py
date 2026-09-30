@@ -56,6 +56,16 @@ def fallback_policy(snapshot: GameSnapshot) -> str:
     return "idle"
 
 
+def _interruptible_sleep(delay: float) -> None:
+    """Keep long recovery waits responsive to normal process interruption."""
+    deadline = time.monotonic() + delay
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(60.0, remaining))
+
+
 class AgentLoop:
     def __init__(self, backend, jev=None, confidence_floor: float = 0.45,
                  tick_seconds: float = 2.0, log_file: str | None = None, *,
@@ -132,6 +142,8 @@ class AgentLoop:
                 raise ValueError("until_complete requires a controller with terminal status")
             if after_step is not None:
                 raise ValueError("until_complete cannot use an owner step gate")
+        if getattr(self, "persist_recoverable_blocks", False) and not until_complete:
+            raise ValueError("Persistent blocked recovery requires until_complete mode")
         if steps is None and duration_seconds is None and not until_complete:
             raise ValueError("A step or duration limit is required")
         deadline = time.monotonic() + duration_seconds if duration_seconds is not None else None
@@ -149,6 +161,9 @@ class AgentLoop:
                 completed += 1
                 step_succeeded = True
                 delay = poll_delay(self)
+                recovery_wait = getattr(self, "persistent_recovery_wait_seconds", None)
+                if callable(recovery_wait):
+                    delay = max(delay, recovery_wait())
             except requests.RequestException as error:
                 status = error.response.status_code if error.response is not None else None
                 if deadline is None or (
@@ -167,4 +182,4 @@ class AgentLoop:
                     break
             if deadline is not None:
                 delay = min(delay, max(0, deadline - time.monotonic()))
-            loop_sleep(self, delay, lambda: time.sleep(delay))
+            loop_sleep(self, delay, lambda: _interruptible_sleep(delay))

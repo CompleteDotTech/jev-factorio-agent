@@ -178,7 +178,8 @@ def _same_value(live, captured) -> bool:
 
 def _same_memory(memory, captured: dict) -> bool:
     names = [field.name for field in fields(memory)
-             if field.name != 'capital_investment' or memory.capital_investment is not None]
+             if (field.name != 'capital_investment' or memory.capital_investment is not None)
+             and (field.name != 'blocked_recovery' or memory.blocked_recovery is not None)]
     return (len(names) == len(captured)
             and all(name in captured and _same_value(getattr(memory, name), captured[name])
                     for name in names))
@@ -244,6 +245,8 @@ def save_checkpoint(memory, path: Path | None) -> None:
             _elapsed(metrics, 'capture_ns', phase_began, failed=phase_failed)
         if data.get('capital_investment') is None:
             data.pop('capital_investment', None)
+        if data.get('blocked_recovery') is None:
+            data.pop('blocked_recovery', None)
         metrics['serialization_calls'] = 1
         phase_began = time.perf_counter_ns()
         phase_failed = False

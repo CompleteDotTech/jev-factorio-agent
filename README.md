@@ -189,6 +189,26 @@ decision remains blocked and increments the existing streak. It does not clear
 the block, reset counters, or authorize a second controller. Do not combine it
 with reconcile-only or owner-step gating.
 
+For an explicitly authorized, no-cutoff campaign that should keep observing
+after one of those two recoverable decision blocks, add
+`--persist-recoverable-blocks` to `--until-complete`. The first blocked
+checkpoint still needs the exact changed-contract authorization above. The
+controller keeps the blocked status and failure/stall history, records each
+source-bound decision fingerprint before a model request, and waits for changed
+native decision evidence before another request. A new game tick or a planned
+receipt containing only that tick does not trigger another request; inventory,
+production, research, native receipts, candidate evidence, or an absolute
+native deadline change can. Waits grow from two seconds to five minutes and
+perform observation only. No action, confidence gate, receipt rule, or budget
+is bypassed, and progress still requires the existing native verification.
+If the process stops after saving a request fingerprint but before committing its
+model outcome, the next resume marks the evaluation outcome unknown and continues
+observing; it never repeats that same request fingerprint.
+Provider, native, checkpoint, or owner-gate faults stop through the normal
+failure path. The mode requires resumed live FLE Jev control, a supervisor-pinned
+source revision, the existing external single-owner lock, and an operator-owned
+run window; it does not extend that window.
+
 When current research planning identifies a paid `utility:lab` placement as the
 immediate prerequisite for a capability technology, the decision evidence
 binds that prerequisite to the current technology plan, carried lab, absent lab

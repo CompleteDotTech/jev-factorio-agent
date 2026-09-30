@@ -39,6 +39,7 @@ class CampaignMemory:
     transfer_recovery: dict | None = None
     capital_investment: dict | None = None
     blocked_reevaluations: list[dict] = field(default_factory=list)
+    blocked_recovery: dict | None = None
 
     def event(self, kind: str, **details) -> None:
         self.history.append({"kind": kind, **details})
@@ -204,6 +205,9 @@ class CampaignMemory:
                 if entry["decision_contract_sha256"] in reevaluation_contracts:
                     raise ValueError("Decision contract was already re-evaluated")
                 reevaluation_contracts.add(entry["decision_contract_sha256"])
+            if memory.blocked_recovery is not None:
+                from .blocked_persistence import _validate_state
+                _validate_state(memory.blocked_recovery, memory.session_id)
             return memory
         except (TypeError, KeyError, AttributeError, json.JSONDecodeError) as error:
             raise ValueError("Invalid controller checkpoint; refusing to reset it") from error

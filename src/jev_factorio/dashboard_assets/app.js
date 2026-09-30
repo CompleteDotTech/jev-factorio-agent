@@ -449,13 +449,20 @@ function refreshStatus() {
   $("connection").title = receivedAt ? `Last transport snapshot ${Math.floor(heartbeatAge)}s ago. Game records update independently of this heartbeat.` : "No transport snapshot received.";
   set("freshness", age === null ? "No recorded events" : `${data.source?.mode === "legacy" ? (v.legacy_record_timestamp ? "Recorded at" : "File modified") : "Last event"} ${age < 1 ? "just now" : Math.floor(age) + "s ago"}`);
   const thinking = active && !frozen && data.source?.mode !== "legacy" && v.model_busy === true;
+  const recovery = object(v.persistent_recovery);
+  const waitingForChangedEvidence = recovery.phase === "waiting_for_changed_game_evidence";
+  const evaluatingChangedEvidence = recovery.phase === "evaluating_changed_game_evidence";
+  const unresolvedDecision = recovery.phase === "evaluation_outcome_unknown_waiting";
   const legacy = data.source?.mode === "legacy";
   const recorded = legacy && (v.action || v.outcome);
   const checking = legacy && Object.keys(object(v.pending)).length > 0;
   $("signal").classList.toggle("active", thinking || (checking && !stale && !frozen));
   const ago = age === null ? "" : age < 5 ? "just now" : age < 120 ? `${Math.floor(age)}s ago` : `${Math.floor(age / 60)}m ago`;
-  set("thinking-status", frozen ? "Display frozen" : thinking ? "JEV is evaluating" : recorded ? Explain.event(v).text : ended ? "Controller invocation ended" : stale ? "Awaiting fresh evidence" : text(v.kind, "Waiting for an agent").replaceAll("_", " "));
-  set("model-detail", recorded ? `${text(v.goal, "no goal").replaceAll("_", " ")} · tick ${text(object(v.state).tick, text(v.tick))}${ago ? " · " + ago : ""}${stale ? " · no newer step yet" : ""}`
+  set("thinking-status", frozen ? "Display frozen" : unresolvedDecision && active ? "Decision outcome unknown · observing for changed evidence" : waitingForChangedEvidence && active ? "Blocked · waiting for changed game evidence" : evaluatingChangedEvidence && active ? "Re-evaluating changed game evidence" : thinking ? "JEV is evaluating" : recorded ? Explain.event(v).text : ended ? "Controller invocation ended" : stale ? "Awaiting fresh evidence" : text(v.kind, "Waiting for an agent").replaceAll("_", " "));
+  set("model-detail", unresolvedDecision && active ? `No repeat model request · next observation in ${number(recovery.next_observation_seconds, 0)}s · game status remains ${text(v.status, "unchanged")}`
+    : active && waitingForChangedEvidence ? `${text(recovery.reason, "Recoverable decision block")} · next observation in ${number(recovery.next_observation_seconds, 0)}s · no gameplay action running`
+    : active && evaluatingChangedEvidence ? `${text(recovery.reason, "Recoverable decision block")} · checking changed native evidence before another selection`
+    : recorded ? `${text(v.goal, "no goal").replaceAll("_", " ")} · tick ${text(object(v.state).tick, text(v.tick))}${ago ? " · " + ago : ""}${stale ? " · no newer step yet" : ""}`
     : legacy ? "Completed decision only · no in-flight telemetry" : thinking ? "Provider call in flight · no tokens invented" : v.response ? "Provider response captured · inspect acceptance" : "No model response in this cycle");
   const supervision = object(data.supervisor);
   // Elapsed time since the supervisor started this run; it stops at the cutoff.

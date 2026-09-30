@@ -54,7 +54,8 @@ class HierarchicalLoop(AgentLoop):
                  research_log: EventSink | None = None,
                  reevaluate_blocked_once: bool = False,
                  exact_checkpoint_sha256: str | None = None,
-                 blocked_source_revision: str | None = None):
+                 blocked_source_revision: str | None = None,
+                 persist_recoverable_blocks: bool = False):
         if factory_scheduling not in {"serial", "ready-work"}:
             raise ValueError("Unknown factory scheduling policy")
         self.factory_scheduling = factory_scheduling
@@ -78,6 +79,11 @@ class HierarchicalLoop(AgentLoop):
         self.log_file = Path(log_file) if log_file else None
         self.checkpoint = Path(checkpoint) if checkpoint else None
         self.resume_controller = resume_controller
+        if type(persist_recoverable_blocks) is not bool:
+            raise ValueError("Persistent blocked recovery must be a boolean")
+        self.persist_recoverable_blocks = persist_recoverable_blocks
+        self._persistent_recovery_status = None
+        self._persistent_runtime_wait_level = 0
         if resume_controller and (self.checkpoint is None or not self.checkpoint.is_file()):
             raise ValueError("Resuming requires an existing controller checkpoint")
         if self.checkpoint and self.checkpoint.exists() and not resume_controller:
@@ -126,6 +132,11 @@ class HierarchicalLoop(AgentLoop):
                 raise ValueError("Controller checkpoint changed during blocked-decision preflight")
             self._blocked_reevaluation_checkpoint_sha256 = exact_checkpoint_sha256
             self._blocked_reevaluation_source = source
+        if persist_recoverable_blocks:
+            revision = self.provenance.get("code_revision")
+            if (not resume_controller or self.checkpoint is None or policy != "jev"
+                    or getattr(jev, "is_mock", False) or not isinstance(revision, dict)):
+                raise ValueError("Persistent blocked recovery requires resumed live Jev control and source provenance")
         self.memory: CampaignMemory | None = None
         self._decision: Decision | None = None
         self._process_id = uuid4().hex
@@ -158,7 +169,129 @@ class HierarchicalLoop(AgentLoop):
 
     @property
     def terminal(self) -> bool:
-        return self.memory is not None and self.memory.status in {"completed", "blocked", "uncertain"}
+        if self.memory is None:
+            return False
+        if self.memory.status == "blocked" and self._persistent_block_active():
+            return False
+        return self.memory.status in {"completed", "blocked", "uncertain"}
+
+    def _persistent_block_active(self) -> bool:
+        from .blocked_persistence import RECOVERABLE_REASONS
+        memory = self.memory
+        if (not self.persist_recoverable_blocks or memory is None
+                or memory.status != "blocked" or memory.reason not in RECOVERABLE_REASONS
+                or memory.pending is not None or memory.attempt is not None
+                or memory.active_plan is not None or memory.transfer_recovery is not None
+                or getattr(memory, "background_job", None) is not None
+                or getattr(memory, "background_attempt", None) is not None
+                or self._persistence_failed or self._capital_fault):
+            return False
+        if isinstance(self.jev, ProviderCircuit) and self.jev.state.get("phase") != "healthy":
+            return False
+        if self._safety is not None and self._safety.phase != "healthy":
+            return False
+        return True
+
+    def persistent_recovery_wait_seconds(self) -> float:
+        if (isinstance(self._persistent_recovery_status, dict)
+                and self._persistent_recovery_status.get("phase") ==
+                "evaluation_outcome_unknown_waiting"):
+            return float(self._persistent_recovery_status.get("next_observation_seconds", 0.0))
+        if not self._persistent_block_active():
+            return 0.0
+        from .blocked_persistence import wait_seconds
+        if self.memory.blocked_recovery is None:
+            return max(self.tick_seconds, float(2 ** max(1, min(self._persistent_runtime_wait_level, 8))))
+        return max(self.tick_seconds, wait_seconds(self.memory))
+
+    def _persistent_wait(self, snapshot: GameSnapshot, input_sha256: str, *,
+                         source_authorized: bool = False) -> dict:
+        """Persist one observation-only wait while retaining the blocked state."""
+        from .blocked_persistence import find_attempt, record_wait
+        source = self.provenance["code_revision"]
+        if source_authorized:
+            if self.memory.blocked_recovery is None:
+                self._persistent_runtime_wait_level = min(8, self._persistent_runtime_wait_level + 1)
+                delay = float(2 ** self._persistent_runtime_wait_level)
+            else:
+                state_source = self.memory.blocked_recovery.get("source_revision")
+                if state_source == source:
+                    delay = record_wait(self.memory, source, input_sha256)
+                else:
+                    self._persistent_runtime_wait_level = min(8, self._persistent_runtime_wait_level + 1)
+                    delay = float(2 ** min(self._persistent_runtime_wait_level, 8))
+        else:
+            delay = record_wait(self.memory, source, input_sha256)
+        delay = max(self.tick_seconds, delay)
+        attempt = find_attempt(self.memory, source, input_sha256)
+        unresolved = attempt is not None and attempt.get("outcome") == "pending"
+        self._persistent_recovery_status = {
+            "phase": ("evaluation_outcome_unknown_waiting" if unresolved
+                      else "waiting_for_changed_game_evidence"),
+            "reason": self.memory.reason,
+            "next_observation_seconds": delay,
+            "model_call": False,
+            "decision_input_sha256": input_sha256,
+            "recorded_attempts": (len(self.memory.blocked_recovery["attempts"])
+                                  if self.memory.blocked_recovery is not None else 0),
+        }
+        outcome = ("Decision outcome unresolved; observing for changed evidence" if unresolved
+                   else "Blocked; waiting for changed game evidence")
+        return self._record(snapshot, "observe", outcome)
+
+    def _record_persistent_attempt(self, snapshot: GameSnapshot, input_sha256: str, *,
+                                   source_authorized: bool = False,
+                                   authorization_reason: str | None = None,
+                                   outcome: str = "pending") -> None:
+        """Write-ahead one decision fingerprint before model selection."""
+        if source_authorized:
+            # The changed-contract source authorization and its first concrete
+            # fingerprint share the same durable checkpoint commit.
+            self._consume_blocked_reevaluation(
+                snapshot, input_sha256, authorization_reason=authorization_reason,
+                persistent_outcome=outcome)
+            return
+        from .blocked_persistence import RECOVERABLE_REASONS, finish_attempt, record_attempt
+        prior_recovery = deepcopy(self.memory.blocked_recovery)
+        prior_history = deepcopy(self.memory.history)
+        try:
+            reason = self.memory.reason if self.memory.reason in RECOVERABLE_REASONS else None
+            record_attempt(self.memory, self.provenance["code_revision"], input_sha256,
+                           reason, snapshot.tick)
+            if outcome != "pending":
+                finish_attempt(self.memory, self.provenance["code_revision"], input_sha256,
+                               outcome, reason)
+            self.memory.event(
+                "blocked_recovery_attempt", decision_input_sha256=input_sha256,
+                tick=snapshot.tick, source_head=self.provenance["code_revision"]["commit"])
+            self._save()
+        except BaseException:
+            self.memory.blocked_recovery = prior_recovery
+            self.memory.history = prior_history
+            raise
+
+    def _blocked_frontier_wait(self, snapshot: GameSnapshot, input_sha256: str, *,
+                               source_authorized: bool = False,
+                               authorization_reason: str | None = None) -> dict:
+        """Authorize and record a no-candidate frontier without calling the model."""
+        from .blocked_persistence import was_attempted
+        if was_attempted(self.memory, self.provenance["code_revision"], input_sha256,
+                         allow_source_change=source_authorized):
+            return self._persistent_wait(snapshot, input_sha256)
+        self._record_persistent_attempt(snapshot, input_sha256,
+                                        source_authorized=source_authorized,
+                                        authorization_reason=authorization_reason,
+                                        outcome="frontier")
+        wait = self.persistent_recovery_wait_seconds()
+        self._persistent_recovery_status = {
+            "phase": "waiting_for_changed_game_evidence",
+            "reason": self.memory.reason,
+            "next_observation_seconds": wait,
+            "model_call": False,
+            "decision_input_sha256": input_sha256,
+            "recorded_attempts": len(self.memory.blocked_recovery["attempts"]),
+        }
+        return self._record(snapshot, "observe", "Blocked; waiting for changed game evidence")
 
     def _diagnostic_trace(self, event: dict) -> None:
         if self._trace._failed:
@@ -211,11 +344,20 @@ class HierarchicalLoop(AgentLoop):
                 self._blocked_reevaluation_source["decision_contract_sha256"])
             if memory.session_id != snapshot.session_id or self.checkpoint.read_bytes() != raw:
                 raise ValueError("Blocked decision checkpoint identity changed during restore")
-            return memory
-        return (self.memory_type.load(self.checkpoint, snapshot.session_id, self.target)
-                if self.resume_controller else self.memory_type(snapshot.session_id, self.target))
+        else:
+            memory = (self.memory_type.load(self.checkpoint, snapshot.session_id, self.target)
+                      if self.resume_controller else self.memory_type(snapshot.session_id, self.target))
+        if self.persist_recoverable_blocks:
+            from .blocked_persistence import validate_memory_state
+            validate_memory_state(
+                memory, self.provenance.get("code_revision"),
+                allow_source_change=self._reevaluate_blocked_once)
+        return memory
 
-    def _consume_blocked_reevaluation(self, snapshot: GameSnapshot) -> None:
+    def _consume_blocked_reevaluation(self, snapshot: GameSnapshot,
+                                      persistent_input: str | None = None, *,
+                                      authorization_reason: str | None = None,
+                                      persistent_outcome: str = "pending") -> None:
         """Durably consume the one-use authorization before any model request."""
         from .blocked_reevaluation import validate_blocked_memory
 
@@ -229,30 +371,45 @@ class HierarchicalLoop(AgentLoop):
             raise ValueError("This decision contract already consumed a blocked re-evaluation")
         if len(self.memory.blocked_reevaluations) >= 1024:
             raise ValueError("Blocked decision re-evaluation ledger is full")
+        ledger_reason = authorization_reason or self.memory.reason
+        if ledger_reason not in {"Candidate evidence insufficient", "low choice confidence"}:
+            raise ValueError("Blocked decision re-evaluation reason is not eligible")
         prior_history = deepcopy(self.memory.history)
         prior_ledger = deepcopy(self.memory.blocked_reevaluations)
-        self.memory.blocked_reevaluations.append({
-            "schema": 1,
-            "authorization_id": uuid4().hex,
-            "blocked_source_revision": source["blocked_source_revision"],
-            "source_head": source["source_head"],
-            "decision_contract_sha256": contract,
-            "checkpoint_sha256": self._blocked_reevaluation_checkpoint_sha256,
-            "stalled_decisions": self.memory.stalled_decisions,
-            "reason": self.memory.reason,
-            "tick": snapshot.tick,
-            "state": "consumed",
-        })
-        self.memory.event("blocked_decision_reevaluation_consumed",
-                          decision_contract_sha256=contract,
-                          blocked_source_revision=source["blocked_source_revision"],
-                          source_head=source["source_head"], tick=snapshot.tick,
-                          stalled_decisions=self.memory.stalled_decisions)
+        prior_recovery = deepcopy(self.memory.blocked_recovery)
         try:
+            self.memory.blocked_reevaluations.append({
+                "schema": 1,
+                "authorization_id": uuid4().hex,
+                "blocked_source_revision": source["blocked_source_revision"],
+                "source_head": source["source_head"],
+                "decision_contract_sha256": contract,
+                "checkpoint_sha256": self._blocked_reevaluation_checkpoint_sha256,
+                "stalled_decisions": self.memory.stalled_decisions,
+                "reason": ledger_reason,
+                "tick": snapshot.tick,
+                "state": "consumed",
+            })
+            self.memory.event("blocked_decision_reevaluation_consumed",
+                              decision_contract_sha256=contract,
+                              blocked_source_revision=source["blocked_source_revision"],
+                              source_head=source["source_head"], tick=snapshot.tick,
+                              stalled_decisions=self.memory.stalled_decisions)
+            if persistent_input is not None:
+                from .blocked_persistence import finish_attempt, record_attempt
+                record_attempt(self.memory, self.provenance["code_revision"], persistent_input,
+                               self.memory.reason, snapshot.tick, allow_source_change=True)
+                if persistent_outcome != "pending":
+                    finish_attempt(self.memory, self.provenance["code_revision"], persistent_input,
+                                   persistent_outcome, self.memory.reason)
+                self.memory.event("blocked_recovery_attempt", decision_input_sha256=persistent_input,
+                                  tick=snapshot.tick,
+                                  source_head=self.provenance["code_revision"]["commit"])
             self._save()
         except BaseException:
             self.memory.history = prior_history
             self.memory.blocked_reevaluations = prior_ledger
+            self.memory.blocked_recovery = prior_recovery
             raise
         self._reevaluate_blocked_once = False
 
@@ -413,6 +570,8 @@ class HierarchicalLoop(AgentLoop):
             if isinstance(metrics, dict):
                 record["fair_action_metrics"] = dict(metrics)
             record.update(self._record_extras())
+            if self.persist_recoverable_blocks:
+                record["persistent_recovery"] = deepcopy(self._persistent_recovery_status)
             record["acceptance_configuration"] = {
                 "factory_scheduling": getattr(self, "factory_scheduling", "serial"),
                 **{name: record.get(name) is True for name in (
@@ -442,7 +601,11 @@ class HierarchicalLoop(AgentLoop):
         return record
 
     def _model_history(self) -> list:
-        return self.memory.history[-8:]
+        if not self.persist_recoverable_blocks:
+            return self.memory.history[-8:]
+        from .blocked_persistence import _SYSTEM_HISTORY_EVENTS
+        return [event for event in self.memory.history
+                if event.get("kind") not in _SYSTEM_HISTORY_EVENTS][-8:]
 
     def _model_facts(self, snapshot: GameSnapshot) -> dict:
         facts = snapshot.for_jev()
@@ -1015,6 +1178,7 @@ class HierarchicalLoop(AgentLoop):
 
     @traced_step
     def step(self) -> dict:
+        self._persistent_recovery_status = None
         self._decision = None
         self._selection_support = {}
         self._planning_diagnostics = {}
@@ -1026,6 +1190,7 @@ class HierarchicalLoop(AgentLoop):
         snapshot = self._observe()
         blocked_reevaluation = self._reevaluate_blocked_once
         blocked_reevaluation_reason = self.memory.reason if blocked_reevaluation else None
+        persistent_blocked = self._persistent_block_active()
         admission_checked = False
         if blocked_reevaluation:
             from .blocked_reevaluation import validate_blocked_memory
@@ -1038,8 +1203,14 @@ class HierarchicalLoop(AgentLoop):
                     return self._record(snapshot, "observe", held)
                 admission_checked = True
             if isinstance(self.jev, ProviderCircuit) and self.jev.state["phase"] != "healthy":
+                if persistent_blocked:
+                    self._persistent_recovery_status = {
+                        "phase": "provider_blocked", "reason": self.memory.reason,
+                        "model_call": False,
+                    }
                 return self._record(snapshot, "observe", "Provider circuit is not healthy; re-evaluation not consumed")
-            self._consume_blocked_reevaluation(snapshot)
+            if not self.persist_recoverable_blocks:
+                self._consume_blocked_reevaluation(snapshot)
         if self.memory.status == "uncertain" and self.memory.pending:
             return self._verify_pending(snapshot)
         if self.terminal and not blocked_reevaluation:
@@ -1084,7 +1255,27 @@ class HierarchicalLoop(AgentLoop):
                 self._trace.emit("candidate_set_filtered", {
                     **deepcopy(self._planning_diagnostics), "filter": "existing_plan_failure_budget"})
             if not plans:
+                frontier_reason = blocker or "Plan failure budget exhausted"
+                if blocked_reevaluation and self.persist_recoverable_blocks:
+                    from .blocked_persistence import planner_input_sha256
+                    input_sha256 = planner_input_sha256(
+                        snapshot, [plan.to_dict() for plan in plans], frontier_reason,
+                        source_revision=self.provenance["code_revision"], target=self.target)
+                    self._record_persistent_attempt(
+                        snapshot, input_sha256, source_authorized=True,
+                        authorization_reason=blocked_reevaluation_reason, outcome="frontier")
+                    blocked_reevaluation = False
                 self.memory.status, self.memory.reason = "blocked", blocker or "Plan failure budget exhausted"
+                if self._persistent_block_active():
+                    from .blocked_persistence import planner_input_sha256, was_attempted
+                    input_sha256 = planner_input_sha256(
+                        snapshot, [plan.to_dict() for plan in plans], blocker or self.memory.reason,
+                        source_revision=self.provenance["code_revision"], target=self.target)
+                    if was_attempted(self.memory, self.provenance["code_revision"], input_sha256):
+                        return self._persistent_wait(snapshot, input_sha256)
+                    return self._blocked_frontier_wait(
+                        snapshot, input_sha256, source_authorized=blocked_reevaluation,
+                        authorization_reason=blocked_reevaluation_reason)
                 return self._record(snapshot, "observe", self.memory.reason)
             if self.factory_scheduling == "ready-work" and self.catalog is not None:
                 from .planning.decision_support import distinct_candidates, scheduling_context
@@ -1126,6 +1317,7 @@ class HierarchicalLoop(AgentLoop):
             provider_ready = not isinstance(self.jev, ProviderCircuit) or self.jev.state["phase"] == "healthy"
             singleton = bool(self._selection_support and len(plans) == 1
                              and self.policy == "hybrid" and provider_ready)
+            persistent_input_sha256 = None
             if self.policy == "deterministic" or singleton:
                 with phase("selection", self._diagnostic_trace):
                     chosen = self._fallback_plan(plans)
@@ -1150,6 +1342,52 @@ class HierarchicalLoop(AgentLoop):
                         "guidance": "Prefer useful work while machines run; avoid tiny pickups and idle waits",
                         "ultimate_goal": self.memory.active_goal,
                     }
+                if persistent_blocked and self._persistent_block_active():
+                    from .blocked_persistence import decision_input_sha256, was_attempted
+                    persistent_input_sha256 = decision_input_sha256(
+                        state, [plan.to_dict() for plan in plans],
+                        session_id=snapshot.session_id,
+                        source_revision=self.provenance["code_revision"], target=self.target,
+                        policy=self.policy, confidence_floor=self.confidence_floor,
+                        current_tick=snapshot.tick)
+                    if was_attempted(
+                            self.memory, self.provenance["code_revision"],
+                            persistent_input_sha256,
+                            allow_source_change=blocked_reevaluation):
+                        return self._persistent_wait(snapshot, persistent_input_sha256)
+                    if blocked_reevaluation:
+                        # Consume both gates and record this exact input in one
+                        # durable save before the first changed-source request.
+                        self._record_persistent_attempt(
+                            snapshot, persistent_input_sha256, source_authorized=True,
+                            authorization_reason=blocked_reevaluation_reason)
+                    else:
+                        self._record_persistent_attempt(snapshot, persistent_input_sha256)
+                    self._persistent_runtime_wait_level = 0
+                    self._persistent_recovery_status = {
+                        "phase": "evaluating_changed_game_evidence",
+                        "reason": self.memory.reason,
+                        "model_call": True,
+                        "decision_input_sha256": persistent_input_sha256,
+                        "recorded_attempts": len(self.memory.blocked_recovery["attempts"]),
+                    }
+                elif (self.persist_recoverable_blocks and self.memory.status == "running"
+                      and self.memory.stalled_decisions + 1 >= self.max_stalled_decisions):
+                    # A normal running decision can itself reach the blocked
+                    # threshold. Write its exact input before the provider call
+                    # so a crash cannot make a resumed process buy it again.
+                    from .blocked_persistence import decision_input_sha256, find_attempt
+                    persistent_input_sha256 = decision_input_sha256(
+                        state, [plan.to_dict() for plan in plans],
+                        session_id=snapshot.session_id,
+                        source_revision=self.provenance["code_revision"], target=self.target,
+                        policy=self.policy, confidence_floor=self.confidence_floor,
+                        current_tick=snapshot.tick)
+                    if find_attempt(self.memory, self.provenance["code_revision"],
+                                    persistent_input_sha256) is not None:
+                        return self._persistent_wait(snapshot, persistent_input_sha256)
+                    self._record_persistent_attempt(
+                        snapshot, persistent_input_sha256)
                 try:
                     with phase("selection", self._diagnostic_trace):
                         self._decision = select_plan(self._trace.client(self.jev), state, plans, self.confidence_floor,
@@ -1160,6 +1398,15 @@ class HierarchicalLoop(AgentLoop):
                 if self._decision.diagnostics.get("outcome") == "provider_blocked":
                     # Operational denial is neither model abstention nor planning
                     # failure. No hybrid fallback and no consumed gameplay budget.
+                    if persistent_input_sha256 is not None:
+                        from .blocked_persistence import finish_attempt
+                        finish_attempt(self.memory, self.provenance["code_revision"],
+                                       persistent_input_sha256, "provider_blocked")
+                        self._persistent_recovery_status = {
+                            "phase": "provider_blocked", "reason": self._decision.reason,
+                            "model_call": self._decision.model_called,
+                            "decision_input_sha256": persistent_input_sha256,
+                        }
                     self._trace_decision()
                     return self._record(snapshot, "observe", self._decision.reason)
                 chosen = next((p for p in plans if p.id == self._decision.plan_id), None)
@@ -1173,6 +1420,30 @@ class HierarchicalLoop(AgentLoop):
                     self.memory.reason = self._decision.reason
                     if self.memory.stalled_decisions >= self.max_stalled_decisions:
                         self.memory.status = "blocked"
+                    if persistent_input_sha256 is not None:
+                        from .blocked_persistence import RECOVERABLE_REASONS, finish_attempt
+                        if self._decision.reason in RECOVERABLE_REASONS:
+                            finish_attempt(self.memory, self.provenance["code_revision"],
+                                           persistent_input_sha256, "rejected",
+                                           self._decision.reason)
+                        else:
+                            finish_attempt(self.memory, self.provenance["code_revision"],
+                                           persistent_input_sha256, "failed")
+                    if (persistent_input_sha256 is not None
+                            and self._persistent_block_active()):
+                        wait = self.persistent_recovery_wait_seconds()
+                        self.memory.event(
+                            "blocked_recovery_wait", decision_input_sha256=persistent_input_sha256,
+                            tick=snapshot.tick, reason=self.memory.reason,
+                            next_observation_seconds=wait)
+                        self._persistent_recovery_status = {
+                            "phase": "waiting_for_changed_game_evidence",
+                            "reason": self.memory.reason,
+                            "next_observation_seconds": wait,
+                            "model_call": self._decision.model_called,
+                            "decision_input_sha256": persistent_input_sha256,
+                            "recorded_attempts": len(self.memory.blocked_recovery["attempts"]),
+                        }
                     return self._record(snapshot, "observe", self.memory.reason)
             from .capital_controller import commit as commit_capital
             commit_capital(self, chosen, snapshot)
@@ -1180,10 +1451,18 @@ class HierarchicalLoop(AgentLoop):
                 self._commit_solid(chosen, snapshot)
             if getattr(self, "_commit_successor", None):
                 self._commit_successor(chosen, snapshot)
-            if blocked_reevaluation:
+            if blocked_reevaluation or persistent_blocked:
                 # A blocked checkpoint becomes runnable only after ordinary
-                # source-authorized selection has produced a real committed plan.
+                # selection has produced a real committed plan.
                 self.memory.status, self.memory.reason = "running", ""
+                if persistent_input_sha256 is not None:
+                    self._persistent_recovery_status = {
+                        "phase": "selected_plan_entered_normal_execution",
+                        "reason": "Selection committed; action still requires ordinary native verification",
+                        "model_call": self._decision.model_called,
+                        "decision_input_sha256": persistent_input_sha256,
+                        "recorded_attempts": len(self.memory.blocked_recovery["attempts"]),
+                    }
             self.memory.active_plan = chosen.to_dict()
             self.memory.step_index = 0
             self.memory.event("plan_committed", plan=chosen.id, source=self._decision.source,
@@ -1191,6 +1470,10 @@ class HierarchicalLoop(AgentLoop):
                                   if getattr(self, '_solid_science_policy', False)
                                   and not (chosen.id.startswith('solid-project:')
                                            and chosen.id.endswith(':kit')) else {}))
+            if persistent_input_sha256 is not None:
+                from .blocked_persistence import finish_attempt
+                finish_attempt(self.memory, self.provenance["code_revision"],
+                               persistent_input_sha256, "selected")
             self._save()
             if self._trace.enabled:
                 self._trace.emit("plan_committed", {"plan_id": chosen.id, "plan": chosen.to_dict(),

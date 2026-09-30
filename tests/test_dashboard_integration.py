@@ -10,7 +10,7 @@ import requests
 
 from jev_factorio.backends.mock import MockBackend
 from jev_factorio.controller import HierarchicalLoop
-from jev_factorio.dashboard import EventWriter, Monitor, attach
+from jev_factorio.dashboard import EventWriter, Monitor, attach, project_record
 from jev_factorio.jev_client import MockJevClient
 
 
@@ -118,3 +118,36 @@ def test_optional_sink_failure_does_not_change_gameplay(tmp_path, monkeypatch):
         assert record["action"]
         # Close via the real context-manager implementation, not the failed test double.
         monkeypatch.undo()
+
+
+def test_persistent_recovery_display_is_truthful_and_omits_decision_fingerprint():
+    record = project_record({
+        "tick": 123, "status": "blocked", "reason": "low choice confidence",
+        "persistent_recovery": {
+            "phase": "waiting_for_changed_game_evidence",
+            "reason": "low choice confidence", "next_observation_seconds": 16.0,
+            "model_call": False, "recorded_attempts": 4,
+            "decision_input_sha256": "a" * 64,
+        },
+    })
+    assert record["persistent_recovery"] == {
+        "phase": "waiting_for_changed_game_evidence",
+        "reason": "low choice confidence", "next_observation_seconds": 16.0,
+        "model_call": False, "recorded_attempts": 4,
+    }
+    assert "decision_input_sha256" not in record["persistent_recovery"]
+
+    unresolved = project_record({
+        "tick": 123, "status": "running", "reason": "prior running reason",
+        "persistent_recovery": {
+            "phase": "evaluation_outcome_unknown_waiting",
+            "reason": "prior running reason", "next_observation_seconds": 32.0,
+            "model_call": False, "recorded_attempts": 1,
+            "decision_input_sha256": "b" * 64,
+        },
+    })
+    assert unresolved["persistent_recovery"] == {
+        "phase": "evaluation_outcome_unknown_waiting",
+        "reason": "prior running reason", "next_observation_seconds": 32.0,
+        "model_call": False, "recorded_attempts": 1,
+    }
