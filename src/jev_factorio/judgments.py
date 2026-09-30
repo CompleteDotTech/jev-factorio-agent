@@ -312,6 +312,106 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "A contrary current fact can lower the score. Native harvest and "
                 "later recipe steps still require fresh verification."
                 if qualified_raw_gather else "")
+            target_completion = row.get('local_target_completion_evidence')
+            local_target = row.get('local_target')
+            local_target_completion_hint = ""
+            target_step = plan.steps[0] if len(plan.steps) == 1 else None
+            if target_step is not None:
+                parameters = target_step.parameters if isinstance(target_step.parameters, dict) else {}
+                current_target = (primary.get('inventory_target')
+                                  if isinstance(primary, dict) else None)
+                target_start = row.get('craft_start_evidence')
+                target_dependency = row.get('craft_dependency')
+                expected_products = (target_start.get('expected_products_after_native_verification')
+                                     if isinstance(target_start, dict) else None)
+                expected_output = (expected_products.get(target)
+                                   if isinstance(expected_products, dict) else None)
+                current = (target_completion.get('inventory_now')
+                           if isinstance(target_completion, dict) else None)
+                shortfall = (target_completion.get('shortfall_now')
+                             if isinstance(target_completion, dict) else None)
+                reported_output = (target_completion.get('expected_output_after_native_receipt')
+                                   if isinstance(target_completion, dict) else None)
+                qualified_target_completion = (
+                    target_step.action == 'factory_craft_job'
+                    and target_step.effect == 'craft_job_complete'
+                    and target_step.item == target
+                    and isinstance(parameters.get('recipe'), str)
+                    and isinstance(parameters.get('receipt'), str)
+                    and bool(parameters['receipt'])
+                    and type(parameters.get('batches')) is int
+                    and parameters['batches'] > 0
+                    and local_target == target
+                    and isinstance(primary, dict)
+                    and primary.get('inventory_target') == current_target
+                    and type(current_target) is int and current_target > 0
+                    and row.get('work_scope') == 'immediate'
+                    and row.get('unknowns') == []
+                    and isinstance(target_completion, dict)
+                    and target_completion.get('observed_tick') == tick
+                    and isinstance(facts, dict)
+                    and target_completion.get('session_id') == facts.get('session_id')
+                    and target_completion.get('target_item') == target
+                    and target_completion.get('target_inventory') == current_target
+                    and type(current) is int and current >= 0
+                    and type(shortfall) is int and shortfall == max(0, current_target - current)
+                    and type(expected_output) is int and expected_output > 0
+                    and reported_output == expected_output
+                    and type(target_completion.get('shortfall_after_expected_output')) is int
+                    and target_completion.get('shortfall_after_expected_output') ==
+                        max(0, shortfall - expected_output)
+                    and target_completion.get(
+                        'would_close_current_shortfall_if_native_receipt_verifies') is
+                        (shortfall > 0 and expected_output >= shortfall)
+                    and target_completion.get('native_recipe') == parameters.get('recipe')
+                    and type(target_completion.get('native_batches')) is int
+                    and target_completion.get('native_batches') == parameters.get('batches')
+                    and target_completion.get('native_receipt_required_for_completion') is True
+                    and target_completion.get('forecast_is_not_completed_output') is True
+                    and target_completion.get('inventory_basis') ==
+                        'coherent_snapshot_and_atomic_craft_inventory'
+                    and isinstance(target_start, dict)
+                    and target_start.get('observed_tick') == tick
+                    and target_start.get('native_recipe') == parameters.get('recipe')
+                    and target_start.get('native_receipt_required_for_completion') is True
+                    and all(target_start.get(key) is True for key in (
+                        'input_costs_match_native_recipe', 'inputs_in_inventory_now',
+                        'recipe_unlocked_and_handcraftable', 'player_connected_and_bound',
+                        'crafting_queue_empty', 'craft_job_protocol_ready'))
+                    and isinstance(target_dependency, dict)
+                    and target_dependency.get('observed_tick') == tick
+                    and target_dependency.get('current_craft_product') == target
+                    and target_dependency.get('planner_item_path') == [target]
+                    and target_dependency.get('basis') ==
+                        'current_recursive_planner_provenance_and_native_recipe')
+                if qualified_target_completion:
+                    closes = target_completion[
+                        'would_close_current_shortfall_if_native_receipt_verifies']
+                    if closes:
+                        local_target_completion_hint = (
+                            " `local_target_completion_evidence` is same-tick, session-bound "
+                            "native inventory and recipe evidence. It supports level 2 only "
+                            "because the current local-target shortfall would close after "
+                            "the required native receipt verifies. It forecasts output and "
+                            "never reports completion. Do not infer blocker removal from "
+                            "future research or an unverified plan. A separate blocker or "
+                            "due-starvation claim needs its own specific same-tick observed "
+                            "evidence.")
+                    elif shortfall > 0:
+                        local_target_completion_hint = (
+                            " `local_target_completion_evidence` shows a same-tick native "
+                            "craft that leaves the current local-target shortfall open; score "
+                            "it as partial progress, not target closure or blocker removal. "
+                            "Its output still requires the native receipt. A separate blocker "
+                            "or due-starvation claim needs its own specific same-tick observed "
+                            "evidence.")
+                    else:
+                        local_target_completion_hint = (
+                            " `local_target_completion_evidence` shows the observed target "
+                            "is already met before this craft. Do not assign target-closure "
+                            "benefit to surplus output; any level-2 blocker-removal claim still "
+                            "needs separate, specific same-tick observed evidence. The craft "
+                            "output itself requires its native receipt.")
             placement_start = row.get('placement_start_evidence')
             placement_dependency = row.get('placement_dependency')
             placement_step = plan.steps[0] if len(plan.steps) == 1 else None
@@ -353,17 +453,47 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 and placement_path[0] == target
                 and placement_path[-1] ==
                     placement_step.parameters['role'].removeprefix('recipe:'))
+            craft_start = row.get('craft_start_evidence')
+            craft_dependency = row.get('craft_dependency')
+            craft_path = (craft_dependency.get('planner_item_path')
+                          if isinstance(craft_dependency, dict) else None)
+            craft_step = plan.steps[0] if len(plan.steps) == 1 else None
+            craft_parameters = (craft_step.parameters if craft_step is not None
+                                and isinstance(craft_step.parameters, dict) else {})
+            expected_craft_products = (
+                craft_start.get('expected_products_after_native_verification')
+                if isinstance(craft_start, dict) else None)
+            qualified_intermediate_craft = (
+                craft_step is not None
+                and craft_step.action in {'factory_craft', 'factory_craft_job'}
+                and isinstance(target, str) and bool(target)
+                and isinstance(craft_step.item, str) and bool(craft_step.item)
+                and craft_step.item != target
+                and row.get('work_scope') == 'immediate'
+                and row.get('unknowns') == []
+                and type(tick) is int
+                and isinstance(craft_start, dict)
+                and craft_start.get('observed_tick') == tick
+                and craft_start.get('native_recipe') == craft_parameters.get('recipe')
+                and craft_start.get('recipe_unlocked_and_handcraftable') is True
+                and isinstance(expected_craft_products, dict)
+                and type(expected_craft_products.get(craft_step.item)) is int
+                and expected_craft_products[craft_step.item] > 0
+                and isinstance(craft_dependency, dict)
+                and craft_dependency.get('observed_tick') == tick
+                and craft_dependency.get('current_craft_product') == craft_step.item
+                and isinstance(craft_path, list) and len(craft_path) >= 2
+                and craft_path[0] == target and craft_path[-1] == craft_step.item)
             craft_hint = (
                 " `craft_start_evidence` shows the current actor, queue, recipe, "
                 "and carried ingredients needed to start this handcraft; "
                 "`craft_dependency` traces its product along the current planner "
-                "recipe path to the local target. Score this bounded intermediate "
-                "product for its evidenced contribution, without requiring it to "
-                "finish the target. The craft and later production still need "
-                "fresh native receipt and precondition checks."
-                if (((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('craft_start_evidence')
-                    and ((state.get('candidate_evidence') or {}).get(plan.id) or {}).get('craft_dependency'))
-                else ""
+                "recipe path to the local target. This is level-1 partial progress "
+                "from this current planner-linked intermediate craft: it does not close the "
+                "local-target shortfall or establish blocker removal. The craft and "
+                "later production still need fresh native receipt and precondition "
+                "checks."
+                if qualified_intermediate_craft else ""
             )
             shared_bill = row.get('shared_bill_craft')
             craft_start = row.get('craft_start_evidence')
@@ -620,13 +750,19 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "the named native recipe, not that the later craft already happened."
                     + raw_gather_hint + craft_hint + bill_craft_hint + place_hint + fuel_hint
                     + transfer_hint + input_hint
-                    + pickup_hint
+                    + pickup_hint + local_target_completion_hint
                 ),
                 "criteria": ([
                     "No demonstrated contribution to the bounded production objective",
-                    "Supplies useful inputs, a current planner-linked intermediate craft, "
-                    "or evidenced capacity for the bounded task",
-                    "Directly removes an observed production blocker or prevents due starvation",
+                    "Makes useful partial progress through useful inputs, a current "
+                    "planner-linked intermediate craft, or evidenced bounded capacity, "
+                    "but does not establish receipt-conditional closure of an observed "
+                    "local-target shortfall and does not remove a separately evidenced "
+                    "current blocker or due starvation",
+                    "Same-tick qualified evidence shows the action would close the current "
+                    "local-target shortfall only after its native receipt verifies, or separate "
+                    "same-tick evidence shows it directly removes a specific observed blocker "
+                    "or due starvation",
                 ] if objective == "local_objective" else [
                     "The steps do not improve the active goal's required state",
                     "The steps make partial progress but leave a required action unplanned",
