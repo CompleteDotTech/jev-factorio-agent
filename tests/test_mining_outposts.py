@@ -66,14 +66,19 @@ def full(state):
     return state
 
 
-def decode_native_fixture(source):
+def decode_native_fixture(source, native_catalog=None, receiver_capacity=False,
+                         insertable_count=50):
     """Feed the fixture through the real atomic observation decoder."""
     from copy import deepcopy
     from test_atomic_observation import setup as atomic_setup
 
     patcher = pytest.MonkeyPatch()
     try:
-        backend, _, payload, _ = atomic_setup(patcher, craft=True)
+        backend, native, payload, _ = atomic_setup(patcher, craft=True)
+        if native_catalog is not None:
+            native.catalog.machines = deepcopy(native_catalog.machines)
+        native_inventory = {item: count for item, count in source.inventory.items()
+                            if type(count) is int and count > 0}
         runtime = deepcopy(source.factory['acceptance_runtime'])
         payload.update({
             'tick': source.tick,
@@ -82,7 +87,7 @@ def decode_native_fixture(source):
             'surface_index': runtime['surface_index'],
             'force_index': runtime['force_index'],
             'position': {'x': source.player_position[0], 'y': source.player_position[1]},
-            'inventory': deepcopy(source.inventory),
+            'inventory': deepcopy(native_inventory),
             'targets': deepcopy(source.factory['fair_resource_targets']),
             'anchors': {},
             'inventory_capacity': {
@@ -108,8 +113,35 @@ def decode_native_fixture(source):
         payload['factory'].update(tick=source.tick, acceptance_runtime=runtime)
         payload['factory'].pop('fair_resource_targets', None)
         payload['factory']['craft_job_inventory'] = {
-            'tick': source.tick, 'items': deepcopy(source.inventory),
+            'tick': source.tick, 'items': deepcopy(native_inventory),
         }
+        if receiver_capacity:
+            runtime = payload['factory']['acceptance_runtime']
+            inventory = deepcopy(native_inventory)
+            furnace = payload['factory']['entities']['recipe:iron-plate']
+            payload['_receiver_input_capacity_payload'] = {
+                'schema': 1, 'tick': source.tick,
+                'session_id': source.session_id,
+                'actor_unit': runtime['actor_unit'],
+                'surface_index': runtime['surface_index'],
+                'force_index': runtime['force_index'],
+                'actor_inventory': inventory, 'complete': True,
+                'eligible_count': 1, 'item_count': len(inventory),
+                'receivers': {'recipe:iron-plate': {
+                    'unit_number': furnace['unit_number'],
+                    'name': furnace['name'], 'type': 'furnace', 'burner': True,
+                    'surface_index': runtime['surface_index'],
+                    'force_index': runtime['force_index'],
+                    'items': {
+                        item: {
+                            'inventory': 'fuel' if item == 'coal' else 'furnace_source',
+                            'actor_count': count,
+                            'insertable_count': insertable_count,
+                            'method': 'get_insertable_count',
+                        } for item, count in inventory.items()
+                    },
+                }},
+            }
         return backend.observe()
     finally:
         patcher.undo()
@@ -207,6 +239,241 @@ def test_native_stocked_furnace_can_gather_ore_for_its_outpost_drill_kit():
     assert state == before
 
 
+def test_native_36_of_50_steam_trigger_prefers_direct_ore_input_over_proposed_outpost():
+    state, data, plan = native_steam_trigger_plan(
+        {'iron-ore': 3, 'coal': 5})
+
+    # The recorded 0128 state had three carried ore and an empty furnace input.
+    # Keep that exact state here; the buffered 11-ore transfer is tested below
+    # as a separate hypothetical, not as a reconstruction of the live receipt.
+    assert state.inventory['iron-ore'] == 3
+    assert state.factory['entities']['recipe:iron-plate']['input'] == {}
+    assert plan.steps[0].action == 'factory_gather'
+    assert plan.steps[0].parameters == {'resource': 'iron-ore', 'quantity': 11}
+    assert 'outpost_kit_prerequisite' not in plan.materials
+    trigger = plan.materials['native_research_trigger']
+    assert trigger['technology'] == 'steam-power'
+    assert trigger['outer_recipe'] == 'offshore-pump'
+    assert trigger['trigger_item'] == 'iron-plate'
+    assert trigger['trigger_produced_now'] == 36
+    assert trigger['trigger_remaining_now'] == 14
+    assert trigger['outer_recipe_locked_now'] is True
+
+    evidence = candidate_evidence(state, data, [plan])[plan.id][
+        'native_research_trigger_start_evidence']
+    assert evidence is not None
+    assert evidence['typed_dependency_path'] == [
+        'offshore-pump', 'steam-power', 'iron-plate', 'iron-ore']
+    assert evidence['action_start_facts']['trigger_recipe_input_units_required'] == 14
+    assert evidence['action_start_facts']['quantity'] == 11
+    assert evidence['useful_partial_benefit_level'] == 1
+    assert evidence['does_not_establish_trigger_item_output_or_unlock'] is True
+
+    # Exercise the actual question-building path. These assertions inspect
+    # supplied evidence and wording only; they do not treat a mock answer as
+    # native proof that an action was selected or completed.
+    from jev_factorio.jev_client import MockJevClient
+    from jev_factorio.judgments import select_plan
+    observed_request = {}
+
+    class RequestCapture:
+        def evaluate(self, context, questions):
+            observed_request['context'] = context
+            observed_request['questions'] = questions
+            return MockJevClient().evaluate(context, questions)
+
+    support = scheduling_context(state, data, [plan], 'rocket_launch')
+    decision = select_plan(RequestCapture(),
+                           {'facts': state.for_jev(), **support}, [plan])
+    assert decision.model_called is True
+    request_evidence = observed_request['context']['candidate_evidence'][plan.id]
+    request_trigger = request_evidence['native_research_trigger_start_evidence']
+    assert request_trigger['trigger_produced_now'] == 36
+    assert request_trigger['trigger_count'] == 50
+    assert request_trigger['trigger_remaining_now'] == 14
+    assert request_trigger['action_start_facts']['quantity'] == 11
+    assert 'locked' in observed_request['questions']['candidate']['instructions']
+    assert 'level-1 preparation' in observed_request['questions'][
+        plan.id + '/benefit']['instructions']
+    assert 'does not itself' in observed_request['questions'][
+        plan.id + '/benefit']['instructions']
+    assert 'later recipe output or technology unlock is unverified' in (
+        observed_request['questions'][plan.id + '/needs_observation']['instructions'])
+
+
+def test_native_steam_trigger_transfer_uses_decoded_same_rpc_receiver_capacity():
+    state, data, plan = native_steam_trigger_plan(
+        {'iron-ore': 14, 'coal': 5}, with_capacity=True)
+
+    assert plan.steps[0].action == 'factory_insert'
+    assert plan.steps[0].parameters['role'] == 'recipe:iron-plate'
+    assert plan.steps[0].parameters['item'] == 'iron-ore'
+    assert plan.steps[0].parameters['quantity'] == 14
+    assert state._receiver_input_capacity['receivers']['recipe:iron-plate'][
+        'items']['iron-ore'] == 50
+    assert type(state._receiver_input_capacity['receivers']['recipe:iron-plate'][
+        'items']['iron-ore']) is int
+
+    evidence = candidate_evidence(state, data, [plan])[plan.id][
+        'native_research_trigger_start_evidence']
+    assert evidence is not None
+    transfer = evidence['action_start_facts']['transfer']
+    capacity = transfer['receiver_capacity']
+    assert capacity['insertable_count_now'] == 50
+    assert capacity['actor_count_now'] == 14
+    assert capacity['source_role'] == 'recipe:iron-plate'
+    assert capacity['source_unit'] == 2547
+    assert evidence['action_start_facts']['trigger_recipe_input_units_required'] == 14
+    assert evidence['action_start_facts'][
+        'native_dispatch_rechecks_insertable_count_before_removal']
+
+
+def test_native_trigger_capacity_evidence_rejects_unpinned_query_source():
+    state, data, plan = native_steam_trigger_plan(
+        {'iron-ore': 14, 'coal': 5}, with_capacity=True)
+    state._receiver_input_capacity['query_source_sha256'] = '0' * 64
+    assert candidate_evidence(state, data, [plan])[plan.id][
+        'native_research_trigger_start_evidence'] is None
+
+
+def test_hypothetical_buffered_trigger_input_qualifies_only_exact_three_ore_transfer():
+    """Separate hypothetical buffer case; actual 0128 input was empty."""
+    state, data, plan = native_steam_trigger_plan(
+        {'iron-ore': 3, 'coal': 5}, with_capacity=True,
+        machine_input={'iron-ore': 11})
+
+    assert state.factory['entities']['recipe:iron-plate']['input'] == {'iron-ore': 11}
+    assert plan.steps[0].action == 'factory_insert'
+    assert plan.steps[0].parameters['quantity'] == 3
+    evidence = candidate_evidence(state, data, [plan])[plan.id][
+        'native_research_trigger_start_evidence']
+    assert evidence is not None
+    action = evidence['action_start_facts']
+    assert action['trigger_recipe_input_units_required'] == 14
+    assert action['current_machine_input_now'] == 11
+    assert action['current_machine_input_units_required'] == 3
+    assert action['transfer']['paid_quantity_to_transfer'] == 3
+    assert action['transfer']['receiver_capacity']['insertable_count_now'] == 50
+
+
+@pytest.mark.parametrize(('with_capacity', 'insertable_count'), [
+    (False, 50), (True, 0), (True, 13),
+])
+def test_native_steam_trigger_transfer_fails_closed_without_sufficient_same_rpc_capacity(
+        with_capacity, insertable_count):
+    state, data, plan = native_steam_trigger_plan(
+        {'iron-ore': 14, 'coal': 5}, with_capacity=with_capacity,
+        insertable_count=insertable_count)
+    assert plan.steps[0].action == 'factory_insert'
+    assert candidate_evidence(state, data, [plan])[plan.id][
+        'native_research_trigger_start_evidence'] is None
+
+
+def test_native_trigger_bridge_does_not_compress_locked_recipe_into_direct_item_edge():
+    state, data, plan = native_steam_trigger_plan({'iron-ore': 3, 'coal': 5})
+    from jev_factorio.planning.research_trigger import (
+        current_trigger, trigger_input_requirement,
+    )
+
+    trigger = current_trigger(state, data, 'steam-power', 'offshore-pump')
+    assert trigger == plan.materials['native_research_trigger']
+    assert trigger_input_requirement(
+        state, data, trigger, 'iron-ore', ['offshore-pump', 'iron-ore']) is None
+    assert trigger_input_requirement(
+        state, data, trigger, 'iron-ore',
+        ['offshore-pump', 'iron-plate', 'iron-ore'])['planned_recipe_input_units'] == 14
+
+    data.recipes['offshore-pump']['enabled'] = True
+    assert current_trigger(state, data, 'steam-power', 'offshore-pump') is None
+
+
+def test_native_trigger_uses_live_researched_snapshot_over_stale_catalog_cache():
+    from jev_factorio.planning.research_trigger import current_trigger
+
+    state, data, _ = native_steam_trigger_plan({'iron-ore': 3, 'coal': 5})
+    data.technologies['steam-power']['researched'] = True
+    assert current_trigger(state, data, 'steam-power', 'offshore-pump') is not None
+
+    state.researched = ['steam-power']
+    assert current_trigger(state, data, 'steam-power', 'offshore-pump') is None
+
+
+def test_native_trigger_machine_input_qualifies_raw_idle_furnace_recipe_and_capacity():
+    from jev_factorio.planning.research_trigger import (
+        current_machine_input_requirement, current_trigger,
+    )
+
+    state, data, _ = native_steam_trigger_plan({'iron-ore': 3, 'coal': 5})
+    trigger = current_trigger(state, data, 'steam-power', 'offshore-pump')
+    assert trigger is not None
+    requirement = current_machine_input_requirement(
+        state, data, trigger, 'iron-ore',
+        ['offshore-pump', 'iron-plate', 'iron-ore'])
+    assert requirement['machine_recipe_observed'] == ''
+    assert requirement['machine_recipe_identity_basis'] == (
+        'exact_owned_recipe_role_and_enabled_smelting_recipe')
+    assert requirement['receiver_capacity']['source_role'] == 'recipe:iron-plate'
+    assert requirement['receiver_capacity']['source_unit'] == 2547
+    assert requirement['receiver_capacity']['insertable_count_now'] == 50
+
+
+@pytest.mark.parametrize('mutation', [
+    lambda state, data: state.factory['entities']['recipe:iron-plate'].update(crafting=True),
+    lambda state, data: state.factory['entities']['recipe:iron-plate'].update(crafting=None),
+    lambda state, data: state.factory['entities']['recipe:iron-plate'].update(recipe='stone-brick'),
+    lambda state, data: state.factory['entities']['recipe:iron-plate'].update(
+        name='assembling-machine-1'),
+    lambda state, data: state._receiver_input_capacity.update(query_source_sha256='0' * 64),
+    lambda state, data: state._receiver_input_capacity['receivers'][
+        'recipe:iron-plate']['items'].update({'iron-ore': 13}),
+    lambda state, data: state._receiver_input_capacity['receivers'][
+        'recipe:iron-plate'].update(unit_number=9999),
+    lambda state, data: state._receiver_input_capacity['receivers'][
+        'recipe:iron-plate'].update(surface_index=2),
+])
+def test_native_trigger_machine_input_rejects_unqualified_empty_recipe_or_receiver(mutation):
+    from jev_factorio.planning.research_trigger import (
+        current_machine_input_requirement, current_trigger,
+    )
+
+    state, data, _ = native_steam_trigger_plan({'iron-ore': 3, 'coal': 5})
+    trigger = current_trigger(state, data, 'steam-power', 'offshore-pump')
+    mutation(state, data)
+    assert current_machine_input_requirement(
+        state, data, trigger, 'iron-ore',
+        ['offshore-pump', 'iron-plate', 'iron-ore']) is None
+
+
+def test_native_trigger_machine_input_requires_current_owned_recipe():
+    from jev_factorio.planning.research_trigger import (
+        current_machine_input_requirement, current_trigger,
+    )
+
+    state, data, _ = native_steam_trigger_plan({'iron-ore': 3, 'coal': 5})
+    trigger = current_trigger(state, data, 'steam-power', 'offshore-pump')
+    state.factory['entities']['recipe:iron-plate']['recipe'] = 'stone-brick'
+    assert current_machine_input_requirement(
+        state, data, trigger, 'iron-ore',
+        ['offshore-pump', 'iron-plate', 'iron-ore']) is None
+
+
+@pytest.mark.parametrize('mutation', [
+    lambda state, data: setattr(state, 'tick', state.tick + 1),
+    lambda state, data: setattr(state, 'researched', ['steam-power']),
+    lambda state, data: data.technologies['steam-power'].update(
+        prerequisites=['logistics']),
+    lambda state, data: data.technologies['steam-power'].update(enabled=False),
+    lambda state, data: state.factory['produced'].update({'iron-plate': 50}),
+])
+def test_native_trigger_bridge_rejects_stale_completed_or_unavailable_evidence(mutation):
+    from jev_factorio.planning.research_trigger import current_trigger
+
+    state, data, _ = native_steam_trigger_plan({'iron-ore': 3, 'coal': 5})
+    data.technologies['steam-power']['researched'] = True  # stale catalog field is not authority
+    mutation(state, data)
+    assert current_trigger(state, data, 'steam-power', 'offshore-pump') is None
+
+
 def nested_kit_plan(kind='transfer'):
     state, data = state_fixture()
     furnace = state.factory['entities']['recipe:iron-plate']
@@ -250,14 +517,68 @@ def nested_kit_plan(kind='transfer'):
             'source_unit': 2547,
         }},
     }
-    state = decode_native_fixture(state)
+    state.factory['acceptance_runtime'] = {
+        'schema': 1, 'session_id': state.session_id, 'actor_unit': 17,
+        'player_index': 1, 'surface_index': 1, 'force_index': 1,
+        'speed': 1, 'tick_paused': False,
+    }
+    state = decode_native_fixture(
+        state, native_catalog=data, receiver_capacity=(kind == 'transfer'))
     planner = MiningOutpostPlanner(data, state, 'rocket_launch')
     planner.focus = ('outer-pump', 20)
     plan = planner._need('iron-ore', 20, ('item:outer-pump',))
     return state, data, plan
 
 
-def advance_native_fixture(state):
+def native_steam_trigger_plan(inventory, *, with_capacity=True, insertable_count=50,
+                              machine_input=None, crafting=False):
+    """Build a 36/50 native trigger through the atomic observation decoder."""
+    state, data = state_fixture()
+    state.world_kind = 'fle'
+    state.inventory = dict(inventory)
+    furnace = state.factory['entities']['recipe:iron-plate']
+    furnace.update(unit_number=2547, fuel={'coal': 5}, products_finished=36,
+                   input=dict(machine_input or {}), output={}, crafting=crafting,
+                   recipe='')
+    state.factory['produced'] = {'iron-plate': 36}
+    state.factory['production_sites'] = {
+        'protocol': 1, 'session_id': state.session_id, 'tick': state.tick,
+        'sources': {'recipe:iron-plate': {
+            'state': 'owned', 'reason': 'owned legacy furnace',
+            'anchor': 'cell-site:legacy-iron-furnace',
+            'position': {'x': 0, 'y': 0}, 'belt_count': 1,
+            'bill': {'stone-furnace': 1, 'burner-mining-drill': 1,
+                     'burner-inserter': 2, 'wooden-chest': 1,
+                     'transport-belt': 1},
+            'source_unit': 2547,
+        }},
+    }
+    state.factory['acceptance_runtime'] = {
+        'schema': 1, 'session_id': state.session_id, 'actor_unit': 17,
+        'player_index': 1, 'surface_index': 1, 'force_index': 1,
+        'speed': 1, 'tick_paused': False,
+    }
+    data.recipes['offshore-pump'] = recipe(
+        'offshore-pump', {'iron-gear-wheel': 2, 'pipe': 3}, enabled=False)
+    data.technologies['steam-power'] = {
+        'enabled': True, 'prerequisites': [],
+        'trigger': {'type': 'craft-item', 'item': {'name': 'iron-plate'}, 'count': 50},
+        'effects': [{'type': 'unlock-recipe', 'recipe': 'offshore-pump'}],
+    }
+    state = decode_native_fixture(
+        state, native_catalog=data, receiver_capacity=with_capacity,
+        insertable_count=insertable_count)
+    planner = MiningOutpostPlanner(data, state, 'rocket_launch')
+    _, plan = planner._recipe('offshore-pump', ())
+    plan = replace(plan, materials={
+        **(plan.materials or {}),
+        'local_objective': {'item': 'offshore-pump', 'inventory_target': 1},
+        'work_intent': {'scope': 'immediate', 'observed_tick': state.tick},
+    })
+    return state, data, plan
+
+
+def advance_native_fixture(state, native_catalog=None, receiver_capacity=False):
     """Advance and decode a new coherent fixture instead of setting trust flags."""
     from copy import deepcopy
 
@@ -266,7 +587,8 @@ def advance_native_fixture(state):
     for name in ('mining_outposts', 'production_sites', 'input_routes', 'output_buffers'):
         if isinstance(fresh.factory.get(name), dict):
             fresh.factory[name]['tick'] = fresh.tick
-    return decode_native_fixture(fresh)
+    return decode_native_fixture(fresh, native_catalog=native_catalog,
+                                 receiver_capacity=receiver_capacity)
 
 
 @pytest.mark.parametrize(('kind', 'action'), [
@@ -299,9 +621,12 @@ def test_nested_outpost_kit_provenance_qualifies_each_current_native_child_step(
         assert row_evidence['recipe_input_transfer_start_evidence'] is None
         assert start['child_planner_item_path'] == [
             'burner-mining-drill', 'iron-plate', 'iron-ore']
-        assert start['action_start_facts']['receiver_capacity_observed'] is False
+        assert start['action_start_facts']['receiver_capacity_observed'] is True
         assert start['action_start_facts']['fresh_native_dispatch_capacity_check_required']
         assert start['action_start_facts']['native_dispatch_checks_receiver_insertable_count']
+        assert start['action_start_facts']['transfer']['receiver_capacity'][
+            'insertable_count_now'] >= start['action_start_facts']['transfer'][
+                'paid_quantity_to_transfer']
     context, questions, selected = question_batch(
         {'facts': state.for_jev(), **support}, [plan])
     assert selected == [plan]
@@ -442,7 +767,7 @@ def test_nested_component_chain_requalifies_gather_transfer_pickup_and_handcraft
 
     gather = current_plan()
     state.inventory['iron-ore'] = gather.steps[0].threshold
-    state = advance_native_fixture(state)
+    state = advance_native_fixture(state, native_catalog=data, receiver_capacity=True)
 
     transfer = current_plan()
     assert transfer.steps[0].action == 'factory_insert'
@@ -451,14 +776,14 @@ def test_nested_component_chain_requalifies_gather_transfer_pickup_and_handcraft
     # Represent the later fresh native snapshot after the paid ore was processed.
     furnace['input'] = {}
     furnace['output'] = {'iron-plate': 5}
-    state = advance_native_fixture(state)
+    state = advance_native_fixture(state, native_catalog=data, receiver_capacity=True)
 
     pickup = current_plan()
     assert pickup.steps[0].action == 'factory_extract'
     assert pickup.steps[0].parameters['quantity'] == 5
     furnace['output'] = {}
     state.inventory['iron-plate'] = 5
-    state = advance_native_fixture(state)
+    state = advance_native_fixture(state, native_catalog=data, receiver_capacity=True)
 
     craft = current_plan()
     assert craft.steps[0].action == 'factory_craft'
