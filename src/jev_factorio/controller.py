@@ -421,6 +421,17 @@ class HierarchicalLoop(AgentLoop):
         else:
             memory = (self.memory_type.load(self.checkpoint, snapshot.session_id, self.target)
                       if self.resume_controller else self.memory_type(snapshot.session_id, self.target))
+        return self._complete_initial_memory_restore(memory)
+
+    def _complete_initial_memory_restore(self, memory, *, archive_index=None):
+        """Bind already-validated restore state and apply common recovery checks.
+
+        Composed controllers may need to restore an immutable checkpoint capture
+        instead of reopening a path. Keep this final binding/validation shared
+        so such restorers cannot skip archive lookup or source-lineage checks.
+        """
+        if archive_index is not None:
+            memory._blocked_recovery_archive_index = archive_index
         self._blocked_recovery_archive_index = getattr(
             memory, "_blocked_recovery_archive_index", None)
         if self.persist_recoverable_blocks:
