@@ -165,7 +165,13 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
         factory[key] = _map(factory.get(key), key)
     # Capacity is private same-tick planning evidence. Keep it off factory and
     # GameSnapshot.for_jev() so the complete receiver matrix never reaches the model.
-    receiver_capacity = decode_receiver_capacity(raw, result, native.catalog)
+    try:
+        receiver_capacity = decode_receiver_capacity(raw, result, native.catalog)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        # Capacity is optional advisory evidence. A missing/over-budget or
+        # unqualified sidecar must never invalidate the primary coherent game
+        # snapshot; it simply cannot support a capacity-dependent plan.
+        receiver_capacity = None
     # A capability wrapper cannot supply or preserve actor headroom. Only the
     # current top-level reading above can publish it after full validation.
     factory.pop('inventory_insertable', None)

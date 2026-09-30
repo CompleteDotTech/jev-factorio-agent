@@ -77,6 +77,22 @@ def test_one_read_command_calls_existing_snapshot_then_owned_role_capacity():
     assert command.rindex(receiver_guard) < command.index('get_insertable_count')
 
 
+@pytest.mark.parametrize('machines', [
+    None,
+    {f'unsupported-{index}': {} for index in range(129)},
+])
+def test_missing_or_oversized_optional_machine_catalog_keeps_primary_snapshot_command(machines):
+    catalog_value = NS() if machines is None else NS(machines=machines)
+    native = NS(_discovery_epoch=4, _coherent_drill=51,
+                backend=NS(_drill=None), catalog=catalog_value)
+
+    command = observation_command(native)
+
+    assert command == 'storage.campaign.observation_snapshot_v2(4,51,nil)'
+    assert MARKER not in command
+    assert 'get_insertable_count' not in command
+
+
 def test_decoder_binds_capacity_to_exact_current_inventory_and_owned_receiver():
     snapshot = sample()
     decoded = decode(raw(payload(snapshot)), snapshot, catalog())

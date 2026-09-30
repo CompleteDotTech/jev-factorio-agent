@@ -74,14 +74,19 @@ def observation_command(native: Any) -> str:
         position = getattr(drill, 'position', None)
         if position is not None:
             prior_position = {'x': position.x, 'y': position.y}
-    supported = getattr(native.catalog, 'machines', None)
-    if not isinstance(supported, dict) or len(supported) > 128:
-        raise ValueError('Invalid native receiver machine catalog')
-    supported_names = sorted(name for name in supported
-                             if isinstance(name, str) and name in SUPPORTED_RECEIVER_TYPES)
-    encoded_names = json.dumps(supported_names, separators=(',', ':'))
     call = ('storage.campaign.observation_snapshot_v2(' + str(epoch) + ','
             + _literal(prior_drill) + ',' + _position_literal(prior_position) + ')')
+    supported = getattr(native.catalog, 'machines', None)
+    if not isinstance(supported, dict) or len(supported) > 128:
+        # Receiver capacity is advisory. An older adapter or an oversized
+        # catalog still gets the qualified primary snapshot; it simply cannot
+        # request this optional sidecar.
+        return call
+    supported_names = sorted(name for name in supported
+                             if isinstance(name, str) and name in SUPPORTED_RECEIVER_TYPES)
+    if not supported_names:
+        return call
+    encoded_names = json.dumps(supported_names, separators=(',', ':'))
     # The sidecar follows the existing callback within this one /sc. It uses
     # campaign role ownership directly; global unit lookup is not reliable for
     # all valid furnace entities in Factorio 2.0.

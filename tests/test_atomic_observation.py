@@ -156,6 +156,33 @@ def test_receiver_capacity_stays_private_and_uses_same_single_observation_comman
         state, catalog, 'recipe:iron-plate', 'coal', 3, 2547) is None
 
 
+def test_atomic_snapshot_survives_unavailable_or_overbudget_optional_capacity(monkeypatch):
+    backend, native, payload, calls = setup(monkeypatch)
+    del native.catalog.machines  # Benchmark/legacy adapter shape has no capacity catalog.
+
+    state = backend.observe()
+
+    assert state.tick == 10 and state.inventory == {'coal': 8}
+    assert state._receiver_input_capacity is None
+    assert len(calls) == 1
+    assert 'observation_snapshot_v2(' in calls[0]
+    assert 'JEV_RECEIVER_INPUT_CAPACITY' not in calls[0]
+
+    # A supported query may still report incomplete coverage. The coherent
+    # primary observation remains usable while the advisory capacity is unknown.
+    native.catalog.machines = {'stone-furnace': {'burner': True}}
+    payload['_receiver_input_capacity_payload'] = {
+        'schema': 1, 'tick': 10, 'session_id': 'atomic-fixture',
+        'actor_unit': 17, 'surface_index': 1, 'force_index': 2,
+        'actor_inventory': {'coal': 8}, 'complete': False,
+        'eligible_count': 65, 'item_count': 1, 'receivers': {},
+    }
+    second = backend.observe()
+    assert second.tick == 10 and second.inventory == {'coal': 8}
+    assert second._receiver_input_capacity is None
+    assert len(calls) == 2 and 'JEV_RECEIVER_INPUT_CAPACITY' in calls[1]
+
+
 @pytest.mark.parametrize('field,value', [('session_id','other'), ('actor_unit',18),
     ('surface_index',2), ('force_index',3), ('tick',9), ('inventory',{'coal':True})])
 def test_atomic_rejects_identity_tick_or_inventory_changes(monkeypatch, field, value):
@@ -220,8 +247,7 @@ def test_bootstrap_without_fle_entity_conversion(monkeypatch):
     assert result.factory['drill_output_role'] == 'bootstrap:output'
     assert backend._drill.unit_number == 51
     backend.observe()
-    assert 'observation_snapshot_v2(0,51,' in _[-1]
-    assert 'helpers.json_to_table' in _[-1]
+    assert 'observation_snapshot_v2(0,51,{x=0,y=0})' in _[-1]
     payload['bootstrap']['drill']['unit_number'] = 52
     with pytest.raises(ValueError, match='bootstrap'): backend.observe()
 
