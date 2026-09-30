@@ -1,6 +1,8 @@
 """Integration against real repository controllers, with explicit offline backends."""
+import hashlib
 import json
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,7 @@ import requests
 from jev_factorio import main
 from jev_factorio import research_log as rl
 from jev_factorio.backends.mock import MockBackend
+from jev_factorio.memory import CampaignMemory
 
 
 @pytest.fixture(autouse=True)
@@ -276,6 +279,66 @@ def test_until_complete_cli_records_unbounded_hierarchical_mode(tmp_path, monkey
     assert configuration["until_complete"] is True
     assert configuration["reconcile_only"] is False
     assert configuration["steps"] is None and configuration["duration_seconds"] is None
+
+
+def test_blocked_re_evaluation_cli_continues_in_requested_until_complete_mode(
+        tmp_path, monkeypatch):
+    from jev_factorio import blocked_reevaluation, operational_safety, provenance
+
+    checkpoint = tmp_path / "checkpoint.json"
+    blocked = CampaignMemory(
+        "fle:blocked-test", "rocket_launch", active_goal="stockpile_fuel", last_tick=0,
+        status="blocked", reason="Candidate evidence insufficient", stalled_decisions=4)
+    checkpoint.write_text(json.dumps(asdict(blocked), sort_keys=True), encoding="utf-8")
+    checkpoint_sha = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    old_source = "1" * 40
+    monkeypatch.setattr(blocked_reevaluation, "validate_source_revision", lambda _revision: {
+        "blocked_source_revision": old_source, "source_head": "2" * 40,
+        "previous_contract_sha256": "a" * 64, "decision_contract_sha256": "b" * 64,
+    })
+    monkeypatch.setattr(provenance, "gameplay_context", lambda: {})
+    monkeypatch.setattr(operational_safety, "storage_ready", lambda _roots: True)
+    monkeypatch.setattr("jev_factorio.jev_client.make_client", lambda **_kwargs: object())
+    monkeypatch.setattr(main, "make_backend", lambda *_args, **_kwargs: MockBackend())
+    calls = {"constructor": None, "run": None}
+
+    class Loop:
+        memory_type = CampaignMemory
+
+        def __init__(self, _backend, **options):
+            calls["constructor"] = options
+
+        def run(self, **limits):
+            calls["run"] = limits
+
+    monkeypatch.setattr("jev_factorio.controller.HierarchicalLoop", Loop)
+    invoke(monkeypatch, "--backend", "fle", "--controller", "hierarchical", "--policy", "jev",
+           "--resume", "--resume-controller", "--checkpoint", checkpoint,
+           "--tick-seconds", "1", "--until-complete", "--reevaluate-blocked-once",
+           "--exact-checkpoint-sha256", checkpoint_sha,
+           "--blocked-source-revision", old_source, "--run-dir", tmp_path / "run")
+
+    assert calls["constructor"]["reevaluate_blocked_once"] is True
+    assert calls["constructor"]["exact_checkpoint_sha256"] == checkpoint_sha
+    assert calls["run"] == {"until_complete": True}
+    configuration = json.loads((tmp_path / "run" / "manifest.json").read_bytes())["configuration"]
+    assert configuration["reevaluate_blocked_once"] is True
+    assert configuration["until_complete"] is True
+    assert configuration["steps"] is None and configuration["duration_seconds"] is None
+
+
+def test_blocked_re_evaluation_cannot_route_through_reconcile_only(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "checkpoint.json"
+    checkpoint.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(main, "make_backend", lambda *_args, **_kwargs: pytest.fail("backend started"))
+    with pytest.raises(SystemExit) as error:
+        invoke(monkeypatch, "--backend", "fle", "--controller", "hierarchical", "--policy", "jev",
+               "--resume", "--resume-controller", "--checkpoint", checkpoint,
+               "--tick-seconds", "1", "--target", "rocket_launch", "--factory-scheduling",
+               "ready-work", "--background-work", "--reconcile-only",
+               "--reevaluate-blocked-once", "--exact-checkpoint-sha256", "a" * 64,
+               "--blocked-source-revision", "b" * 40)
+    assert error.value.code == 2
 
 
 @pytest.mark.parametrize("arguments", [

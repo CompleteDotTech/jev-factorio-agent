@@ -51,7 +51,10 @@ class HierarchicalLoop(AgentLoop):
                  tick_seconds: float = 2.0, log_file: str | None = None,
                  max_request_bytes: int = 32000, max_pending_polls: int = 32,
                  max_stalled_decisions: int = 4, factory_scheduling: str = "serial",
-                 research_log: EventSink | None = None):
+                 research_log: EventSink | None = None,
+                 reevaluate_blocked_once: bool = False,
+                 exact_checkpoint_sha256: str | None = None,
+                 blocked_source_revision: str | None = None):
         if factory_scheduling not in {"serial", "ready-work"}:
             raise ValueError("Unknown factory scheduling policy")
         self.factory_scheduling = factory_scheduling
@@ -94,6 +97,35 @@ class HierarchicalLoop(AgentLoop):
         self.max_request_bytes = max_request_bytes
         self.max_pending_polls = max_pending_polls
         self.max_stalled_decisions = max_stalled_decisions
+        self._reevaluate_blocked_once = reevaluate_blocked_once
+        self._blocked_reevaluation_checkpoint_sha256 = None
+        self._blocked_reevaluation_source = None
+        if (type(reevaluate_blocked_once) is not bool
+                or (reevaluate_blocked_once
+                    and (exact_checkpoint_sha256 is None or blocked_source_revision is None))
+                or (not reevaluate_blocked_once
+                    and (exact_checkpoint_sha256 is not None or blocked_source_revision is not None))):
+            raise ValueError("Blocked decision re-evaluation requires its exact checkpoint and source pins")
+        if reevaluate_blocked_once:
+            if not resume_controller or self.checkpoint is None:
+                raise ValueError("Blocked decision re-evaluation requires a resumed controller checkpoint")
+            if policy != "jev" or getattr(jev, "is_mock", False):
+                raise ValueError("Blocked decision re-evaluation requires the live Jev selection policy")
+            from .blocked_reevaluation import validate_checkpoint_capture, validate_source_revision
+            source = validate_source_revision(blocked_source_revision)
+            revision = self.provenance.get("code_revision")
+            if revision is not None and (
+                not isinstance(revision, dict) or revision.get("commit") != source["source_head"]
+            ):
+                raise ValueError("Blocked decision source differs from supervised source provenance")
+            raw = self.checkpoint.read_bytes()
+            validate_checkpoint_capture(
+                raw, exact_checkpoint_sha256, self.memory_type, target,
+                self.max_stalled_decisions, source["decision_contract_sha256"])
+            if self.checkpoint.read_bytes() != raw:
+                raise ValueError("Controller checkpoint changed during blocked-decision preflight")
+            self._blocked_reevaluation_checkpoint_sha256 = exact_checkpoint_sha256
+            self._blocked_reevaluation_source = source
         self.memory: CampaignMemory | None = None
         self._decision: Decision | None = None
         self._process_id = uuid4().hex
@@ -170,8 +202,59 @@ class HierarchicalLoop(AgentLoop):
         if self._connector_checkpoint_preflight_sha is not None:
             if hashlib.sha256(self.checkpoint.read_bytes()).hexdigest() != self._connector_checkpoint_preflight_sha:
                 raise ValueError('Connector checkpoint changed after preflight')
+        if self.resume_controller and self._blocked_reevaluation_checkpoint_sha256 is not None:
+            from .blocked_reevaluation import validate_checkpoint_capture
+            raw = self.checkpoint.read_bytes()
+            memory = validate_checkpoint_capture(
+                raw, self._blocked_reevaluation_checkpoint_sha256, self.memory_type,
+                self.target, self.max_stalled_decisions,
+                self._blocked_reevaluation_source["decision_contract_sha256"])
+            if memory.session_id != snapshot.session_id or self.checkpoint.read_bytes() != raw:
+                raise ValueError("Blocked decision checkpoint identity changed during restore")
+            return memory
         return (self.memory_type.load(self.checkpoint, snapshot.session_id, self.target)
                 if self.resume_controller else self.memory_type(snapshot.session_id, self.target))
+
+    def _consume_blocked_reevaluation(self, snapshot: GameSnapshot) -> None:
+        """Durably consume the one-use authorization before any model request."""
+        from .blocked_reevaluation import validate_blocked_memory
+
+        validate_blocked_memory(self.memory, self.max_stalled_decisions)
+        if snapshot.world_kind != "fle" or self.policy != "jev" or getattr(self.jev, "is_mock", False):
+            raise ValueError("Blocked decision re-evaluation is limited to live Jev-controlled FLE")
+        source = self._blocked_reevaluation_source
+        contract = source["decision_contract_sha256"]
+        if any(entry["decision_contract_sha256"] == contract
+               for entry in self.memory.blocked_reevaluations):
+            raise ValueError("This decision contract already consumed a blocked re-evaluation")
+        if len(self.memory.blocked_reevaluations) >= 1024:
+            raise ValueError("Blocked decision re-evaluation ledger is full")
+        prior_history = deepcopy(self.memory.history)
+        prior_ledger = deepcopy(self.memory.blocked_reevaluations)
+        self.memory.blocked_reevaluations.append({
+            "schema": 1,
+            "authorization_id": uuid4().hex,
+            "blocked_source_revision": source["blocked_source_revision"],
+            "source_head": source["source_head"],
+            "decision_contract_sha256": contract,
+            "checkpoint_sha256": self._blocked_reevaluation_checkpoint_sha256,
+            "stalled_decisions": self.memory.stalled_decisions,
+            "reason": self.memory.reason,
+            "tick": snapshot.tick,
+            "state": "consumed",
+        })
+        self.memory.event("blocked_decision_reevaluation_consumed",
+                          decision_contract_sha256=contract,
+                          blocked_source_revision=source["blocked_source_revision"],
+                          source_head=source["source_head"], tick=snapshot.tick,
+                          stalled_decisions=self.memory.stalled_decisions)
+        try:
+            self._save()
+        except BaseException:
+            self.memory.history = prior_history
+            self.memory.blocked_reevaluations = prior_ledger
+            raise
+        self._reevaluate_blocked_once = False
 
     def _observe_snapshot(self) -> GameSnapshot:
         snapshot = self._trace.observe(self.backend, self._trace.observation_phase)
@@ -941,19 +1024,37 @@ class HierarchicalLoop(AgentLoop):
         self._performance = PerformanceCounters()
         self._trace.metrics = self._performance if self.factory_scheduling == "ready-work" else None
         snapshot = self._observe()
+        blocked_reevaluation = self._reevaluate_blocked_once
+        admission_checked = False
+        if blocked_reevaluation:
+            from .blocked_reevaluation import validate_blocked_memory
+            validate_blocked_memory(self.memory, self.max_stalled_decisions)
+            if snapshot.world_kind != "fle" or self.policy != "jev" or getattr(self.jev, "is_mock", False):
+                raise ValueError("Blocked decision re-evaluation is limited to live Jev-controlled FLE")
+            if self._safety:
+                held = self._safety.admission(self.memory, snapshot)
+                if held:
+                    return self._record(snapshot, "observe", held)
+                admission_checked = True
+            if isinstance(self.jev, ProviderCircuit) and self.jev.state["phase"] != "healthy":
+                return self._record(snapshot, "observe", "Provider circuit is not healthy; re-evaluation not consumed")
+            self._consume_blocked_reevaluation(snapshot)
         if self.memory.status == "uncertain" and self.memory.pending:
             return self._verify_pending(snapshot)
-        if self.terminal:
+        if self.terminal and not blocked_reevaluation:
             return self._record(snapshot, "observe", self.memory.reason)
         # Resolve in-flight work before processing model requests or goal changes.
         if self.memory.pending:
             return self._verify_pending(snapshot)
-        if self._safety:
+        if self._safety and not admission_checked:
             held = self._safety.admission(self.memory, snapshot)
             if held:
                 return self._record(snapshot, "observe", held)
         self._refresh_goals(snapshot)
-        if self.terminal:
+        if self.terminal and not (
+            blocked_reevaluation and self.memory.status == "blocked"
+            and self.memory.reason == "Candidate evidence insufficient"
+        ):
             return self._record(snapshot, "observe", self.memory.reason, verified=True)
         if self.memory.active_plan is None:
             with phase("planning", self._diagnostic_trace):
@@ -1078,6 +1179,10 @@ class HierarchicalLoop(AgentLoop):
                 self._commit_solid(chosen, snapshot)
             if getattr(self, "_commit_successor", None):
                 self._commit_successor(chosen, snapshot)
+            if blocked_reevaluation:
+                # A blocked checkpoint becomes runnable only after ordinary
+                # source-authorized selection has produced a real committed plan.
+                self.memory.status, self.memory.reason = "running", ""
             self.memory.active_plan = chosen.to_dict()
             self.memory.step_index = 0
             self.memory.event("plan_committed", plan=chosen.id, source=self._decision.source,

@@ -173,6 +173,20 @@ Unexpected API, observation, dispatch, and persistence failures still propagate
 through the existing recovery guards. No retry policy is added. The default
 step limit and `--duration-hours` mode remain bounded.
 
+For a checkpoint blocked specifically by `Candidate evidence insufficient`,
+`--reevaluate-blocked-once` authorizes one fresh decision after the decision
+contract changes. It also requires `--resume --resume-controller`, the exact
+checkpoint SHA-256, and the full source revision that recorded the block. The
+source revision is an explicit checkpoint-owner pin; a legacy checkpoint does
+not contain enough metadata to infer it. The pinned source must be an ancestor
+of the clean current checkout, whose decision-contract content must have changed. This
+authorization is consumed durably before model selection and cannot be replayed
+for the same contract. If a plan is selected, the requested run mode continues
+normally, including `--until-complete`; a rejected decision remains blocked and
+increments the existing streak. It does not clear the block, reset counters, or
+authorize a second controller. Do not combine it with reconcile-only or
+owner-step gating.
+
 **Experimental: no complete native rocket-launch playthrough is verified.**
 Native hand-crafting requires a connected viewer controlling the agent character.
 Live-session resume does not support server reloads or viewer reconnection;
