@@ -141,6 +141,8 @@ class BackgroundWorkLoop(HierarchicalLoop):
                         self.memory.attempt_outcomes = self.memory.attempt_outcomes[-64:]
                     self.memory.background_attempt = None
                     self.memory.background_schema = 2
+                    # Verified native progress breaks a consecutive no-choice streak.
+                    self.memory.stalled_decisions = 0
                     self.memory.event("background_job_completed", job=job.parameters["receipt"],
                                       plan=job.plan_id, outputs=job.outputs, tick=snapshot.tick)
                     self._last_background_observation = {

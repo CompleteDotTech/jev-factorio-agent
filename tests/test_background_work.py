@@ -145,7 +145,13 @@ def test_checkpoint_resume_never_requeues_a_background_craft(tmp_path):
 def test_reconcile_only_verifies_paid_job_after_fresh_resume_once(tmp_path, monkeypatch):
     backend = ReceiptBackend()
     original = controller(backend, tmp_path)
+    original.memory.stalled_decisions = 3
+    original.memory.failures["previous-plan"] = 2
+    original._save()
     original.step()
+    assert original.memory.stalled_decisions == 3  # Admission is not verified progress.
+    history_before = deepcopy(original.memory.history)
+    failures_before = deepcopy(original.memory.failures)
     backend.complete()
     calls_before = len(backend.calls)
 
@@ -165,6 +171,10 @@ def test_reconcile_only_verifies_paid_job_after_fresh_resume_once(tmp_path, monk
     }
     saved = BackgroundMemory.load(tmp_path / "state.json", backend.state.session_id, restored.target)
     assert saved.background_job is None and saved.background_attempt is None
+    assert saved.stalled_decisions == 0
+    assert saved.failures == failures_before
+    assert saved.history[:-1] == history_before
+    assert saved.history[-1]["kind"] == "background_job_completed"
     assert len([row for row in saved.attempt_outcomes if row["outcome"] == "verified"]) == 1
     assert [event["kind"] for event in saved.history].count("background_job_completed") == 1
     assert len(backend.calls) == calls_before
@@ -181,7 +191,9 @@ def test_reconcile_only_verifies_paid_job_after_fresh_resume_once(tmp_path, monk
 def test_reconcile_only_retains_unmatched_receipt_as_uncertain(tmp_path, monkeypatch):
     backend = ReceiptBackend()
     original = controller(backend, tmp_path)
+    original.memory.stalled_decisions = 3
     original.step()
+    assert original.memory.stalled_decisions == 3
     backend.state.factory["craft_job"]["id"] = "unmatched-receipt"
     calls_before = len(backend.calls)
 
@@ -198,15 +210,20 @@ def test_reconcile_only_retains_unmatched_receipt_as_uncertain(tmp_path, monkeyp
     assert result["background_state"] == "uncertain"
     assert result["verified_attempt_added"] is False
     assert restored.memory.background_job is not None
+    assert restored.memory.stalled_decisions == 3
     assert restored.memory.background_job["failed"]
     assert restored.memory.attempt_outcomes == []
     assert len(backend.calls) == calls_before
+    saved = BackgroundMemory.load(tmp_path / "state.json", backend.state.session_id, restored.target)
+    assert saved.status == "uncertain" and saved.stalled_decisions == 3
 
 
 def test_reconcile_only_preserves_valid_running_job_without_dispatch(tmp_path, monkeypatch):
     backend = ReceiptBackend()
     original = controller(backend, tmp_path)
+    original.memory.stalled_decisions = 3
     original.step()
+    assert original.memory.stalled_decisions == 3
     calls_before = len(backend.calls)
 
     restored = controller(backend, tmp_path, resume=True)
@@ -215,6 +232,7 @@ def test_reconcile_only_preserves_valid_running_job_without_dispatch(tmp_path, m
 
     assert result["status"] == "running" and result["background_state"] == "pending"
     assert result["verified_attempt_added"] is False
+    assert restored.memory.stalled_decisions == 3
     assert restored.memory.background_job is not None
     assert restored.memory.background_attempt is not None
     assert restored.memory.attempt_outcomes == []
@@ -222,6 +240,7 @@ def test_reconcile_only_preserves_valid_running_job_without_dispatch(tmp_path, m
     saved = BackgroundMemory.load(tmp_path / "state.json", backend.state.session_id, restored.target)
     assert saved.background_job == restored.memory.background_job
     assert saved.background_attempt == restored.memory.background_attempt
+    assert saved.stalled_decisions == 3
 
 
 def test_reconcile_only_propagates_observation_error_without_releasing_checkpoint(tmp_path, monkeypatch):
@@ -446,6 +465,36 @@ def test_checkpoint_failure_poison_stops_further_calls(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="persistence"):
         loop.step()
     assert backend.observations == count and len(backend.calls) == 1
+
+
+def test_paid_background_completion_save_failure_keeps_old_checkpoint(tmp_path, monkeypatch):
+    backend = ReceiptBackend()
+    original = controller(backend, tmp_path)
+    original.memory.stalled_decisions = 3
+    original.memory.failures["previous-plan"] = 2
+    original._save()
+    original.step()
+    assert original.memory.stalled_decisions == 3
+    backend.complete()
+    checkpoint = tmp_path / "state.json"
+    durable_before = checkpoint.read_bytes()
+
+    resumed = controller(backend, tmp_path, resume=True)
+
+    def fail_save(self, path):
+        raise OSError("synthetic completion checkpoint failure")
+
+    monkeypatch.setattr(BackgroundMemory, "save", fail_save)
+    with pytest.raises(OSError, match="completion checkpoint"):
+        resumed.reconcile_only()
+
+    assert resumed._save_poisoned is True
+    assert resumed.memory.stalled_decisions == 0
+    assert checkpoint.read_bytes() == durable_before
+    durable = BackgroundMemory.load(checkpoint, backend.state.session_id, resumed.target)
+    assert durable.stalled_decisions == 3
+    assert durable.failures == {"previous-plan": 2}
+    assert durable.background_job is not None and durable.background_attempt is not None
 
 
 def test_legacy_checkpoint_migration_is_read_only(tmp_path):
