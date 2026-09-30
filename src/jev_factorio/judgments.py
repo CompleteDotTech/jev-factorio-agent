@@ -311,6 +311,26 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "current start evidence; its own outcome still requires normal native verification. "
                 "Do not require proof of arrival, outpost flow/output, or completion of the outer target."
             )
+        research_trigger_choice_hint = ""
+        for candidate_plan in selected:
+            candidate_row = evidence.get(candidate_plan.id)
+            trigger = (candidate_row.get('native_research_trigger_start_evidence')
+                       if isinstance(candidate_row, dict) else None)
+            if (not isinstance(trigger, dict) or trigger.get('observed_tick') != tick
+                    or trigger.get('outer_recipe_is_not_a_direct_recipe_edge') is not True
+                    or trigger.get('does_not_establish_trigger_item_output_or_unlock') is not True
+                    or trigger.get('useful_partial_benefit_level') != 1):
+                continue
+            research_trigger_choice_hint += (
+                " This candidate is a bounded input to the current enabled recipe for a "
+                "native craft-item research trigger. The outer recipe remains locked; the "
+                "typed technology edge and its current produced/required counter are separate "
+                "from the recipe input path. If this action verifies, it is only useful input "
+                "progress (level 1), not trigger-item production, research completion, or an "
+                "outer-recipe unlock. Prefer this finite immediate trigger input over starting "
+                "a proposed whole outpost kit when the current candidate directly supplies it; "
+                "do not assume payback or future output."
+            )
         questions = {
             "candidate": {
                 "type": "choice",
@@ -334,7 +354,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                                  "Do not assume other questions' answers are available."
                                  + choice_priority_hint + bill_craft_hint
                                  + craft_choice_hint + utility_lab_choice_hint
-                                 + outpost_kit_choice_hint),
+                                 + outpost_kit_choice_hint + research_trigger_choice_hint),
                 "criteria": {**{p.id: p.description for p in selected},
                              "observe": "Gather another observation without mutating the factory"},
             }
@@ -856,12 +876,25 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 and nested_action.get('kind') == nested_action_kinds[input_step.action])
             if qualified_nested_kit and input_step.action == 'factory_insert':
                 nested_transfer = nested_action.get('transfer')
+                nested_capacity = (nested_transfer.get('receiver_capacity')
+                                   if isinstance(nested_transfer, dict) else None)
+                transfer_parameters = input_step.parameters or {}
                 qualified_nested_kit = (
                     nested_kit.get('child_request_kind') == 'outpost_component'
                     and isinstance(nested_transfer, dict)
                     and nested_transfer.get('observed_tick') == tick
                     and nested_transfer.get('native_transfer_and_later_output_require_verification') is True
-                    and nested_action.get('receiver_capacity_observed') is False
+                    and isinstance(nested_capacity, dict)
+                    and nested_capacity.get('observed_tick') == tick
+                    and nested_capacity.get('source_role') == transfer_parameters.get('role')
+                    and nested_capacity.get('source_unit') == nested_transfer.get('owned_source_unit')
+                    and nested_capacity.get('item') == transfer_parameters.get('item')
+                    and type(nested_capacity.get('insertable_count_now')) is int
+                    and type(transfer_parameters.get('quantity')) is int
+                    and nested_capacity['insertable_count_now'] >= transfer_parameters['quantity']
+                    and type(nested_capacity.get('actor_count_now')) is int
+                    and nested_capacity['actor_count_now'] >= transfer_parameters['quantity']
+                    and nested_action.get('receiver_capacity_observed') is True
                     and nested_action.get('fresh_native_dispatch_capacity_check_required') is True
                     and nested_action.get('native_dispatch_checks_receiver_insertable_count') is True)
             if qualified_nested_kit and input_step.action == 'factory_gather':
@@ -901,8 +934,9 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 + (" This is the bounded five-coal construction-fuel request; the request is "
                    "an inventory target, not the amount gathered in this one step."
                    if nested_kit.get('child_request_kind') == 'outpost_construction_fuel' else "")
-                + (" Receiver capacity is not in this snapshot; the native transfer dispatch "
-                   "must check exact insertable capacity before removing the carried input."
+                + (" This same-tick snapshot includes actor-bound insertable capacity for the "
+                   "selected receiver and item; the native transfer dispatch still rechecks "
+                   "exact capacity before removing the carried input."
                    if input_step.action == 'factory_insert' else "")
                 if qualified_nested_kit else ""
             )
@@ -943,6 +977,64 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "pickup receipt and player inventory delta still require verification."
                 if qualified_pickup else ""
             )
+            trigger_start = row.get('native_research_trigger_start_evidence')
+            trigger_action = (trigger_start.get('action_start_facts')
+                              if isinstance(trigger_start, dict) else None)
+            qualified_research_trigger = (
+                input_step is not None and isinstance(trigger_start, dict)
+                and trigger_start.get('observed_tick') == tick
+                and trigger_start.get('basis') ==
+                    'typed_native_research_trigger_plus_direct_current_recipe_input'
+                and trigger_start.get('outer_recipe_is_not_a_direct_recipe_edge') is True
+                and trigger_start.get('technology_enabled_and_unresearched') is True
+                and trigger_start.get('technology_prerequisites_satisfied') is True
+                and trigger_start.get('outer_recipe_locked_now') is True
+                and trigger_start.get('trigger_type') == 'craft-item'
+                and type(trigger_start.get('trigger_produced_now')) is int
+                and type(trigger_start.get('trigger_count')) is int
+                and 0 <= trigger_start['trigger_produced_now'] < trigger_start['trigger_count']
+                and trigger_start.get('trigger_remaining_now') ==
+                    trigger_start['trigger_count'] - trigger_start['trigger_produced_now']
+                and isinstance(trigger_action, dict)
+                and trigger_start.get('useful_partial_benefit_level') == 1
+                and trigger_start.get('does_not_establish_trigger_item_output_or_unlock') is True)
+            if qualified_research_trigger and input_step.action == 'factory_gather':
+                qualified_research_trigger = (
+                    trigger_action.get('kind') == 'direct_enabled_trigger_recipe_input_gather'
+                    and trigger_action.get('native_gather_outcome_requires_verification') is True
+                    and trigger_action.get('resource') ==
+                        (input_step.parameters or {}).get('resource')
+                    and trigger_action.get('quantity') ==
+                        (input_step.parameters or {}).get('quantity')
+                    and isinstance(row.get('gather_start_evidence'), dict)
+                    and row['gather_start_evidence'].get(
+                        'fair_target_identity_observed') is True)
+            elif qualified_research_trigger and input_step.action == 'factory_insert':
+                trigger_transfer = trigger_action.get('transfer')
+                trigger_capacity = (trigger_transfer.get('receiver_capacity')
+                                   if isinstance(trigger_transfer, dict) else None)
+                qualified_research_trigger = (
+                    trigger_action.get('kind') == 'current_owned_trigger_recipe_input_transfer'
+                    and isinstance(trigger_transfer, dict)
+                    and trigger_transfer.get('observed_tick') == tick
+                    and isinstance(trigger_capacity, dict)
+                    and type(trigger_capacity.get('insertable_count_now')) is int
+                    and type((input_step.parameters or {}).get('quantity')) is int
+                    and trigger_capacity['insertable_count_now'] >=
+                        (input_step.parameters or {})['quantity']
+                    and trigger_action.get(
+                        'native_dispatch_rechecks_insertable_count_before_removal') is True)
+            else:
+                qualified_research_trigger = False
+            research_trigger_hint = (
+                " `native_research_trigger_start_evidence` distinguishes the locked outer "
+                "recipe's craft-item technology trigger from the enabled input recipe. The "
+                "current produced/required counter is native, while this gather or paid input "
+                "transfer is only level-1 preparation: it does not itself produce the trigger "
+                "item, advance the counter, research the technology, or unlock the outer recipe. "
+                "Verify each action normally and reevaluate from a fresh native observation."
+                if qualified_research_trigger else ""
+            )
             questions[plan.id + "/benefit"] = {
                 "type": "score",
                 "instructions": (
@@ -953,7 +1045,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "the named native recipe, not that the later craft already happened."
                     + raw_gather_hint + craft_hint + bill_craft_hint + place_hint + fuel_hint
                     + utility_lab_hint + transfer_hint + input_hint
-                    + outpost_kit_hint + pickup_hint + local_target_completion_hint
+                    + outpost_kit_hint + pickup_hint + research_trigger_hint
+                    + local_target_completion_hint
                 ),
                 "criteria": ([
                     "No demonstrated contribution to the bounded production objective",
@@ -1034,6 +1127,11 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                        "a start fact is missing for this child step; future placement, arrival, "
                        "outpost flow/output, and outer-target completion remain unverified."
                        if qualified_nested_kit else "")
+                    + (" This candidate's direct recipe input and current native research-trigger "
+                       "counter are both same-tick evidence. The fair resource/receiver start "
+                       "facts are present, so do not mark another observation needed merely "
+                       "because later recipe output or technology unlock is unverified."
+                       if qualified_research_trigger else "")
                     + (" For a placement, `placement_start_evidence` combines a current "
                        "surveyed site offer with observed actor/queue facts. Judge missing "
                        "start facts from those "

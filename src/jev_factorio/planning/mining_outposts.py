@@ -7,6 +7,7 @@ from dataclasses import replace
 from ..mining_outposts import (COMMAND, PARTS, RESOURCES, current, flow_complete,
                                remaining_kit, role, sources)
 from .input_routes import InputRoutePlanner
+from .research_trigger import current_machine_input_requirement, current_trigger
 
 
 class MiningOutpostPlanner(InputRoutePlanner):
@@ -29,6 +30,25 @@ class MiningOutpostPlanner(InputRoutePlanner):
         finally:
             self._outpost_acquiring, self._acquiring_route, self._economic_acquiring = previous
 
+    def _current_research_trigger_input(self, item, amount, path):
+        context = self._active_native_research_trigger
+        if not isinstance(context, dict):
+            return False
+        current = current_trigger(self.snapshot, self.catalog,
+                                  context.get('technology'), context.get('outer_recipe'))
+        if current != context:
+            return False
+        item_path = [entry.removeprefix('item:') for entry in path
+                     if isinstance(entry, str) and entry.startswith('item:')]
+        if item_path[-1:] != [current['trigger_item']]:
+            return False
+        typed_path = [current['outer_recipe'], current['trigger_item'], item]
+        need = current_machine_input_requirement(
+            self.snapshot, self.catalog, current, item, typed_path)
+        return (isinstance(need, dict)
+                and type(amount) is int
+                and amount == need['machine_input_units_required_now'])
+
     def _need(self, item, amount, path=()):
         if (item not in RESOURCES or self._outpost_acquiring or self.goal != 'rocket_launch'
                 or self.snapshot.inventory.get(item, 0) >= amount):
@@ -39,6 +59,12 @@ class MiningOutpostPlanner(InputRoutePlanner):
         if not row or row['state'] == 'fault':
             return super()._need(item, amount, path)
         if row['state'] == 'proposed':
+            # A finite, current craft-item technology trigger is an immediate
+            # production demand. Do not start the whole speculative outpost kit
+            # when its enabled recipe input can be gathered or transferred
+            # directly. Paid/building prefixes retain their existing path.
+            if self._current_research_trigger_input(item, amount, path):
+                return super()._need(item, amount, path)
             machine = self.entities.get(RESOURCES[item], {})
             direct = self.factory.get('input_routes', {}).get('sources', {}).get(RESOURCES[item])
             # Small bootstrap work and an available direct route take precedence.

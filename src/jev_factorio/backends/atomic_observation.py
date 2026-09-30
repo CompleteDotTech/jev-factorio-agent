@@ -109,15 +109,14 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
     # A just-built fair bootstrap drill is also identity-bound, when available.
     if prior_drill is None and getattr(backend._drill, 'unit_number', None) is not None:
         prior_drill = _integer(backend._drill.unit_number, 'bootstrap identity', 1)
-    prior_position = None
-    if prior_drill is not None and getattr(backend._drill, 'unit_number', None) == prior_drill:
-        position = getattr(backend._drill, 'position', None)
-        if position is not None:
-            prior_position = {'x': position.x, 'y': position.y}
-            _position(prior_position)
-    result = parse_snapshot(native.call('observation_snapshot_v2', native._discovery_epoch,
-                                        prior_drill, prior_position),
-                            backend._observation_profile, schemas=(2,))
+    # Keep the installed v5 callback/profile/witness bytes unchanged. The
+    # source-built capacity sidecar follows that callback in the same /sc
+    # command so actor, receiver, item, and tick facts share one RPC boundary.
+    from .native_input_capacity import decode as decode_receiver_capacity
+    from .native_input_capacity import observation_command
+
+    raw = native.command(observation_command(native))
+    result = parse_snapshot(raw, backend._observation_profile, schemas=(2,))
     session = result.get('session_id')
     if not isinstance(session, str) or not session or len(session) > 128:
         raise ValueError('Invalid atomic session identity')
@@ -164,6 +163,9 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
             raise ValueError('Atomic runtime identity changed')
     for key in ('entities', 'receipts'):
         factory[key] = _map(factory.get(key), key)
+    # Capacity is private same-tick planning evidence. Keep it off factory and
+    # GameSnapshot.for_jev() so the complete receiver matrix never reaches the model.
+    receiver_capacity = decode_receiver_capacity(raw, result, native.catalog)
     # A capability wrapper cannot supply or preserve actor headroom. Only the
     # current top-level reading above can publish it after full validation.
     factory.pop('inventory_insertable', None)
@@ -309,6 +311,7 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
     snapshot.drill_output_connected = bootstrap['output_connected']
     snapshot.iron_ore_collected = collected
     snapshot.factory, snapshot.game_version = factory, native.catalog.version
+    snapshot._receiver_input_capacity = receiver_capacity
     snapshot.researched, snapshot.victory = researched, launched > baseline
     snapshot.victory_source = 'native:base-game-rocket-launch' if snapshot.victory else None
     snapshot._native_controls = controls

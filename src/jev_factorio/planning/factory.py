@@ -27,6 +27,7 @@ class FactoryPlanner:
         self.expansions = 0
         self.max_expansions = max_expansions
         self.materials = None
+        self._active_native_research_trigger = None
 
     def _visit(self, key, path):
         self.expansions += 1
@@ -47,8 +48,13 @@ class FactoryPlanner:
             key = connection_key(parameters)
         step = Step(action, effect, item, threshold, costs, timeout,
                     parameters=parameters, verification=verification)
+        materials = dict(self.materials) if isinstance(self.materials, dict) else None
+        trigger = self._active_native_research_trigger
+        if isinstance(trigger, dict):
+            materials = dict(materials or {})
+            materials['native_research_trigger'] = dict(trigger)
         return Plan(f"factory:{action}:{key}", self.goal,
-                    description or f"{action}: {key}", (step,), materials=self.materials)
+                    description or f"{action}: {key}", (step,), materials=materials)
 
     def _wait(self, effect, item="", threshold=0, role="", timeout=36000, identity=None):
         return self._plan("factory_wait", effect, item, threshold,
@@ -74,7 +80,7 @@ class FactoryPlanner:
             unlocks = self.catalog.unlocks(recipe["name"])
             if not unlocks:
                 raise ValueError(f"No native technology unlocks {recipe['name']}")
-            return recipe, self._research(unlocks[0], path)
+            return recipe, self._research(unlocks[0], path, required_recipe=recipe["name"])
         return recipe, None
 
     def _fair_resource_identity(self, item: str, target: int) -> str | None:
@@ -460,7 +466,7 @@ class FactoryPlanner:
                     return role, prerequisite
         return role, None
 
-    def _research(self, name, path=()):
+    def _research(self, name, path=(), required_recipe=None):
         if name in self.researched:
             return None
         path = self._visit("technology:" + name, path)
@@ -479,7 +485,17 @@ class FactoryPlanner:
                 count = trigger.get("count", 1)
                 if produced < count:
                     target = self.snapshot.inventory.get(item, 0) + min(20, count - produced)
-                    prerequisite = self._need(item, target, path)
+                    context = None
+                    if required_recipe is not None:
+                        from .research_trigger import current_trigger
+                        context = current_trigger(self.snapshot, self.catalog, name, required_recipe)
+                    previous = self._active_native_research_trigger
+                    if context is not None:
+                        self._active_native_research_trigger = context
+                    try:
+                        prerequisite = self._need(item, target, path)
+                    finally:
+                        self._active_native_research_trigger = previous
                     if prerequisite:
                         return prerequisite
                 return self._wait("researched", name, timeout=1800)

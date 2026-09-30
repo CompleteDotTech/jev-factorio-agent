@@ -336,7 +336,90 @@ def _utility_lab_research_dependency(snapshot, catalog, plan):
     }
 
 
-def _recipe_input_transfer_start_evidence(snapshot, catalog, plan, *, path_root=None):
+def _receiver_capacity_start_evidence(snapshot, catalog, role, item, quantity, source_unit):
+    """Require an identity- and item-bound native receiver read from this RPC."""
+    from ..backends.native_input_capacity import source_sha256
+
+    factory = snapshot.factory
+    value = getattr(snapshot, '_receiver_input_capacity', None)
+    runtime = factory.get('acceptance_runtime')
+    entity = factory.get('entities', {}).get(role)
+    entity_name = entity.get('name') if isinstance(entity, dict) else None
+    receiver = (value.get('receivers', {}).get(role)
+                if isinstance(value, dict) and isinstance(value.get('receivers'), dict)
+                else None)
+    sample = (receiver.get('items', {}).get(item)
+              if isinstance(receiver, dict) and isinstance(receiver.get('items'), dict)
+              else None)
+    actor_count = snapshot.inventory.get(item)
+    if (snapshot.world_kind != 'fle'
+            or getattr(snapshot, '_coherent_observation_verified', None)
+                != (snapshot.session_id, snapshot.tick)
+            or factory.get('observation_snapshot_schema') != 2
+            or not isinstance(runtime, dict)
+            or not isinstance(value, dict) or value.get('schema') != 1
+            or type(value.get('schema')) is not int or value.get('complete') is not True
+            or value.get('basis') != 'same_rpc_owned_campaign_receiver_capacity'
+            or value.get('method') != 'get_insertable_count'
+            or value.get('query_source_sha256') != source_sha256()
+            or value.get('tick') != snapshot.tick
+            or value.get('session_id') != snapshot.session_id
+            or value.get('actor_unit') != runtime.get('actor_unit')
+            or value.get('surface_index') != runtime.get('surface_index')
+            or value.get('force_index') != runtime.get('force_index')
+            or not isinstance(receiver, dict)
+            or receiver.get('surface_index') != runtime.get('surface_index')
+            or receiver.get('force_index') != runtime.get('force_index')
+            or receiver.get('unit_number') != source_unit
+            or type(receiver.get('unit_number')) is not int
+            or receiver.get('name') != entity_name
+            or receiver.get('type') not in {'furnace', 'assembling-machine', 'rocket-silo'}
+            or type(receiver.get('burner')) is not bool
+            or type(actor_count) is not int
+            or type(quantity) is not int or quantity < 1
+            or actor_count < quantity
+            or type(sample) is not int
+            or sample < quantity):
+        return None
+    machine = catalog.machines.get(receiver['name'], {})
+    expected_type = ({'stone-furnace': 'furnace', 'steel-furnace': 'furnace',
+                      'electric-furnace': 'furnace',
+                      'assembling-machine-1': 'assembling-machine',
+                      'assembling-machine-2': 'assembling-machine',
+                      'assembling-machine-3': 'assembling-machine',
+                      'rocket-silo': 'rocket-silo'}.get(receiver['name']))
+    expected_inventory = ('fuel' if item == 'coal' and receiver['burner']
+                          else 'furnace_source' if receiver['type'] == 'furnace'
+                          else 'assembling_machine_input')
+    source = (factory.get('production_sites', {}).get('sources', {}).get(role)
+              if isinstance(factory.get('production_sites'), dict) else None)
+    try:
+        owned_sources = production_site_sources(snapshot)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+    if (receiver.get('type') != expected_type
+            or receiver.get('burner') is not (machine.get('burner') is True)
+            or not isinstance(source, dict) or source.get('state') != 'owned'
+            or source.get('source_unit') != source_unit
+            or owned_sources.get(role) != source):
+        return None
+    return {
+        'observed_tick': snapshot.tick, 'session_id': snapshot.session_id,
+        'actor_unit': value['actor_unit'], 'surface_index': value['surface_index'],
+        'force_index': value['force_index'], 'source_role': role,
+        'source_unit': source_unit, 'receiver_name': receiver['name'],
+        'receiver_type': receiver['type'], 'inventory': expected_inventory,
+        'item': item, 'actor_count_now': actor_count,
+        'insertable_count_now': sample,
+        'method': value['method'],
+        'query_source_sha256': value['query_source_sha256'],
+        'basis': 'same_rpc_owned_campaign_receiver_capacity',
+        'native_dispatch_rechecks_insertable_count_before_removal': True,
+    }
+
+
+def _recipe_input_transfer_start_evidence(snapshot, catalog, plan, *, path_root=None,
+                                          require_receiver_capacity=False):
     """Bind a paid recipe input transfer to current native facts, not future output."""
     if len(plan.steps) != 1:
         return None
@@ -403,7 +486,7 @@ def _recipe_input_transfer_start_evidence(snapshot, catalog, plan, *, path_root=
             or factory.get('player_connected') is not True
             or factory.get('player_bound') is not True):
         return None
-    return {
+    evidence = {
         'observed_tick': snapshot.tick,
         'planner_item_path': list(path),
         'direct_native_recipe': recipe_name,
@@ -418,6 +501,13 @@ def _recipe_input_transfer_start_evidence(snapshot, catalog, plan, *, path_root=
         'basis': 'current_planner_recipe_input_and_owned_native_machine',
         'native_transfer_and_later_output_require_verification': True,
     }
+    if require_receiver_capacity:
+        receiver_capacity = _receiver_capacity_start_evidence(
+            snapshot, catalog, role, item, required, machine['unit_number'])
+        if receiver_capacity is None:
+            return None
+        evidence['receiver_capacity'] = receiver_capacity
+    return evidence
 
 
 def _output_pickup_start_evidence(snapshot, catalog, plan, *, path_root=None):
@@ -693,7 +783,7 @@ def _outpost_kit_prerequisite_start_evidence(snapshot, catalog, plan):
         gather = (step.parameters or {}).get('resource')
         parameters = step.parameters or {}
         quantity = parameters.get('quantity')
-        inventory_now = snapshot.inventory.get(gather) if isinstance(gather, str) else None
+        inventory_now = snapshot.inventory.get(gather, 0) if isinstance(gather, str) else None
         site = _current_native_fair_resource_target(snapshot, gather)
         if child['kind'] == 'outpost_component':
             raw = materials.get('raw_prerequisite')
@@ -745,7 +835,7 @@ def _outpost_kit_prerequisite_start_evidence(snapshot, catalog, plan):
         if child['kind'] != 'outpost_component':
             return None
         transfer = _recipe_input_transfer_start_evidence(
-            snapshot, catalog, plan, path_root=kit_item)
+            snapshot, catalog, plan, path_root=kit_item, require_receiver_capacity=True)
         if (transfer is None or not _current_item_dependency_path(
                 snapshot, catalog, transfer['planner_item_path'], kit_item,
                 transfer['ingredient'])):
@@ -754,7 +844,7 @@ def _outpost_kit_prerequisite_start_evidence(snapshot, catalog, plan):
         action_start = {
             'kind': 'owned_native_recipe_input_transfer_start',
             'transfer': transfer,
-            'receiver_capacity_observed': False,
+            'receiver_capacity_observed': True,
             'fresh_native_dispatch_capacity_check_required': True,
             'native_dispatch_checks_receiver_insertable_count': True,
         }
@@ -828,6 +918,124 @@ def _outpost_kit_prerequisite_start_evidence(snapshot, catalog, plan):
         'action_start_facts': action_start,
         'native_step_allowed_now': True,
         'native_action_outcome_requires_verification': True,
+    }
+
+
+def _native_research_trigger_start_evidence(snapshot, catalog, plan, gather_start):
+    """Qualify immediate input to a native trigger without inventing a recipe edge."""
+    from .research_trigger import current_machine_input_requirement, current_trigger
+
+    materials = plan.materials or {}
+    provenance = materials.get('native_research_trigger')
+    intent = materials.get('work_intent')
+    if (not isinstance(provenance, dict) or not isinstance(intent, dict)
+            or intent.get('scope') != 'immediate'
+            or intent.get('observed_tick') != snapshot.tick
+            or provenance.get('observed_tick') != snapshot.tick):
+        return None
+    current = current_trigger(snapshot, catalog, provenance.get('technology'),
+                              provenance.get('outer_recipe'))
+    if current != provenance:
+        return None
+    step = plan.steps[0] if len(plan.steps) == 1 else None
+    if step is None:
+        return None
+    if step.action == 'factory_gather' and step.effect == 'inventory':
+        parameters = step.parameters or {}
+        resource = parameters.get('resource')
+        raw = materials.get('raw_prerequisite')
+        raw_path = raw.get('planner_item_path') if isinstance(raw, dict) else None
+        requirement = current_machine_input_requirement(
+            snapshot, catalog, current, resource,
+            [current['outer_recipe'], current['trigger_item'], resource]
+            if isinstance(resource, str) else None)
+        carried = snapshot.inventory.get(resource) if isinstance(resource, str) else None
+        quantity = parameters.get('quantity')
+        required_now = (requirement.get('machine_input_units_required_now')
+                        if isinstance(requirement, dict) else None)
+        expected_gather = (min(50, max(0, required_now - carried))
+                           if isinstance(requirement, dict) and type(carried) is int else None)
+        if (not isinstance(requirement, dict)
+                or not isinstance(raw, dict) or raw.get('observed_tick') != snapshot.tick
+                or raw.get('direct_product') != current['trigger_item']
+                or raw.get('recipe') != current['trigger_recipe']
+                or raw.get('ingredient') != resource
+                or raw_path != [current['trigger_item'], resource]
+                or not _current_item_dependency_path(
+                    snapshot, catalog, raw_path, current['trigger_item'], resource)
+                or gather_start is None
+                or gather_start.get('resource_in_current_observation') is not True
+                or gather_start.get('fair_target_identity_observed') is not True
+                or type(quantity) is not int or quantity <= 0
+                or quantity != expected_gather
+                or step.threshold != carried + quantity):
+            return None
+        action = {
+            'kind': 'direct_enabled_trigger_recipe_input_gather',
+            'resource': resource, 'quantity': quantity,
+            'trigger_recipe_input_units_required': requirement['planned_recipe_input_units'],
+            'current_machine_input_units_required': required_now,
+            'current_machine_input_now': requirement['machine_input_now'],
+            'current_machine_input_in_flight': requirement['machine_input_in_flight'],
+            'source_role': requirement['source_role'],
+            'source_unit': requirement['source_unit'],
+            'machine_recipe_observed': requirement['machine_recipe_observed'],
+            'machine_recipe_identity_basis': requirement['machine_recipe_identity_basis'],
+            'receiver_capacity': requirement['receiver_capacity'],
+            'carried_resource_now': carried,
+            'fair_target_identity_observed': True,
+            'native_gather_outcome_requires_verification': True,
+        }
+    elif step.action == 'factory_insert' and step.effect == 'transfer':
+        transfer = _recipe_input_transfer_start_evidence(
+            snapshot, catalog, plan, path_root=current['trigger_item'],
+            require_receiver_capacity=True)
+        if not isinstance(transfer, dict):
+            return None
+        resource = transfer.get('ingredient')
+        requirement = current_machine_input_requirement(
+            snapshot, catalog, current, resource,
+            [current['outer_recipe'], current['trigger_item'], resource])
+        if (not isinstance(requirement, dict)
+                or transfer.get('direct_native_recipe') != current['trigger_recipe']
+                or transfer.get('planner_item_path') != [current['trigger_item'], resource]
+                or transfer.get('owned_source_role') != requirement['source_role']
+                or transfer.get('owned_source_unit') != requirement['source_unit']
+                or transfer.get('paid_quantity_to_transfer') !=
+                    requirement['machine_input_units_required_now']
+                or transfer.get('receiver_capacity', {}).get('insertable_count_now', 0)
+                    < transfer.get('paid_quantity_to_transfer', 1)
+                or transfer.get('receiver_capacity', {}).get('observed_tick') != snapshot.tick
+                or transfer.get('receiver_capacity', {}).get('session_id') != snapshot.session_id
+                or transfer.get('receiver_capacity', {}).get('source_role') !=
+                    requirement['source_role']
+                or transfer.get('receiver_capacity', {}).get('source_unit') !=
+                    requirement['source_unit']
+                or transfer.get('receiver_capacity', {}).get('insertable_count_now') !=
+                    requirement['receiver_capacity'].get('insertable_count_now')):
+            return None
+        action = {
+            'kind': 'current_owned_trigger_recipe_input_transfer',
+            'transfer': transfer,
+            'trigger_recipe_input_units_required': requirement['planned_recipe_input_units'],
+            'current_machine_input_units_required': requirement['machine_input_units_required_now'],
+            'current_machine_input_now': requirement['machine_input_now'],
+            'current_machine_input_in_flight': requirement['machine_input_in_flight'],
+            'native_dispatch_rechecks_insertable_count_before_removal': True,
+        }
+    else:
+        return None
+    return {
+        **current,
+        'typed_dependency_path': [current['outer_recipe'], current['technology'],
+                                  current['trigger_item'],
+                                  action.get('resource') or (action.get('transfer') or {}).get(
+                                      'ingredient')],
+        'outer_recipe_is_not_a_direct_recipe_edge': True,
+        'action_start_facts': action,
+        'useful_partial_benefit_level': 1,
+        'does_not_establish_trigger_item_output_or_unlock': True,
+        'basis': 'typed_native_research_trigger_plus_direct_current_recipe_input',
     }
 
 
@@ -1266,6 +1474,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             scope = 'immediate' if highest <= 5 else 'lookahead'
         outpost_kit_start = _outpost_kit_prerequisite_start_evidence(
             snapshot, catalog, plan)
+        native_research_trigger_start = _native_research_trigger_start_evidence(
+            snapshot, catalog, plan, gather_start)
         passive = all(s.action in {'factory_wait', 'idle'} for s in plan.steps)
         result[plan.id] = {
             'work_scope': scope,
@@ -1288,6 +1498,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'placement_dependency': placement_dependency,
             'utility_lab_research_dependency': utility_lab_dependency,
             'recipe_input_transfer_start_evidence': recipe_input_transfer_start,
+            'native_research_trigger_start_evidence': native_research_trigger_start,
             'outpost_kit_prerequisite_start_evidence': outpost_kit_start,
             'output_pickup_start_evidence': output_pickup_start,
             'research_deadline_tick': min((row['deadline_tick'] for row in schedules

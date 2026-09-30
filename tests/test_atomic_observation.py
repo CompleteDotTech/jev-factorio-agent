@@ -50,14 +50,20 @@ def setup(monkeypatch, craft=False):
     class Client:
         def send_command(self, command):
             calls.append(command)
-            return 'JEV_SNAPSHOT|' + json.dumps(payload)
+            snapshot_payload = copy.deepcopy(payload)
+            capacity_payload = snapshot_payload.pop('_receiver_input_capacity_payload', None)
+            response = 'JEV_SNAPSHOT|' + json.dumps(snapshot_payload)
+            if capacity_payload is not None:
+                from jev_factorio.backends.native_input_capacity import MARKER
+                response += '\n' + MARKER + json.dumps(capacity_payload)
+            return response
     backend = FleBackend()
     backend.consolidated_observations = True
     backend._instance = NS(namespace=Tools(), rcon_client=Client())
     backend._fair = NS(call=lambda *args: (_ for _ in ()).throw(AssertionError('duplicate fair call')))
     native = ObservedFactory.__new__(ObservedFactory)
     native.backend = backend
-    native.catalog = NS(version='2.0.77')
+    native.catalog = NS(version='2.0.77', machines={})
     native._discovery_epoch = 0
     native.coherent_observation_version = 2
     backend._factory = native
@@ -79,6 +85,75 @@ def test_atomic_path_one_transport_no_fle_helpers(monkeypatch, craft):
     assert len(calls) == 1 and 'observation_snapshot_v2' in calls[0]
     assert state._coherent_observation_verified == ('atomic-fixture', 10)
     assert not backend.last_observation_profile['subcalls']
+
+
+def test_receiver_capacity_stays_private_and_uses_same_single_observation_command(monkeypatch):
+    backend, native, payload, calls = setup(monkeypatch)
+    from jev_factorio.backends.native_input_capacity import MARKER
+
+    payload['factory']['entities'] = {'recipe:iron-plate': {
+        'name': 'stone-furnace', 'unit_number': 2547,
+        'position': {'x': 1, 'y': 2}, 'fuel': {'coal': 2},
+    }}
+    payload['factory']['production_sites'] = {
+        'protocol': 1, 'session_id': 'atomic-fixture', 'tick': 10,
+        'sources': {'recipe:iron-plate': {
+            'state': 'owned', 'reason': 'owned legacy furnace',
+            'anchor': 'cell-site:legacy-iron-furnace',
+            'position': {'x': 1, 'y': 2}, 'belt_count': 1,
+            'bill': {'stone-furnace': 1, 'burner-mining-drill': 1,
+                     'burner-inserter': 2, 'wooden-chest': 1,
+                     'transport-belt': 1},
+            'source_unit': 2547,
+        }},
+    }
+    native.catalog.machines = {'stone-furnace': {'burner': True}}
+    payload['_receiver_input_capacity_payload'] = {
+        'schema': 1, 'tick': 10, 'session_id': 'atomic-fixture',
+        'actor_unit': 17, 'surface_index': 1, 'force_index': 2,
+        'actor_inventory': {'coal': 8}, 'complete': True,
+        'eligible_count': 1, 'item_count': 1,
+        'receivers': {'recipe:iron-plate': {
+            'unit_number': 2547, 'name': 'stone-furnace', 'type': 'furnace',
+            'burner': True, 'surface_index': 1, 'force_index': 2,
+            'items': {'coal': {
+                'inventory': 'fuel', 'actor_count': 8,
+                'insertable_count': 48, 'method': 'get_insertable_count',
+            }},
+        }},
+    }
+    state = backend.observe()
+    assert len(calls) == 1
+    assert calls[0].count('observation_snapshot_v2(') == 1
+    assert MARKER in calls[0]
+    assert state._receiver_input_capacity['receivers']['recipe:iron-plate'][
+        'items']['coal'] == 48
+    assert type(state._receiver_input_capacity['receivers']['recipe:iron-plate'][
+        'items']['coal']) is int
+    assert 'receiver_input_capacity' not in state.factory
+    assert '_receiver_input_capacity' not in state.for_jev()
+
+    # Exercise the consumer through the real atomic decoder's private attr;
+    # do not hand-build an alternate capacity sample for this helper.
+    from jev_factorio.planning.decision_support import _receiver_capacity_start_evidence
+    catalog = NS(machines={'stone-furnace': {'burner': True}})
+    evidence = _receiver_capacity_start_evidence(
+        state, catalog, 'recipe:iron-plate', 'coal', 3, 2547)
+    assert evidence['insertable_count_now'] == 48
+    assert evidence['actor_count_now'] == 8
+    assert evidence['actor_unit'] == 17
+    assert evidence['surface_index'] == 1 and evidence['force_index'] == 2
+    assert evidence['source_unit'] == 2547
+
+    # A foreign helper-shaped row is not the decoder's integer result and
+    # cannot qualify a transfer even after the native sidecar was decoded.
+    state._receiver_input_capacity['receivers']['recipe:iron-plate'][
+        'items']['coal'] = {
+            'inventory': 'fuel', 'actor_count': 8,
+            'insertable_count': 48, 'method': 'get_insertable_count',
+        }
+    assert _receiver_capacity_start_evidence(
+        state, catalog, 'recipe:iron-plate', 'coal', 3, 2547) is None
 
 
 @pytest.mark.parametrize('field,value', [('session_id','other'), ('actor_unit',18),
@@ -145,7 +220,7 @@ def test_bootstrap_without_fle_entity_conversion(monkeypatch):
     assert result.factory['drill_output_role'] == 'bootstrap:output'
     assert backend._drill.unit_number == 51
     backend.observe()
-    assert 'observation_snapshot_v2(0, 51,' in _[-1]
+    assert 'observation_snapshot_v2(0,51,' in _[-1]
     assert 'helpers.json_to_table' in _[-1]
     payload['bootstrap']['drill']['unit_number'] = 52
     with pytest.raises(ValueError, match='bootstrap'): backend.observe()
