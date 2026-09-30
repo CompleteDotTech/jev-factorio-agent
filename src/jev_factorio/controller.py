@@ -21,7 +21,7 @@ from .operational_safety import MaintenanceAdmissionClosed, StoragePressure
 from .provider_health import ProviderCircuit
 from .backends.errors import ConnectionPreflightRejected
 from .research_log import EventSink, ResearchLogError, validate_output_paths
-from .judgments import Decision, select_plan
+from .judgments import DEFAULT_MAX_REQUEST_BYTES, Decision, select_plan
 from .loop import AgentLoop
 from .memory import CampaignMemory
 from .planning.goals import GOALS, completed, goal_order
@@ -49,7 +49,7 @@ class HierarchicalLoop(AgentLoop):
                  policy: str = "jev", checkpoint: str | None = None,
                  resume_controller: bool = False, confidence_floor: float = 0.45,
                  tick_seconds: float = 2.0, log_file: str | None = None,
-                 max_request_bytes: int = 32000, max_pending_polls: int = 32,
+                 max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES, max_pending_polls: int = 32,
                  max_stalled_decisions: int = 4, factory_scheduling: str = "serial",
                  research_log: EventSink | None = None,
                  reevaluate_blocked_once: bool = False,
@@ -1489,6 +1489,12 @@ class HierarchicalLoop(AgentLoop):
                 except ValueError as error:
                     self._decision = Decision(None, "observe", str(error), state=state,
                                               diagnostics={"schema": 1, "outcome": "request_rejected"})
+                pruned = self._decision.diagnostics.get("pruned_candidate_ids")
+                if pruned:
+                    print(f"[t={snapshot.tick}] request budget pruned {len(pruned)} of "
+                          f"{self._decision.diagnostics.get('input_candidates')} candidates "
+                          f"({self._decision.diagnostics.get('request_bytes')}/"
+                          f"{self.max_request_bytes} bytes): {', '.join(pruned)}", flush=True)
                 if self._decision.diagnostics.get("outcome") == "provider_blocked":
                     # Operational denial is neither model abstention nor planning
                     # failure. No hybrid fallback and no consumed gameplay budget.

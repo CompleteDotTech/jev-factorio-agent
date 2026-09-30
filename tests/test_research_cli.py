@@ -176,6 +176,8 @@ def test_invalid_cli_creates_no_research_artifacts(tmp_path, monkeypatch):
     ["--background-work"],
     ["--furnace-output-buffers"],
     ["--furnace-input-belts"],
+    ["--max-request-bytes", "100"],
+    ["--max-request-bytes", "99999999"],
 ])
 def test_invalid_cli_creates_no_dashboard_or_research(tmp_path, monkeypatch, invalid):
     monkeypatch.setattr(main, "make_backend", lambda *a, **kw: pytest.fail("Backend started"))
@@ -445,3 +447,21 @@ def test_event_write_failure_stops_before_gameplay_steps(tmp_path, monkeypatch):
     assert backend.actions == [] and backend.observations == 0
     assert not (tmp_path / "run" / "integrity.json").exists()
     assert rl.verify_run(tmp_path / "run", allow_incomplete=True)["complete"] is False
+
+
+def test_max_request_bytes_option_reaches_the_hierarchical_controller(tmp_path, monkeypatch):
+    seen = []
+    from jev_factorio.controller import HierarchicalLoop
+    original = HierarchicalLoop.__init__
+
+    def capture(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        seen.append(self.max_request_bytes)
+
+    monkeypatch.setattr(HierarchicalLoop, "__init__", capture)
+    monkeypatch.setattr(main, "make_backend", lambda *a, **kw: CountingBackend())
+    invoke(monkeypatch, "--controller", "hierarchical", "--mock-model", "--steps", "1")
+    invoke(monkeypatch, "--controller", "hierarchical", "--mock-model", "--steps", "1",
+           "--max-request-bytes", "64000")
+    from jev_factorio.judgments import DEFAULT_MAX_REQUEST_BYTES
+    assert seen == [DEFAULT_MAX_REQUEST_BYTES, 64000]

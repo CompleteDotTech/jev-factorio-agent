@@ -593,3 +593,35 @@ def test_discarded_foreground_attempt_releases_trace_reference():
     assert loop._trace._attempt_actions
     loop._fail_plan("Observed safe absence")
     assert loop._trace._attempt_actions == {}
+
+
+def test_budget_pruning_is_reported_in_console_and_decision_diagnostics(monkeypatch):
+    import jev_factorio.controller as controller
+    plans = [Plan(f"candidate-{i}", "stockpile_fuel", "Walk to coal", (Step("walk_to_coal", "near", "coal"),))
+             for i in range(6)]
+    monkeypatch.setattr(controller, "compile_plans", lambda *args: (plans, ""))
+    request_bytes = {}
+    sink, client = Sink(), Client()
+    full = HierarchicalLoop(Backend(), Client(), max_request_bytes=100000, research_log=Sink())
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        full.step()
+    assert "request budget pruned" not in buffer.getvalue()
+    decision = None
+    for budget in (9000, 7000, 5000, 3500, 2500):
+        sink, client = Sink(), Client()
+        loop = HierarchicalLoop(Backend(), client, max_request_bytes=budget, research_log=sink)
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            loop.step()
+        decision = events(sink, "decision")[0]
+        if decision["diagnostics"]["pruned_candidate_ids"]:
+            break
+    diagnostics = decision["diagnostics"]
+    assert diagnostics["pruned_candidate_ids"], "no budget pruned a candidate"
+    assert diagnostics["max_request_bytes"] == budget
+    assert 0 < diagnostics["request_bytes"] <= budget
+    assert diagnostics["offered_candidates"] + len(diagnostics["pruned_candidate_ids"]) == 6
+    line = next(text for text in buffer.getvalue().splitlines() if "request budget pruned" in text)
+    assert all(plan_id in line for plan_id in diagnostics["pruned_candidate_ids"])
+    assert f"/{budget} bytes" in line

@@ -11,6 +11,14 @@ from .skills import Plan
 from .provider_health import ProviderBlocked
 
 
+# Serialized request bytes (not provider tokens). One live-campaign candidate costs
+# about 26 KB with context and each further candidate about 10 KB, so this fits at
+# least two ranked candidates with margin where 32 KB offered only one.
+DEFAULT_MAX_REQUEST_BYTES = 48000
+MIN_MAX_REQUEST_BYTES = 8000
+MAX_MAX_REQUEST_BYTES = 262144
+
+
 class InvalidJudgment(ValueError):
     """Malformed or out-of-domain answers must not authorize an action."""
 
@@ -1485,12 +1493,15 @@ def benefit_gate(answer: dict, confidence_floor: float) -> dict:
 
 
 def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float = 0.45,
-                max_bytes: int = 32000) -> Decision:
+                max_bytes: int = DEFAULT_MAX_REQUEST_BYTES) -> Decision:
     _number(confidence_floor)
     context, questions, offered = question_batch(state, plans, max_bytes=max_bytes)
+    request_bytes = len(json.dumps({"state": context, "questions": questions},
+                                   ensure_ascii=False, allow_nan=False).encode("utf-8"))
     diagnostics = {"schema": 1, "input_candidates": len(plans),
                    "offered_candidates": len(offered),
                    "pruned_candidate_ids": [p.id for p in plans if p not in offered],
+                   "request_bytes": request_bytes, "max_request_bytes": max_bytes,
                    "candidate_rejections": {}}
     try:
         answers = client.evaluate(context, questions)
@@ -1552,6 +1563,10 @@ def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float 
                               - len(plan.steps) * 0.02)
     selected = max(utilities, key=utilities.get) if utilities else None
     source = "mock" if getattr(client, "is_mock", False) else "jev"
+    if not selected and diagnostics["pruned_candidate_ids"]:
+        # Distinguish "no alternative existed" from "alternatives were never shown":
+        # the reason string is matched by persistence, re-evaluation and memory.
+        diagnostics["alternatives_not_shown"] = list(diagnostics["pruned_candidate_ids"])
     return Decision(selected, source if selected else "observe",
                     "" if selected else "Candidate evidence insufficient",
                     context, questions, answers, utilities, model_called=True,

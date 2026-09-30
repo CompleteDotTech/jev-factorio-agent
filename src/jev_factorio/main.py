@@ -10,6 +10,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from .backends.mock import MockBackend
+from .judgments import (DEFAULT_MAX_REQUEST_BYTES, MAX_MAX_REQUEST_BYTES,
+                        MIN_MAX_REQUEST_BYTES)
 from .loop import AgentLoop
 from .research_log import ResearchLog, RunConfiguration, validate_output_paths
 
@@ -62,6 +64,11 @@ def cli() -> None:
                    default=float(os.environ.get("JEV_TICK_SECONDS", "0")))  # 0 in mock
     p.add_argument("--confidence-floor", type=float,
                    default=float(os.environ.get("JEV_CONFIDENCE_FLOOR", "0.45")))
+    p.add_argument("--max-request-bytes", type=int,
+                   default=int(os.environ.get("JEV_MAX_REQUEST_BYTES",
+                                              str(DEFAULT_MAX_REQUEST_BYTES))),
+                   help="Serialized decision-request byte budget (not provider tokens); "
+                        "candidates that do not fit are pruned and reported")
     p.add_argument("--log-file", default=os.environ.get("JEV_LOG_FILE"))
     p.add_argument("--run-dir", default=os.environ.get("JEV_RUN_DIR"),
                    help="Create a new, exclusive research evidence directory (never append/resume)")
@@ -246,6 +253,8 @@ def cli() -> None:
         p.error("Owner lock options require --owner-step-gate-dir")
     if not 0 <= args.confidence_floor <= 1:
         p.error("--confidence-floor must be finite and in [0, 1]")
+    if not MIN_MAX_REQUEST_BYTES <= args.max_request_bytes <= MAX_MAX_REQUEST_BYTES:
+        p.error(f"--max-request-bytes must be in [{MIN_MAX_REQUEST_BYTES}, {MAX_MAX_REQUEST_BYTES}]")
     if args.backend not in {"mock", "play_api", "fle"}:
         p.error(f"unknown backend: {args.backend}")
     if args.dashboard_events and args.controller != "hierarchical":
@@ -443,6 +452,7 @@ def cli() -> None:
                                           connector_witness_path=connector_witness), **options)
         else:
             options["research_log"] = research
+            options["max_request_bytes"] = args.max_request_bytes
             if args.reevaluate_blocked_once:
                 options.update(
                     reevaluate_blocked_once=True,
