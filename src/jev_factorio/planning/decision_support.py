@@ -243,6 +243,93 @@ def _placement_start_evidence(snapshot, plan):
     }
 
 
+def _utility_lab_research_dependency(snapshot, catalog, plan):
+    """Qualify a paid lab as the current capability-research prerequisite.
+
+    This is deliberately not placement-site evidence. The ordinary native
+    placement action searches for a site and rechecks manual build conditions
+    at dispatch; until then, collision clearance, travel, and arrival remain
+    unknown.
+    """
+    if (plan.goal != 'rocket_launch' or len(plan.steps) != 1
+            or plan.steps[0].action != 'factory_place'):
+        return None
+    step = plan.steps[0]
+    parameters = step.parameters or {}
+    materials = plan.materials or {}
+    dependency = materials.get('utility_lab_research_dependency')
+    local = materials.get('local_objective')
+    intent = materials.get('work_intent')
+    economics = materials.get('economics')
+    technology = dependency.get('technology') if isinstance(dependency, dict) else None
+    if (parameters != {'role': 'utility:lab', 'name': 'lab', 'anchor': 'factory'}
+            or step.costs != {'lab': 1}
+            or not isinstance(dependency, dict) or not isinstance(local, dict)
+            or not isinstance(intent, dict) or not isinstance(economics, dict)
+            or dependency.get('observed_tick') != snapshot.tick
+            or dependency.get('objective') != 'unlock_basic_assembly'
+            or dependency.get('required_role') != 'utility:lab'
+            or dependency.get('basis') !=
+                'current_capability_technology_and_native_research_planner'
+            or dependency.get('power_and_research_are_not_established') is not True
+            or economics.get('observed_tick') != snapshot.tick
+            or economics.get('objective') != 'unlock_basic_assembly'
+            or economics.get('technology') != technology
+            or local.get('kind') != 'research_prerequisite'
+            or local.get('ultimate_goal') != plan.goal
+            or local.get('immediate_prerequisite') != 'utility:lab'
+            or local.get('observed_tick') != snapshot.tick
+            or local.get('basis') != 'current_capability_research_plan'
+            or local.get('later_power_and_research_need_native_verification') is not True
+            or local.get('primary_target') != {
+                'kind': 'native_technology', 'technology': technology}
+            or intent.get('observed_tick') != snapshot.tick
+            or intent.get('scope') != 'immediate'
+            or intent.get('basis') != 'current_selected_capability_research_prerequisite'
+            or not isinstance(technology, str) or not technology
+            or type(snapshot.factory.get('player_connected')) is not bool
+            or snapshot.factory.get('player_connected') is not True
+            or snapshot.factory.get('player_bound') is not True
+            or snapshot.factory.get('crafting_queue') != 0
+            or snapshot.factory.get('research') not in ('', None)
+            or 'utility:lab' in snapshot.factory.get('entities', {})
+            or type(snapshot.inventory.get('lab')) is not int
+            or snapshot.inventory['lab'] < 1):
+        return None
+    from .economics import capability_technology
+    if capability_technology(catalog, snapshot.researched or []) != technology:
+        return None
+    tech = catalog.technologies.get(technology, {})
+    assembler = catalog.recipes.get('assembling-machine-1', {})
+    if (assembler.get('name') != 'assembling-machine-1'
+            or not tech.get('enabled') or tech.get('trigger')
+            or any(parent not in (snapshot.researched or [])
+                   for parent in tech.get('prerequisites', []))
+            or catalog.enabled(assembler, snapshot.researched or [])
+            or technology not in catalog.unlocks('assembling-machine-1')):
+        return None
+    return {
+        'observed_tick': snapshot.tick,
+        'technology': technology,
+        'technology_not_researched_now': technology not in (snapshot.researched or []),
+        'technology_unlocks_basic_assembler': True,
+        'current_research_idle': True,
+        'current_technology_prerequisites_satisfied': True,
+        'lab_required_by_native_research_walk': True,
+        'utility_lab_absent_now': True,
+        'paid_lab_in_inventory_now': snapshot.inventory['lab'],
+        'player_connected_and_bound_now': True,
+        'crafting_queue_empty_now': True,
+        'native_placement_site_preflight_performed': False,
+        'placement_site_clearance_unknown_until_dispatch': True,
+        'travel_and_arrival_unverified': True,
+        'existing_native_action_performs_bounded_search_and_fresh_build_checks': True,
+        'native_build_result_and_fresh_role_postcondition_required': True,
+        'lab_power_and_research_require_later_native_verification': True,
+        'basis': 'same_tick_capability_research_plan_and_paid_lab_prerequisite',
+    }
+
+
 def _recipe_input_transfer_start_evidence(snapshot, catalog, plan):
     """Bind a paid recipe input transfer to current native facts, not future output."""
     if len(plan.steps) != 1:
@@ -411,6 +498,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
     has_coal_offer = any(coal_marker(plan, snapshot) for plan in plans)
     for index, plan in enumerate(plans):
         placement_start = _placement_start_evidence(snapshot, plan)
+        utility_lab_dependency = _utility_lab_research_dependency(snapshot, catalog, plan)
         recipe_input_transfer_start = _recipe_input_transfer_start_evidence(snapshot, catalog, plan)
         output_pickup_start = _output_pickup_start_evidence(snapshot, catalog, plan)
         origin = _position(snapshot.player_position)
@@ -542,6 +630,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
         scope = (intent.get('scope') if isinstance(intent, dict)
                  and intent.get('observed_tick') == snapshot.tick else None)
         scope = scope if scope in {'immediate', 'lookahead'} else 'unclassified'
+        if utility_lab_dependency is not None:
+            unknown.append('placement_site:factory_place')
         prerequisite = (plan.materials or {}).get('raw_prerequisite')
         prerequisite_evidence = None
         gather_start = None
@@ -845,6 +935,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'shared_bill_craft': shared_bill_craft,
             'placement_start_evidence': placement_start,
             'placement_dependency': placement_dependency,
+            'utility_lab_research_dependency': utility_lab_dependency,
             'recipe_input_transfer_start_evidence': recipe_input_transfer_start,
             'output_pickup_start_evidence': output_pickup_start,
             'research_deadline_tick': min((row['deadline_tick'] for row in schedules
@@ -989,6 +1080,15 @@ def scheduling_context(snapshot, catalog, plans, goal: str) -> dict:
                    'A single useful action need not complete the ultimate goal. '
                    'Immediate prerequisites precede discretionary lookahead at equal urgency; '
                    'moving more items is not evidence of more useful production.')
+    first_evidence = evidence.get(plans[0].id, {}) if plans else {}
+    lab_dependency = (first_evidence.get('utility_lab_research_dependency')
+                      if isinstance(first_evidence, dict) else None)
+    if isinstance(lab_dependency, dict):
+        instruction = (
+            f"Place the paid utility lab as the current immediate prerequisite for "
+            f"starting {lab_dependency['technology']} research. Placement-site clearance, "
+            "travel, lab power, and research completion remain unverified and require "
+            "the existing native action and later observations.")
     return {
         'local_objective': {
             'kind': 'stockpile_fuel' if goal == 'stockpile_fuel' else 'ready_production',

@@ -100,6 +100,52 @@ class Decision:
     diagnostics: dict = field(default_factory=dict)
 
 
+def _qualified_utility_lab_dependency(plan, row, local, tick) -> bool:
+    if not isinstance(row, dict) or not isinstance(local, dict):
+        return False
+    step = plan.steps[0] if len(plan.steps) == 1 else None
+    dependency = row.get('utility_lab_research_dependency')
+    primary = local.get('primary_target')
+    technology_target = primary.get('primary_target') if isinstance(primary, dict) else None
+    technology = (technology_target.get('technology')
+                  if isinstance(technology_target, dict) else None)
+    return (
+        step is not None
+        and step.action == 'factory_place'
+        and step.parameters == {'role': 'utility:lab', 'name': 'lab', 'anchor': 'factory'}
+        and step.costs == {'lab': 1}
+        and row.get('work_scope') == 'immediate'
+        and isinstance(primary, dict)
+        and primary.get('kind') == 'research_prerequisite'
+        and primary.get('ultimate_goal') == plan.goal
+        and primary.get('immediate_prerequisite') == 'utility:lab'
+        and primary.get('observed_tick') == tick
+        and primary.get('basis') == 'current_capability_research_plan'
+        and type(tick) is int
+        and isinstance(dependency, dict)
+        and dependency.get('observed_tick') == tick
+        and dependency.get('technology') == technology
+        and dependency.get('basis') ==
+            'same_tick_capability_research_plan_and_paid_lab_prerequisite'
+        and all(dependency.get(key) is True for key in (
+            'technology_not_researched_now', 'technology_unlocks_basic_assembler',
+            'current_research_idle', 'current_technology_prerequisites_satisfied',
+            'lab_required_by_native_research_walk', 'utility_lab_absent_now',
+            'player_connected_and_bound_now', 'crafting_queue_empty_now',
+            'placement_site_clearance_unknown_until_dispatch',
+            'travel_and_arrival_unverified',
+            'existing_native_action_performs_bounded_search_and_fresh_build_checks',
+            'native_build_result_and_fresh_role_postcondition_required',
+            'lab_power_and_research_require_later_native_verification'))
+        and dependency.get('native_placement_site_preflight_performed') is False
+        and isinstance(row.get('unknowns'), list)
+        and {'placement_site:factory_place', 'travel:factory_place'} <=
+            set(row.get('unknowns', []))
+        and type(dependency.get('paid_lab_in_inventory_now')) is int
+        and dependency['paid_lab_in_inventory_now'] >= 1
+    )
+
+
 def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                    max_candidates: int = 16) -> tuple[dict, dict, list[Plan]]:
     """Bound serialized request bytes, NOT estimated tokens or provider limits."""
@@ -227,6 +273,24 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                         "Do not require certainty that the eventual target will finish; "
                         "this craft and later output still require native receipt and "
                         "fresh postcondition checks.")
+        utility_lab_choice_hint = ""
+        for candidate_plan in selected:
+            candidate_row = evidence.get(candidate_plan.id)
+            if not _qualified_utility_lab_dependency(
+                    candidate_plan, candidate_row, local, tick):
+                continue
+            utility_lab_choice_hint += (
+                " This paid lab is the current planner's immediate prerequisite for "
+                "starting the named, enabled capability technology that unlocks the "
+                "basic assembler. The native placement site and walking outcome have "
+                "not been observed: the existing placement action performs its bounded "
+                "native search and fresh build checks; only the native action result and "
+                "fresh role observation verify placement. "
+                "Judge this next action from its current paid item, absent role, idle bound "
+                "actor, and exact research dependency; do not infer a clear site, arrival, "
+                "lab power, completed research, or assembler. Observe only for a specific "
+                "missing current start fact, not to demand certainty about those later outcomes."
+            )
         questions = {
             "candidate": {
                 "type": "choice",
@@ -249,7 +313,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                                  "observed frontier, not confidence in completing the ultimate goal. "
                                  "Do not assume other questions' answers are available."
                                  + choice_priority_hint + bill_craft_hint
-                                 + craft_choice_hint),
+                                 + craft_choice_hint + utility_lab_choice_hint),
                 "criteria": {**{p.id: p.description for p in selected},
                              "observe": "Gather another observation without mutating the factory"},
             }
@@ -566,6 +630,20 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 if qualified_placement
                 else ""
             )
+            qualified_utility_lab = _qualified_utility_lab_dependency(
+                plan, row, local, tick)
+            utility_lab_hint = (
+                " `utility_lab_research_dependency` ties this paid placement to the "
+                "current planner's immediate prerequisite for a specific enabled "
+                "capability technology. It is useful prerequisite progress (score "
+                "level 1) only; no native site or clearance has been observed, and "
+                "this does not establish a powered lab, started research, or an "
+                "unlocked assembler. The existing native search/build checks and "
+                "action result and fresh role postcondition remain authoritative; "
+                "a contrary current fact "
+                "can lower the score."
+                if qualified_utility_lab else ""
+            )
             fuel = row.get('fuel_prerequisite')
             fuel_step = plan.steps[0] if len(plan.steps) == 1 else None
             fuel_path = fuel.get('planner_item_path') if isinstance(fuel, dict) else None
@@ -749,13 +827,15 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "`raw_prerequisite` is evidence that gathering supplies an input to "
                     "the named native recipe, not that the later craft already happened."
                     + raw_gather_hint + craft_hint + bill_craft_hint + place_hint + fuel_hint
-                    + transfer_hint + input_hint
+                    + utility_lab_hint + transfer_hint + input_hint
                     + pickup_hint + local_target_completion_hint
                 ),
                 "criteria": ([
                     "No demonstrated contribution to the bounded production objective",
                     "Makes useful partial progress through useful inputs, a current "
-                    "planner-linked intermediate craft, or evidenced bounded capacity, "
+                    "planner-linked intermediate craft, an immediate planner-linked "
+                    "research prerequisite backed by same-tick evidence, or evidenced "
+                    "bounded capacity, "
                     "but does not establish receipt-conditional closure of an observed "
                     "local-target shortfall and does not remove a separately evidenced "
                     "current blocker or due starvation",
@@ -829,6 +909,13 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                        "values; an unverified walking path or future build receipt is not a "
                        "missing start observation."
                        if placement_start else "")
+                    + (" For this utility lab, current carried stock, role absence, "
+                       "actor readiness, idle research state, and the named capability "
+                       "technology dependency are observed. Site clearance and travel "
+                       "remain unknown; the existing bounded native placement action "
+                       "resolves them and checks again before building. Do not claim "
+                       "a site, arrival, power, or research result."
+                       if qualified_utility_lab else "")
                 ),
             }
         size = len(json.dumps({"state": context, "questions": questions},

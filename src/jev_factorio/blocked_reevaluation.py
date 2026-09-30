@@ -15,7 +15,7 @@ _CONTRACT_PATHS = (
     "src/jev_factorio/judgments.py",
     "src/jev_factorio/planning/decision_support.py",
 )
-_BLOCKED_REASON = "Candidate evidence insufficient"
+_BLOCKED_REASONS = {"Candidate evidence insufficient", "low choice confidence"}
 
 
 def _git(root: Path, *args: str) -> bytes:
@@ -151,7 +151,8 @@ def validate_checkpoint_digest(raw: bytes, expected_sha256: str) -> None:
 
 def validate_blocked_memory(memory, max_stalled_decisions: int) -> None:
     """Reject anything except the exact quiescent terminal decision state."""
-    if (memory.status != "blocked" or memory.reason != _BLOCKED_REASON
+    if (memory.status != "blocked" or not isinstance(memory.reason, str)
+            or memory.reason not in _BLOCKED_REASONS
             or type(memory.stalled_decisions) is not int
             or memory.stalled_decisions < max_stalled_decisions
             or memory.pending is not None or memory.attempt is not None
@@ -159,4 +160,4 @@ def validate_blocked_memory(memory, max_stalled_decisions: int) -> None:
             or memory.reservations or memory.transfer_recovery is not None
             or getattr(memory, "background_job", None) is not None
             or getattr(memory, "background_attempt", None) is not None):
-        raise ValueError("Checkpoint is not a quiescent Candidate evidence insufficient block")
+        raise ValueError("Checkpoint is not a quiescent eligible blocked decision")
