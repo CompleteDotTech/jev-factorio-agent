@@ -72,6 +72,8 @@ def cli() -> None:
                    help="Opt-in bounded production choices; does not enable concurrent mutations or belts")
     p.add_argument("--campaign-diagnostics", action="store_true",
                    help="30-minute progress, host pressure, eligibility and blocked-investment evidence")
+    p.add_argument("--profile-latency", action="store_true",
+                   help="Content-free startup and inter-request wall/CPU timing in a hierarchical research run")
     p.add_argument("--setup-timing-file", type=Path,
                    help="Exclusive content-free one-use initialization timing result")
     p.add_argument("--owner-step-gate-dir", type=Path,
@@ -115,6 +117,8 @@ def cli() -> None:
     p.add_argument("--adopt-session", action="store_true",
                    help="Explicitly identify an older live FLE session without resetting it")
     args = p.parse_args()
+    if args.profile_latency and (args.controller != 'hierarchical' or not args.run_dir):
+        p.error("--profile-latency requires hierarchical control and --run-dir")
     if args.consolidated_observations:
         args.profile_observations = True
     if args.profile_observations or args.lead_time_supply or args.coverage_margin_lookahead:
@@ -340,6 +344,7 @@ def cli() -> None:
             ore_side_successors=args.ore_side_successors,
             campaign_diagnostics=args.campaign_diagnostics,
             profile_observations=args.profile_observations,
+            profile_latency=args.profile_latency,
             consolidated_observations=args.consolidated_observations,
             lead_time_supply=args.lead_time_supply,
             coverage_margin_lookahead=args.coverage_margin_lookahead,
@@ -351,16 +356,19 @@ def cli() -> None:
             treatment_sha256=treatment_digest,
         )
     setup_timing = None
-    if args.setup_timing_file:
-        target = args.setup_timing_file.absolute()
-        if (target.exists() or target.is_symlink() or not target.parent.is_dir()
+    if args.setup_timing_file or args.profile_latency:
+        target = args.setup_timing_file.absolute() if args.setup_timing_file else None
+        if target is not None and (
+                target.exists() or target.is_symlink() or not target.parent.is_dir()
                 or any(other and target == Path(other).absolute()
                        for other in (args.checkpoint, args.log_file, args.dashboard_events))):
             p.error("Setup timing output must be a new separate file in an existing directory")
         from .setup_timing import SetupTiming
-        import atexit
+        if target is not None:
+            import atexit
         setup_timing = SetupTiming(target, backend_expected=args.backend == 'fle')
-        atexit.register(setup_timing.write)
+        if target is not None:
+            atexit.register(setup_timing.write)
         setup_timing.mark('setup_start')
     with ExitStack() as cleanup:
         research = None
@@ -504,14 +512,23 @@ def cli() -> None:
             export_sidecar(getattr(loop, "backend", None), Path(args.log_file or args.dashboard_events).parent)
         if setup_timing:
             setup_timing.mark('outputs_ready')
-        if research is not None:
-            memory = getattr(loop, "memory", None)
-            research.emit("controller_initialized", {
-                "requested_model": getattr(getattr(loop, "jev", None), "model", None),
-                "model_is_mock": bool(getattr(getattr(loop, "jev", None), "is_mock", False)),
-            }, session_id=getattr(memory, "session_id", None))
         if setup_timing:
             setup_timing.mark('initialized')
+        if research is not None:
+            memory = getattr(loop, "memory", None)
+            initialized = {
+                "requested_model": getattr(getattr(loop, "jev", None), "model", None),
+                "model_is_mock": bool(getattr(getattr(loop, "jev", None), "is_mock", False)),
+            }
+            if args.profile_latency and setup_timing:
+                initialized['initialization_timing'] = setup_timing.profile_result()
+            research.emit("controller_initialized", initialized,
+                          session_id=getattr(memory, "session_id", None))
+        if args.profile_latency:
+            loop.profile_latency = True
+            trace = getattr(loop, '_trace', None)
+            if trace is not None:
+                trace.profile_latency = True
         step_gate = None
         if args.owner_step_gate_dir is not None:
             from .owner_step_gate import OwnerStepGate

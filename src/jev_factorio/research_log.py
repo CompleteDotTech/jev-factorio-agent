@@ -23,6 +23,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Protocol
 from .iteration_timing import measured, span
+from .timing_attribution import elapsed_clocks, sample_clocks
 
 EVENT_SCHEMA = "jev-factorio.event.v1"
 MANIFEST_SCHEMA = "jev-factorio.manifest.v1"
@@ -47,6 +48,7 @@ _TREATMENT_FIELDS = {"factory_scheduling", "background_work",
 _OPTIONAL_CONFIGURATION_FIELDS = _TREATMENT_FIELDS | {
     "treatment_sha256", "until_complete", "reconcile_only",
     "reevaluate_blocked_once", "exact_checkpoint_sha256", "blocked_source_revision",
+    "profile_latency",
 }
 
 
@@ -106,6 +108,7 @@ class RunConfiguration:
     ore_side_successors: bool = False
     campaign_diagnostics: bool = False
     profile_observations: bool = False
+    profile_latency: bool = False
     consolidated_observations: bool = False
     lead_time_supply: bool = False
     coverage_margin_lookahead: bool = False
@@ -358,6 +361,10 @@ def _configuration(configuration: dict) -> None:
     for key in _TREATMENT_FIELDS - {"factory_scheduling"}:
         if type(configuration.get(key, False)) is not bool:
             raise ValueError("Invalid run treatment flag")
+    if type(configuration.get('profile_latency', False)) is not bool:
+        raise ValueError('Invalid latency profiling flag')
+    if configuration.get('profile_latency', False) and configuration['controller'] != 'hierarchical':
+        raise ValueError('Latency profiling requires hierarchical control')
     if configuration.get("coal_kit_policy", False) and not configuration.get("coal_supply", False):
         raise ResearchLogError("Coal kit policy requires its coal supply treatment")
     if configuration.get("coal_economic_admission", False) and not (
@@ -601,12 +608,15 @@ class ResearchLog:
     def __init__(self, run_dir: Path, configuration: RunConfiguration, *,
                  repo_dir: Path | None = None, environ: Mapping[str, str] | None = None,
                  monotonic_ns: Callable[[], int] | None = None,
-                 utc_now: Callable[[], datetime] | None = None):
+                 utc_now: Callable[[], datetime] | None = None,
+                 timing_wall_clock: Callable[[], int] | None = None,
+                 timing_process_clock: Callable[[], int] | None = None,
+                 timing_thread_clock: Callable[[], int] | None = None):
         self.run_dir = Path(run_dir)
         environment = dict(os.environ if environ is None else environ)
         self._redactor = Redactor(environment)
-        self._monotonic_ns = monotonic_ns or time.monotonic_ns
-        self._utc_now = utc_now or (lambda: datetime.now(timezone.utc))
+        self._monotonic_ns = time.monotonic_ns if monotonic_ns is None else monotonic_ns
+        self._utc_now = (lambda: datetime.now(timezone.utc)) if utc_now is None else utc_now
         self._lock = threading.RLock()
         self._owner_pid = os.getpid()
         self._sequence = 0
@@ -630,6 +640,9 @@ class ResearchLog:
         # Retain precisely the validated, redacted manifest values. Neither the
         # caller's object nor a later public snapshot can change this treatment.
         self._configuration = RunConfiguration(**manifest["configuration"])
+        self._profile_latency = self._configuration.profile_latency
+        self._timing_clocks = (timing_wall_clock, timing_process_clock, timing_thread_clock)
+        self._startup_timing_start = None
         self._manifest_hash = digest(manifest)
         self._previous_hash = self._manifest_hash
         _make_parents(self.run_dir.parent)
@@ -686,6 +699,20 @@ class ResearchLog:
             _integer(monotonic)
             if monotonic < self._last_monotonic_ns:
                 raise ValueError("Monotonic research clock regressed")
+            timing_payload = payload
+            timing_sample = None
+            if self._profile_latency and event_type in {'run_started', 'controller_initialized'}:
+                timing_sample = sample_clocks(
+                    wall_clock=self._timing_clocks[0],
+                    process_clock=self._timing_clocks[1],
+                    thread_clock=self._timing_clocks[2])
+                if event_type == 'run_started':
+                    self._startup_timing_start = timing_sample
+                elif type(payload) is dict:
+                    timing_payload = dict(payload)
+                    timing_payload['startup_window_timing'] = elapsed_clocks(
+                        self._startup_timing_start, timing_sample,
+                        'before_run_started_event_construction_to_before_controller_initialized_event_construction')
             event = {
                 "schema": EVENT_SCHEMA, "schema_version": 1, "run_id": self.run_id,
                 "sequence": self._sequence + 1, "event_type": event_type,
@@ -694,10 +721,10 @@ class ResearchLog:
                 "session_id": self._redactor.clean(session_id),
                 "correlation": {key: self._redactor.clean(value)
                                 for key, value in (correlation or {}).items()},
-                "payload": (payload if event_type == "run_started" else
-                            {"outcome": payload["outcome"],
-                             "error_type": self._redactor.clean(payload["error_type"])}
-                            if event_type == "run_finished" else self._redactor.clean(payload)),
+                "payload": (timing_payload if event_type == "run_started" else
+                            {"outcome": timing_payload["outcome"],
+                             "error_type": self._redactor.clean(timing_payload["error_type"])}
+                            if event_type == "run_finished" else self._redactor.clean(timing_payload)),
                 "prev_hash": self._previous_hash,
             }
             data = _encode_event(event)
@@ -783,8 +810,11 @@ def _read_document(path: Path) -> dict:
 
 
 def verify_run(run_dir: Path, *, allow_incomplete: bool = False,
-               expected_final_hash: str | None = None) -> dict:
+               expected_final_hash: str | None = None,
+               max_events: int | None = None) -> dict:
     """Offline, read-only audit. Never repairs or silently ignores a torn tail."""
+    if max_events is not None and (type(max_events) is not int or max_events < 1):
+        raise ValueError("Invalid evidence event budget")
     run_dir = Path(run_dir)
     manifest = _read_document(run_dir / "manifest.json")
     validate_manifest(manifest)
@@ -799,6 +829,8 @@ def verify_run(run_dir: Path, *, allow_incomplete: bool = False,
             line = stream.readline(MAX_RECORD_BYTES + 1)
             if not line:
                 break
+            if max_events is not None and count >= max_events:
+                raise ValueError("Evidence event count exceeds verification budget")
             if len(line) > MAX_RECORD_BYTES:
                 raise ValueError("Evidence event exceeds V1 size limit")
             event = _decode(line)

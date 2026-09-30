@@ -137,7 +137,8 @@ def measured(name: str):
 
 
 def enabled(loop) -> bool:
-    return (getattr(loop, 'factory_scheduling', None) == 'ready-work'
+    return (getattr(loop, 'profile_latency', False) is True
+            or getattr(loop, 'factory_scheduling', None) == 'ready-work'
             or (getattr(loop, 'factory_scheduling', None) == 'serial'
                 and getattr(getattr(loop, 'backend', None), 'profile_observations', False) is True))
 
@@ -173,6 +174,11 @@ def profiled_iteration(method):
             with ledger.span('iteration'):
                 if pending is not None:
                     self._timing_previous = {**pending['summary'], 'gap': _gap(pending, ledger.start)}
+                elif hasattr(self, '_timing_previous'):
+                    self._timing_previous = None
+                trace = getattr(self, '_trace', None)
+                if trace is not None and getattr(trace, 'profile_latency', False) is True:
+                    trace.set_iteration_timing(getattr(self, '_timing_previous', None))
                 return method(self, *args, **kwargs)
         except BaseException:
             status = 'error'

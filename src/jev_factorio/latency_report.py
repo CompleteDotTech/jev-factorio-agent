@@ -44,6 +44,91 @@ def nonnegative(value) -> int:
     return value
 
 
+def _validate_clock_window(value: object, *, scope: str) -> dict:
+    fields = {'schema', 'complete', 'clocks', 'wall_ns', 'process_cpu_ns',
+              'thread_cpu_ns', 'scope', 'cpu_scope'}
+    if (not isinstance(value, dict) or set(value) != fields
+            or type(value['schema']) is not int or value['schema'] != 1
+            or type(value['complete']) is not bool or value['scope'] != scope
+            or value['cpu_scope'] != 'process_cpu_includes_other_python_threads; thread_cpu_is_current_thread'):
+        raise ValueError('Invalid clock attribution')
+    clocks = value['clocks']
+    if (not isinstance(clocks, dict) or set(clocks) != {'wall', 'process_cpu', 'thread_cpu'}
+            or clocks['wall'] != 'perf_counter_ns' or clocks['process_cpu'] != 'process_time_ns'
+            or clocks['thread_cpu'] not in (None, 'thread_time_ns')):
+        raise ValueError('Invalid clock identities')
+    for key in ('wall_ns', 'process_cpu_ns', 'thread_cpu_ns'):
+        if value[key] is not None:
+            nonnegative(value[key])
+    complete = value['wall_ns'] is not None and value['process_cpu_ns'] is not None
+    if value['complete'] != complete:
+        raise ValueError('Clock availability disagrees with completeness')
+    if (clocks['thread_cpu'] == 'thread_time_ns') != (value['thread_cpu_ns'] is not None):
+        raise ValueError('Thread clock availability disagrees with its sample')
+    return value
+
+
+def _validate_setup_attribution(value: object, *, backend: str) -> dict:
+    from .setup_timing import BACKEND_STAGES as BACKEND_SETUP_STAGES
+    from .setup_timing import STAGES as SETUP_STAGES
+    fields = {'schema', 'status', 'clocks', 'scope', 'phases', 'backend_phases'}
+    if (not isinstance(value, dict) or set(value) != fields
+            or value['schema'] != 'jev.setup-attribution.v1'
+            or value['status'] not in {'complete', 'partial'}
+            or value['scope'] != 'ordered_setup_boundaries; backend phases are nested in preflight_to_backend'):
+        raise ValueError('Invalid initialization timing')
+    clocks = value['clocks']
+    if (not isinstance(clocks, dict) or set(clocks) != {'wall', 'process_cpu', 'thread_cpu'}
+            or clocks['wall'] != 'perf_counter_ns' or clocks['process_cpu'] != 'process_time_ns'
+            or clocks['thread_cpu'] not in (None, 'thread_time_ns')):
+        raise ValueError('Invalid initialization clock identities')
+
+    def phases(rows, stages):
+        if not isinstance(rows, list) or len(rows) > len(stages) - 1:
+            raise ValueError('Invalid initialization phase count')
+        for index, row in enumerate(rows):
+            if (not isinstance(row, dict)
+                    or set(row) != {'from', 'to', 'wall_ns', 'process_cpu_ns', 'thread_cpu_ns'}
+                    or row['from'] != stages[index] or row['to'] != stages[index + 1]):
+                raise ValueError('Invalid initialization phase identity')
+            nonnegative(row['wall_ns'])
+            nonnegative(row['process_cpu_ns'])
+            if row['thread_cpu_ns'] is not None:
+                nonnegative(row['thread_cpu_ns'])
+            if (clocks['thread_cpu'] == 'thread_time_ns') != (row['thread_cpu_ns'] is not None):
+                raise ValueError('Initialization thread clock availability changed')
+        return rows
+
+    main = phases(value['phases'], SETUP_STAGES)
+    nested = phases(value['backend_phases'], BACKEND_SETUP_STAGES)
+    if value['status'] == 'complete':
+        if len(main) != len(SETUP_STAGES) - 1:
+            raise ValueError('Complete initialization timing lacks stages')
+        if (backend == 'fle') != (len(nested) == len(BACKEND_SETUP_STAGES) - 1):
+            raise ValueError('Complete backend timing lacks expected stages')
+    return value
+
+
+def _model_call_identity(event: dict) -> tuple:
+    """Bind a request or response to its trace, decision, controller and session."""
+    payload = event['payload']
+    correlation = event['correlation']
+    call_id = correlation.get('model_call_id')
+    if (type(call_id) is not str or not call_id
+            or payload.get('model_call_id') != call_id):
+        raise ValueError('Invalid model call identity')
+    trace_id = payload.get('trace_id')
+    controller = payload.get('controller')
+    decision_id = payload.get('decision_id')
+    session_id = event['session_id']
+    if (type(trace_id) is not str or not trace_id
+            or type(controller) is not str or not controller
+            or correlation.get('decision_id') != decision_id
+            or payload.get('session_id') != session_id):
+        raise ValueError('Invalid model call context')
+    return trace_id, call_id, controller, session_id, decision_id
+
+
 def timestamp(value) -> datetime:
     if not isinstance(value, str) or len(value) > 40:
         raise ValueError('Invalid timestamp')
@@ -53,9 +138,14 @@ def timestamp(value) -> datetime:
     return result
 
 
-def analyze(path: Path, *, max_records: int = MAX_RECORDS) -> dict:
+def analyze(path: Path, *, max_records: int = MAX_RECORDS,
+            allow_incomplete: bool = False) -> dict:
     if type(max_records) is not int or not 1 <= max_records <= MAX_RECORDS:
         raise ValueError('Invalid record budget')
+    path = Path(path)
+    if path.is_dir():
+        return analyze_research_run(path, max_records=max_records,
+                                    allow_incomplete=allow_incomplete)
     samples = defaultdict(list)
     counts = defaultdict(int)
     records = legacy = incomplete = 0
@@ -284,13 +374,212 @@ def analyze(path: Path, *, max_records: int = MAX_RECORDS) -> dict:
             'native_acceptance_proven': False, 'deployment_authorized': False}
 
 
+def analyze_research_run(run_dir: Path, *, max_records: int = MAX_RECORDS,
+                          allow_incomplete: bool = False) -> dict:
+    """Report optional timing from a hash-verified research event stream."""
+    from .research_log import _read_document, validate_event, verify_run
+    run_dir = Path(run_dir)
+    if type(max_records) is not int or not 1 <= max_records <= MAX_RECORDS:
+        raise ValueError('Invalid record budget')
+    if type(allow_incomplete) is not bool:
+        raise ValueError('Invalid incomplete-run option')
+    before = verify_run(run_dir, allow_incomplete=allow_incomplete,
+                        max_events=max_records)
+    try:
+        manifest = _read_document(run_dir / 'manifest.json')
+        configuration = manifest['configuration']
+        profile_enabled = configuration.get('profile_latency', False) is True
+        backend = configuration['backend']
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as error:
+        raise ValueError('Invalid verified latency manifest') from error
+
+    samples = defaultdict(list)
+    counts = defaultdict(int)
+    records = requests = responses = 0
+    pending_model_call = None
+    seen_model_calls: set[tuple[str, str]] = set()
+    previous_context = incomplete_context = 0
+    startup_windows = setup_profiles = 0
+    unavailable: set[str] = set()
+
+    def add_window(prefix: str, value: dict) -> None:
+        for field in ('wall_ns', 'process_cpu_ns', 'thread_cpu_ns'):
+            if value[field] is not None:
+                samples[prefix + ':' + field].append(value[field])
+
+    with (run_dir / 'events.jsonl').open('rb') as stream:
+        while raw := stream.readline(MAX_LINE + 1):
+            records += 1
+            if records > max_records or len(raw) > MAX_LINE or not raw.endswith(b'\n'):
+                raise ValueError('Latency event stream exceeds budget or has a partial record')
+            try:
+                event = json.loads(raw.decode('utf-8'))
+                validate_event(event)
+                event_type, payload = event['event_type'], event['payload']
+                if event_type == 'controller_initialized':
+                    if profile_enabled:
+                        if 'startup_window_timing' not in payload or 'initialization_timing' not in payload:
+                            raise ValueError('Profiled initialization lacks timing')
+                        window = _validate_clock_window(
+                            payload['startup_window_timing'],
+                            scope='before_run_started_event_construction_to_before_controller_initialized_event_construction')
+                        setup = _validate_setup_attribution(payload['initialization_timing'], backend=backend)
+                        startup_windows += 1
+                        setup_profiles += 1
+                        add_window('startup_window', window)
+                        if not window['complete']:
+                            unavailable.add('startup_wall_or_process_cpu')
+                        for row in setup['phases']:
+                            stage = row['from'] + '_to_' + row['to']
+                            for field in ('wall_ns', 'process_cpu_ns', 'thread_cpu_ns'):
+                                if row[field] is not None:
+                                    samples['initialization_phase:' + stage + ':' + field].append(row[field])
+                                else:
+                                    unavailable.add('initialization_' + field)
+                        for row in setup['backend_phases']:
+                            stage = row['from'] + '_to_' + row['to']
+                            for field in ('wall_ns', 'process_cpu_ns', 'thread_cpu_ns'):
+                                if row[field] is not None:
+                                    samples['initialization_backend_phase_nested:' + stage + ':' + field].append(row[field])
+                                else:
+                                    unavailable.add('backend_initialization_' + field)
+                if event_type == 'model_request':
+                    requests += 1
+                    if profile_enabled:
+                        link = _model_call_identity(event)
+                        call_key = link[:2]
+                        if pending_model_call is not None or call_key in seen_model_calls:
+                            raise ValueError('Duplicate or overlapping model request')
+                        pending_model_call = link
+                        seen_model_calls.add(call_key)
+                        timing = payload.get('previous_iteration_timing')
+                        if timing is not None:
+                            timing = validate_timing(timing)
+                            previous_context += 1
+                            if not timing['partition_complete']:
+                                incomplete_context += 1
+                            else:
+                                for clock in CLOCKS:
+                                    samples['prior_iteration_total:' + clock + '_ns'].append(
+                                        timing['totals_ns'][clock])
+                                for name, row in timing['phases'].items():
+                                    for clock in CLOCKS:
+                                        samples['prior_iteration_phase_exclusive:' + name + ':' + clock + '_ns'].append(
+                                            row[clock + '_exclusive_ns'])
+                                        samples['prior_iteration_phase_inclusive_nested:' + name + ':' + clock + '_ns'].append(
+                                            row[clock + '_inclusive_ns'])
+                                gap = timing['gap']
+                                if gap['complete']:
+                                    for clock in CLOCKS:
+                                        for key in ('total_ns', 'intentional_sleep_ns', 'other_gap_ns'):
+                                            samples['prior_iteration_gap:' + key + ':' + clock + '_ns'].append(
+                                                gap[key][clock])
+                                else:
+                                    unavailable.add('prior_iteration_following_gap')
+                if event_type == 'model_response':
+                    responses += 1
+                    if profile_enabled:
+                        link = _model_call_identity(event)
+                        if pending_model_call is None or link != pending_model_call:
+                            raise ValueError('Orphan or mismatched model response')
+                        pending_model_call = None
+                        call_timing = payload.get('client_evaluate_timing')
+                        if call_timing is None:
+                            counts['model_response_operation:missing'] += 1
+                            unavailable.add('model_response_operation_clock_sample')
+                        else:
+                            call_timing = _validate_clock_window(
+                                call_timing,
+                                scope='clock_samples_around_client_evaluate_call')
+                            add_window('model_response_operation', call_timing)
+                            if not call_timing['complete']:
+                                counts['model_response_operation:incomplete'] += 1
+                                unavailable.add('model_response_operation_wall_or_process_cpu')
+                            if call_timing['thread_cpu_ns'] is None:
+                                unavailable.add('model_response_operation_thread_cpu')
+                        gap = payload.get('inter_request_timing')
+                        if gap is None:
+                            if responses > 1:
+                                counts['model_inter_request:missing'] += 1
+                                unavailable.add('model_inter_request_clock_sample')
+                        else:
+                            if responses == 1:
+                                raise ValueError('First model response cannot have a preceding-call gap')
+                            gap = _validate_clock_window(
+                                gap, scope='clock_sample_after_model_response_event_emission_to_clock_sample_after_next_model_request_emission_before_client_evaluate')
+                            counts['model_inter_request:measured'] += 1
+                            add_window('model_inter_request', gap)
+                            if not gap['complete']:
+                                counts['model_inter_request:incomplete'] += 1
+                                unavailable.add('model_inter_request_wall_or_process_cpu')
+                            if gap['thread_cpu_ns'] is None:
+                                unavailable.add('model_inter_request_thread_cpu')
+            except (KeyError, TypeError, ValueError, AttributeError, UnicodeError, OverflowError) as error:
+                raise ValueError(f'Invalid verified latency event at record {records}') from error
+    after = verify_run(run_dir, allow_incomplete=allow_incomplete,
+                       max_events=max_records)
+    if before != after or records != before['event_count']:
+        raise ValueError('Research run changed while its latency report was being read')
+    if profile_enabled and startup_windows == 0:
+        unavailable.add('controller_initialization_timing')
+    if profile_enabled and pending_model_call is not None and before['complete']:
+        raise ValueError('Completed research run ends with an unmatched model request')
+    if profile_enabled and requests > responses:
+        counts['model_call:request_without_response'] += requests - responses
+        unavailable.add('model_response_event_missing')
+    if profile_enabled and responses > requests:
+        counts['model_call:response_without_request'] += responses - requests
+        unavailable.add('model_request_event_missing')
+    if not profile_enabled:
+        unavailable.update({'startup_wall_process_thread_cpu', 'model_inter_request_timing',
+                            'controller_iteration_phase_timing'})
+    revision = manifest.get('provenance', {}).get('git', {}).get('commit')
+    source = revision if isinstance(revision, str) and re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', revision) else None
+    return {
+        'schema': 1,
+        'source': 'hash_verified_research_event_stream',
+        'integrity_verified': True,
+        'complete': before['complete'],
+        'event_count': records,
+        'source_commit': source,
+        'latency_profile_enabled': profile_enabled,
+        'model_requests': requests,
+        'model_responses': responses,
+        'startup_windows': startup_windows,
+        'initialization_profiles': setup_profiles,
+        'prior_iteration_contexts': previous_context,
+        'incomplete_prior_iteration_contexts': incomplete_context,
+        'distributions': {name: distribution(values) for name, values in sorted(samples.items())},
+        'counts': dict(sorted(counts.items())),
+        'scopes': {
+            'startup_window': 'sample before run_started event construction through sample before controller_initialized event construction; overlaps ordered initialization phase rows',
+            'initialization_backend_phase_nested': 'nested within preflight_to_backend; do not add to top-level initialization phases',
+            'model_inter_request': 'pairwise non-overlapping window from a clock sample after model-response event emission through a clock sample after the next model-request event emission and immediately before client.evaluate; includes event emission and endpoint-sampling overhead',
+            'model_response_operation': 'clock samples around the client.evaluate call; the boundaries include small endpoint-sampling overhead',
+            'prior_iteration_phase_exclusive': 'nonoverlapping components within one decorated controller step',
+            'prior_iteration_phase_inclusive_nested': 'nested phase durations; not additive to one another or step totals',
+            'prior_iteration_gap': 'nonoverlapping intentional sleep and other gap between adjacent decorated steps; not watchdog cadence',
+            'nested_measurement_examples': 'checkpoint file/directory sync phases are nested within checkpoint writes; research redaction, validation, serialization, hashing, and fsync are nested within event append; intentional sleep is a component of the between-step gap',
+            'cpu': 'process/thread CPU are measured usage, not proof of waiting, native-server CPU, network time, or host scheduling cause',
+            'relationship': 'model_inter_request windows do not overlap one another, but overlap prior/current iteration phase and gap views; nested inclusive metrics and CPU values are not additional wall time',
+        },
+        'unavailable': sorted(unavailable),
+        'native_acceptance_proven': False,
+        'deployment_authorized': False,
+    }
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('log', type=Path)
     parser.add_argument('--max-records', type=int, default=MAX_RECORDS)
+    parser.add_argument('--allow-incomplete', action='store_true',
+                        help='Report a live unsealed research run after verifying its current hash chain')
     args = parser.parse_args(argv)
     try:
-        print(json.dumps(analyze(args.log, max_records=args.max_records), indent=2, sort_keys=True, allow_nan=False))
+        print(json.dumps(analyze(args.log, max_records=args.max_records,
+                                 allow_incomplete=args.allow_incomplete),
+                          indent=2, sort_keys=True, allow_nan=False))
     except (OSError, ValueError):
         parser.exit(2, 'Cannot report an incomplete, mixed or invalid latency capture.\n')
 
