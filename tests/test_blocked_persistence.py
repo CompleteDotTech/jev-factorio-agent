@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
 
 import pytest
@@ -80,6 +81,103 @@ def test_native_receipt_existence_and_item_identity_remain_in_fingerprint():
         state, plans, session_id="campaign-session", source_revision=SOURCE,
         target="rocket_launch", policy="jev", confidence_floor=0.45,
         current_tick=10)
+    assert after != before
+
+
+def test_route_survey_cache_clock_churn_does_not_retrigger_selection():
+    def inputs(tick, *, survey_tick, next_survey_tick, cached,
+               receiver_count=0, reason="output_not_commissioned",
+               source_unit=2546, resource_count=0, path_expansions=0,
+               search_budget_exhausted=False, source_roles=None):
+        state, plans = _inputs(tick)
+        diagnostic = {
+            "schema": 1, "survey_tick": survey_tick, "observed_tick": tick,
+            "cached": cached, "next_survey_tick": next_survey_tick,
+            "reason": reason, "receiver_count": receiver_count,
+            "source_unit": source_unit, "resource_count": resource_count,
+            "path_expansions": path_expansions,
+            "search_budget_exhausted": search_budget_exhausted,
+            "source_roles": source_roles or [],
+        }
+        factory = state.pop("factory")
+        factory["input_routes"] = {
+            "protocol": 1, "tick": tick,
+            "diagnostics": {"recipe:iron-plate": dict(diagnostic)},
+        }
+        state["facts"] = {"factory": factory}
+        plans[0]["materials"] = {
+            "route_diagnostics": {"recipe:iron-plate": dict(diagnostic)},
+        }
+        state["candidate_plans"] = {plans[0]["id"]: deepcopy(plans[0])}
+        return state, plans
+
+    def digest_for(tick, **options):
+        state, plans = inputs(tick, **options)
+        return persistence.decision_input_sha256(
+            state, plans, session_id="campaign-session", source_revision=SOURCE,
+            target="rocket_launch", policy="jev", confidence_floor=0.45,
+            current_tick=tick)
+
+    before = digest_for(100, survey_tick=90, next_survey_tick=390, cached=True)
+    after_refresh = digest_for(400, survey_tick=400, next_survey_tick=700, cached=False)
+    assert after_refresh == before
+
+    # A new route result or limit condition is real decision evidence.
+    assert digest_for(400, survey_tick=400, next_survey_tick=700, cached=False,
+                      receiver_count=1) != before
+    assert digest_for(400, survey_tick=400, next_survey_tick=700, cached=False,
+                      reason="route_search_budget_exhausted") != before
+    assert digest_for(400, survey_tick=400, next_survey_tick=700, cached=False,
+                      source_unit=2547) != before
+    assert digest_for(400, survey_tick=400, next_survey_tick=700, cached=False,
+                      resource_count=1) != before
+    assert digest_for(400, survey_tick=400, next_survey_tick=700, cached=False,
+                      path_expansions=1) != before
+    assert digest_for(400, survey_tick=400, next_survey_tick=700, cached=False,
+                      search_budget_exhausted=True) != before
+    assert digest_for(400, survey_tick=400, next_survey_tick=700, cached=False,
+                      source_roles=["recipe:iron-plate"]) != before
+
+
+def test_route_cache_clock_keys_remain_semantic_outside_route_diagnostics():
+    state, plans = _inputs(100)
+    state["planner_cache"] = {"cached": True, "survey_tick": 90,
+                              "next_survey_tick": 390}
+    before = persistence.decision_input_sha256(
+        state, plans, session_id="campaign-session", source_revision=SOURCE,
+        target="rocket_launch", policy="jev", confidence_floor=0.45,
+        current_tick=100)
+    state["planner_cache"]["cached"] = False
+    after = persistence.decision_input_sha256(
+        state, plans, session_id="campaign-session", source_revision=SOURCE,
+        target="rocket_launch", policy="jev", confidence_floor=0.45,
+        current_tick=100)
+    assert after != before
+
+
+def test_route_diagnostic_clock_keys_are_ignored_only_at_known_route_paths():
+    state, plans = _inputs(100)
+    diagnostic = {"cached": True, "survey_tick": 90, "next_survey_tick": 390,
+                  "source_unit": 2546}
+    state["untrusted_route_diagnostics"] = {"recipe:iron-plate": dict(diagnostic)}
+    state["candidate_plans"] = {
+        plans[0]["id"]: {"metadata": {
+            "route_diagnostics": {"recipe:iron-plate": dict(diagnostic)},
+        }},
+    }
+    before = persistence.decision_input_sha256(
+        state, plans, session_id="campaign-session", source_revision=SOURCE,
+        target="rocket_launch", policy="jev", confidence_floor=0.45,
+        current_tick=100)
+    state["untrusted_route_diagnostics"]["recipe:iron-plate"].update(
+        cached=False, survey_tick=100, next_survey_tick=400)
+    state["candidate_plans"][plans[0]["id"]]["metadata"][
+        "route_diagnostics"]["recipe:iron-plate"].update(
+            cached=False, survey_tick=100, next_survey_tick=400)
+    after = persistence.decision_input_sha256(
+        state, plans, session_id="campaign-session", source_revision=SOURCE,
+        target="rocket_launch", policy="jev", confidence_floor=0.45,
+        current_tick=100)
     assert after != before
 
 
@@ -214,6 +312,96 @@ def test_persistent_controller_skips_same_tick_only_retry_and_retries_changed_in
     saved = CampaignMemory.load(checkpoint, backend.session_id, "bootstrap_mining")
     assert len(saved.blocked_recovery["attempts"]) == 3
     assert saved.status == "blocked" and saved.stalled_decisions == 7
+
+
+def test_persistent_controller_waits_on_route_cache_churn_then_allows_one_route_change(
+        tmp_path, monkeypatch):
+    import jev_factorio.controller as controller
+
+    monkeypatch.setattr(controller, "gameplay_context", lambda: {"code_revision": SOURCE})
+    backend = LiveMockBackend()
+    route = {"cached": True, "survey_tick": 0, "next_survey_tick": 300,
+             "receiver_count": 0, "reason": "output_not_commissioned",
+             "source_unit": 2546, "resource_count": 0, "path_expansions": 0,
+             "search_budget_exhausted": False, "source_roles": []}
+    observe = backend.observe
+
+    def observe_with_route_diagnostics():
+        snapshot = observe()
+        diagnostic = {"schema": 1, "observed_tick": snapshot.tick, **route}
+        snapshot.factory["input_routes"] = {
+            "protocol": 1, "tick": snapshot.tick,
+            "diagnostics": {"recipe:iron-plate": dict(diagnostic)},
+        }
+        return snapshot
+
+    backend.observe = observe_with_route_diagnostics
+    checkpoint = tmp_path / "checkpoint.json"
+    memory = CampaignMemory(backend.session_id, "bootstrap_mining",
+                            active_goal="bootstrap_mining", last_tick=0,
+                            status="blocked", reason="low choice confidence",
+                            stalled_decisions=5)
+    persistence.record_attempt(memory, SOURCE, "f" * 64, memory.reason, 0)
+    memory.save(checkpoint)
+    loop = HierarchicalLoop(
+        backend, jev=LiveClient(), policy="jev", target="bootstrap_mining",
+        checkpoint=str(checkpoint), resume_controller=True, tick_seconds=0,
+        persist_recoverable_blocks=True)
+    if loop._safety is not None:
+        loop._safety.admission = lambda *_args: None
+
+    def candidates(snapshot):
+        diagnostic = {"schema": 1, "observed_tick": snapshot.tick, **route}
+        return ([Plan(
+            "same-plan", "bootstrap_mining", "Same candidate",
+            (Step("walk_to_iron", "near", "iron-ore"),),
+            materials={"route_diagnostics": {
+                "recipe:iron-plate": dict(diagnostic),
+            }})], "")
+
+    loop._work_candidates = candidates
+    calls = []
+
+    def reject(_client, _state, plans, *_args):
+        calls.append(plans[0].id)
+        return Decision(None, "observe", "low choice confidence", model_called=True,
+                        diagnostics={"schema": 1, "outcome": "all_candidates_rejected"})
+
+    monkeypatch.setattr(controller, "select_plan", reject)
+    first = loop.step()
+    assert first["model_call"] is True
+    first_fingerprint = loop.memory.blocked_recovery["attempts"][-1][
+        "decision_input_sha256"]
+    assert len(calls) == 1
+
+    # Cache expiry/refresh changes only diagnostic clocks and its cached flag.
+    backend.tick = 100
+    route.update(cached=False, survey_tick=100, next_survey_tick=400)
+    cache_only = loop.step()
+    assert cache_only["persistent_recovery"]["phase"] == \
+        "waiting_for_changed_game_evidence"
+    assert cache_only["model_call"] is False
+    assert len(calls) == 1
+
+    # A changed route result is semantic decision evidence and earns one call.
+    backend.tick = 101
+    route.update(receiver_count=1, reason="receiver_available")
+    changed = loop.step()
+    assert changed["model_call"] is True
+    second_fingerprint = loop.memory.blocked_recovery["attempts"][-1][
+        "decision_input_sha256"]
+    assert second_fingerprint != first_fingerprint
+    assert len(calls) == 2
+
+    # The next cache refresh with the same route result does not buy another call.
+    backend.tick = 102
+    route.update(cached=True, survey_tick=102, next_survey_tick=402)
+    refreshed = loop.step()
+    assert refreshed["persistent_recovery"]["phase"] == \
+        "waiting_for_changed_game_evidence"
+    assert refreshed["model_call"] is False
+    assert len(calls) == 2
+    assert len(loop.memory.blocked_recovery["attempts"]) == 3
 
 
 def test_running_decision_that_reaches_blocked_threshold_is_seeded_before_wait(

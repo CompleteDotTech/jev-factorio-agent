@@ -454,10 +454,12 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     and row.get('work_scope') == 'immediate'
                     and row.get('unknowns') == []
                     and isinstance(target_completion, dict)
+                    and type(target_completion.get('observed_tick')) is int
                     and target_completion.get('observed_tick') == tick
                     and isinstance(facts, dict)
                     and target_completion.get('session_id') == facts.get('session_id')
                     and target_completion.get('target_item') == target
+                    and type(target_completion.get('target_inventory')) is int
                     and target_completion.get('target_inventory') == current_target
                     and type(current) is int and current >= 0
                     and type(shortfall) is int and shortfall == max(0, current_target - current)
@@ -518,6 +520,90 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                             "benefit to surplus output; any level-2 blocker-removal claim still "
                             "needs separate, specific same-tick observed evidence. The craft "
                             "output itself requires its native receipt.")
+                gather_start = row.get('gather_start_evidence')
+                gather_parameters = (target_step.parameters
+                                     if isinstance(target_step.parameters, dict) else {})
+                target_factory = facts.get('factory') if isinstance(facts, dict) else None
+                gather_capacity = (target_completion.get('insertable_headroom_now')
+                                   if isinstance(target_completion, dict) else None)
+                qualified_target_gather_completion = (
+                    target_step.action == 'factory_gather'
+                    and target_step.effect == 'inventory'
+                    and target_step.item == target
+                    and set(gather_parameters) == {'resource', 'quantity'}
+                    and gather_parameters.get('resource') == target
+                    and type(gather_parameters.get('quantity')) is int
+                    and 1 <= gather_parameters['quantity'] <= 200
+                    and target_step.costs in (None, {})
+                    and type(target_step.threshold) is int
+                    and target_step.threshold == current_target
+                    and isinstance(local_target, dict)
+                    and local_target.get('item') == target
+                    and isinstance(primary, dict)
+                    and primary.get('inventory_target') == current_target
+                    and type(current_target) is int and current_target > 0
+                    and row.get('work_scope') == 'immediate'
+                    and isinstance(target_completion, dict)
+                    and target_completion.get('observed_tick') == tick
+                    and isinstance(facts, dict)
+                    and target_completion.get('session_id') == facts.get('session_id')
+                    and target_completion.get('target_item') == target
+                    and target_completion.get('target_inventory') == current_target
+                    and type(current) is int and current >= 0
+                    and type(shortfall) is int
+                    and shortfall == max(0, current_target - current)
+                    and shortfall > 0
+                    and gather_parameters['quantity'] == shortfall
+                    and type(target_completion.get('observed_tick')) is int
+                    and isinstance(target_completion.get('session_id'), str)
+                    and bool(target_completion['session_id'])
+                    and type(target_completion.get('target_inventory')) is int
+                    and type(target_completion.get('inventory_now')) is int
+                    and type(target_completion.get('shortfall_now')) is int
+                    and type(target_completion.get('requested_gather_quantity')) is int
+                    and type(target_completion.get('target_inventory_threshold')) is int
+                    and target_completion.get('inventory_now') == current
+                    and target_completion.get('shortfall_now') == shortfall
+                    and target_completion.get('requested_gather_quantity') ==
+                        gather_parameters['quantity']
+                    and target_completion.get('target_inventory_threshold') ==
+                        target_step.threshold
+                    and target_completion.get(
+                        'requested_quantity_equals_current_shortfall') is True
+                    and target_completion.get(
+                        'would_close_current_shortfall_if_native_inventory_verifies') is True
+                    and type(gather_capacity) is int
+                    and gather_capacity >= gather_parameters['quantity']
+                    and type(target_completion.get('fair_target_surface_index')) is int
+                    and target_completion['fair_target_surface_index'] > 0
+                    and isinstance(target_completion.get('fair_target_name'), str)
+                    and bool(target_completion['fair_target_name'].strip())
+                    and (target == 'wood' or target_completion['fair_target_name'] == target)
+                    and target_completion.get('inventory_basis') ==
+                        'coherent_snapshot_and_atomic_native_inventory'
+                    and target_completion.get('fresh_native_inventory_threshold_required') is True
+                    and target_completion.get('travel_is_lower_bound_not_arrival_proof') is True
+                    and target_completion.get('forecast_is_not_harvested_output') is True
+                    and isinstance(gather_start, dict)
+                    and gather_start.get('observed_tick') == tick
+                    and gather_start.get('session_id') == facts.get('session_id')
+                    and gather_start.get('resource_in_current_observation') is True
+                    and gather_start.get('fair_target_identity_observed') is True
+                    and gather_start.get('resource_inventory_now') == current
+                    and gather_start.get('target_inventory_after_this_step') ==
+                        target_step.threshold
+                    and gather_start.get('travel_is_lower_bound_not_arrival_proof') is True
+                    and isinstance(target_factory, dict)
+                    and target_factory.get('player_connected') is True
+                    and target_factory.get('player_bound') is True)
+                if qualified_target_gather_completion:
+                    local_target_completion_hint = (
+                        " `local_target_completion_evidence` describes an exact immediate "
+                        "gather for the observed local-target shortfall, with same-tick "
+                        "resource identity, actor readiness, and insertable headroom. It "
+                        "supports level 2 only if a fresh native inventory observation "
+                        "confirms the target threshold. It does not establish arrival, patch "
+                        "yield, harvested quantity, or completion before that verification.")
             placement_start = row.get('placement_start_evidence')
             placement_dependency = row.get('placement_dependency')
             placement_step = plan.steps[0] if len(plan.steps) == 1 else None
@@ -1055,10 +1141,13 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "research prerequisite backed by same-tick evidence, or evidenced "
                     "bounded capacity, "
                     "but does not establish receipt-conditional closure of an observed "
-                    "local-target shortfall and does not remove a separately evidenced "
+                    "local-target shortfall for a craft or fresh-inventory-conditional closure "
+                    "of one for a direct gather, "
+                    "and does not remove a separately evidenced "
                     "current blocker or due starvation",
                     "Same-tick qualified evidence shows the action would close the current "
-                    "local-target shortfall only after its native receipt verifies, or separate "
+                    "local-target shortfall only after its native receipt verifies for a craft "
+                    "or fresh native postcondition verifies for a direct gather, or separate "
                     "same-tick evidence shows it directly removes a specific observed blocker "
                     "or due starvation",
                 ] if objective == "local_objective" else [

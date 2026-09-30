@@ -213,6 +213,115 @@ def _local_target_completion_evidence(snapshot, catalog, plan, craft_start,
     }
 
 
+def _local_target_gather_completion_evidence(snapshot, plan, gather_start):
+    """Qualify an immediate gather whose verified inventory threshold is the local target.
+
+    This records only a conditional start forecast. It does not predict arrival,
+    patch yield, or harvested quantity; the fresh native inventory threshold is
+    the sole completion authority.
+    """
+    if (snapshot.world_kind != 'fle' or len(plan.steps) != 1
+            or not isinstance(gather_start, dict)):
+        return None
+    materials = plan.materials or {}
+    local = materials.get('local_objective')
+    intent = materials.get('work_intent')
+    if not isinstance(local, dict) or not isinstance(intent, dict):
+        return None
+    item, target = local.get('item'), local.get('inventory_target')
+    step = plan.steps[0]
+    parameters = step.parameters or {}
+    quantity = parameters.get('quantity')
+    if (not isinstance(item, str) or not item or type(target) is not int or target < 1
+            or step.action != 'factory_gather' or step.effect != 'inventory'
+            or step.item != item
+            or set(parameters) != {'resource', 'quantity'}
+            or parameters.get('resource') != item
+            or type(quantity) is not int or not 1 <= quantity <= 200
+            or step.costs not in (None, {})
+            or type(step.threshold) is not int or step.threshold != target
+            or intent.get('scope') != 'immediate'
+            or intent.get('observed_tick') != snapshot.tick
+            or gather_start.get('observed_tick') != snapshot.tick
+            or gather_start.get('session_id') != snapshot.session_id
+            or gather_start.get('resource_in_current_observation') is not True
+            or gather_start.get('fair_target_identity_observed') is not True
+            or gather_start.get('travel_is_lower_bound_not_arrival_proof') is not True):
+        return None
+
+    session, tick = snapshot.session_id, snapshot.tick
+    identity = (session, tick)
+    if (not isinstance(session, str) or not session or type(tick) is not int
+            or getattr(snapshot, '_coherent_observation_verified', None) != identity
+            or getattr(snapshot, '_atomic_inventory_verified', None) != identity):
+        return None
+    native_target = _current_native_fair_resource_target(snapshot, item)
+    if native_target is None:
+        return None
+    inventory = snapshot.inventory
+    if (not isinstance(inventory, dict) or len(inventory) > 4096
+            or any(not isinstance(name, str) or not name or len(name) > 128
+                   or type(amount) is not int or amount < 0
+                   for name, amount in inventory.items())):
+        return None
+    current = inventory.get(item, 0)
+    shortfall = target - current
+    if (shortfall <= 0 or quantity != shortfall
+            or gather_start.get('resource_inventory_now') != current
+            or gather_start.get('target_inventory_after_this_step') != step.threshold):
+        return None
+
+    # Require the current native actor-inventory insertable reading. The generic
+    # command guard permits unknown headroom for compatibility; this stronger
+    # forecast does not.
+    factory = snapshot.factory
+    runtime = factory.get('acceptance_runtime')
+    headroom = factory.get('inventory_insertable')
+    capacity = factory.get('inventory_insertable_evidence')
+    if (not isinstance(runtime, dict) or not isinstance(headroom, dict)
+            or type(headroom.get(item)) is not int or headroom[item] < quantity
+            or not isinstance(capacity, dict) or capacity.get('schema') != 1
+            or type(capacity.get('schema')) is not int
+            or capacity.get('tick') != tick or type(capacity.get('tick')) is not int
+            or capacity.get('session_id') != session
+            or capacity.get('inventory') != 'character_main'
+            or capacity.get('quality') != 'normal'
+            or capacity.get('method') != 'get_insertable_count'
+            or capacity.get('items') != headroom
+            or capacity.get('basis') != 'native_insertable_count_estimate'
+            or any(type(capacity.get(key)) is not int
+                   or capacity[key] != runtime.get(key)
+                   for key in ('actor_unit', 'surface_index', 'force_index'))
+            or factory.get('player_connected') is not True
+            or factory.get('player_bound') is not True):
+        return None
+    try:
+        if not step.allowed(snapshot):
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    return {
+        'observed_tick': tick,
+        'session_id': session,
+        'target_item': item,
+        'target_inventory': target,
+        'inventory_now': current,
+        'shortfall_now': shortfall,
+        'requested_gather_quantity': quantity,
+        'target_inventory_threshold': step.threshold,
+        'insertable_headroom_now': headroom[item],
+        'fair_target_name': native_target['name'],
+        'fair_target_surface_index': native_target['surface_index'],
+        'requested_quantity_equals_current_shortfall': True,
+        'would_close_current_shortfall_if_native_inventory_verifies': True,
+        'inventory_basis': 'coherent_snapshot_and_atomic_native_inventory',
+        'fresh_native_inventory_threshold_required': True,
+        'travel_is_lower_bound_not_arrival_proof': True,
+        'forecast_is_not_harvested_output': True,
+    }
+
+
 def _placement_start_evidence(snapshot, plan):
     if len(plan.steps) != 1 or plan.steps[0].action != 'factory_place':
         return None
@@ -1196,6 +1305,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             resource = (step.parameters or {}).get('resource')
             site = snapshot.factory.get('fair_resource_targets', {}).get(resource, {})
             gather_start = {
+                'observed_tick': snapshot.tick,
+                'session_id': snapshot.session_id,
                 'resource_in_current_observation': resource in snapshot.nearby_resources,
                 'fair_target_identity_observed': (
                     isinstance(site, dict) and isinstance(site.get('name'), str)
@@ -1240,6 +1351,9 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                 }
         local_target_completion = _local_target_completion_evidence(
             snapshot, catalog, plan, craft_start, craft_dependency)
+        if local_target_completion is None:
+            local_target_completion = _local_target_gather_completion_evidence(
+                snapshot, plan, gather_start)
         shared_bill_craft = None
         bill = (plan.materials or {}).get('shared_bill_craft')
         local = (plan.materials or {}).get('local_objective')
