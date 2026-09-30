@@ -269,10 +269,13 @@ class HierarchicalLoop(AgentLoop):
                 "recorded_attempts": self._blocked_recovery_attempt_count(),
             }
             self._compact_next_record = True
-            return self._record(
-                snapshot, "observe",
-                "Blocked; idle wait exhausted without changed game evidence "
-                f"after {self._persistent_idle_waits} observations at {delay:g}s")
+            try:
+                return self._record(
+                    snapshot, "observe",
+                    "Blocked; idle wait exhausted without changed game evidence "
+                    f"after {self._persistent_idle_waits} observations at {delay:g}s")
+            finally:
+                self._compact_next_record = False
         self._persistent_recovery_status = {
             "phase": ("evaluation_outcome_unknown_waiting" if unresolved
                       else "waiting_for_changed_game_evidence"),
@@ -285,7 +288,10 @@ class HierarchicalLoop(AgentLoop):
         outcome = ("Decision outcome unresolved; observing for changed evidence" if unresolved
                    else "Blocked; waiting for changed game evidence")
         self._compact_next_record = True
-        return self._record(snapshot, "observe", outcome)
+        try:
+            return self._record(snapshot, "observe", outcome)
+        finally:
+            self._compact_next_record = False
 
     def _record_persistent_attempt(self, snapshot: GameSnapshot, input_sha256: str, *,
                                    source_authorized: bool = False,

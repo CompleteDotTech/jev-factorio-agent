@@ -50,7 +50,12 @@ WAIT_RECORD_KEEP = frozenset({
     "observation_profiles", "host_pressure", "phases", "persistent_recovery",
     "attempt", "pending", "history", "attempt_outcomes", "failure_budgets",
     "completed_goals", "fair_action_metrics", "acceptance_configuration",
+    # Identity and provenance fields that readers compare across rows.
+    "code_revision", "campaign_treatment", "goal", "usage", "process_id",
+    "requested_model", "resolved_model", "session_id", "target", "status", "reason",
 })
+# Fields of a compacted decision that stay readable (legacy dashboard and capture projections).
+DECISION_SUMMARY_KEYS = ("plan_id", "source", "reason", "model_called")
 COMPACT_MIN_BYTES = 1024
 
 
@@ -67,8 +72,14 @@ def compact_wait_record(record: dict) -> dict:
             compact[key] = value
             continue
         size = len(json.dumps(value, allow_nan=False, default=str).encode("utf-8"))
-        compact[key] = ({"omitted": "persistent_wait_repeat", "bytes": size}
-                        if size > COMPACT_MIN_BYTES else value)
+        if size <= COMPACT_MIN_BYTES:
+            compact[key] = value
+            continue
+        marker = {"omitted": "persistent_wait_repeat", "bytes": size}
+        if key == "decision" and isinstance(value, dict):
+            marker = {**{name: value[name] for name in DECISION_SUMMARY_KEYS if name in value},
+                      **marker}
+        compact[key] = marker
     compact["compact_record"] = "persistent_wait"
     return compact
 

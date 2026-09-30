@@ -904,7 +904,7 @@ def test_compact_wait_record_keeps_observation_and_profiling_and_marks_repeats()
     assert compact["state"] == record["state"] and compact["after_state"] == record["after_state"]
     assert compact["performance"] == record["performance"]
     assert compact["persistent_recovery"] == {"phase": "x"}
-    assert compact["decision"] == {"omitted": "persistent_wait_repeat",
+    assert compact["decision"] == {"plan_id": None, "omitted": "persistent_wait_repeat",
                                    "bytes": len(json.dumps(record["decision"]))}
     assert compact["buffer_evidence"]["omitted"] == "persistent_wait_repeat"
     assert compact["buffer_evidence"]["bytes"] > 2000
@@ -976,4 +976,34 @@ def test_compact_flag_never_leaks_to_a_later_record_without_a_log_file(
     loop, _, _, _, current = _idle_loop(tmp_path, monkeypatch, idle_observations=0)
     loop.step()
     loop.step()
+    assert loop._compact_next_record is False
+
+
+def test_compacted_wait_keeps_identity_fields_and_decision_summary():
+    record = {
+        "code_revision": {"commit": "a" * 40, "pad": "x" * 2000},
+        "campaign_treatment": {"pad": "t" * 1500}, "goal": "g", "process_id": "p",
+        "decision": {"plan_id": "plan-1", "source": "jev", "reason": "",
+                     "model_called": True, "state": {"pad": "d" * 4000}},
+    }
+    compact = persistence.compact_wait_record(record)
+    assert compact["code_revision"] == record["code_revision"]
+    assert compact["campaign_treatment"] == record["campaign_treatment"]
+    decision = compact["decision"]
+    assert decision["plan_id"] == "plan-1" and decision["source"] == "jev"
+    assert decision["model_called"] is True and decision["reason"] == ""
+    assert decision["omitted"] == "persistent_wait_repeat" and decision["bytes"] > 4000
+    assert "state" not in decision
+
+
+def test_compact_flag_is_cleared_when_a_record_wrapper_raises(tmp_path, monkeypatch):
+    loop, _, _, _, _ = _idle_loop(tmp_path, monkeypatch, idle_observations=0)
+    loop.step()
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("wrapper failed before recording")
+
+    loop._record = broken
+    with pytest.raises(RuntimeError):
+        loop.step()
     assert loop._compact_next_record is False
