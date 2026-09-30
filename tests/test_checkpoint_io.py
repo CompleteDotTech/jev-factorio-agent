@@ -7,7 +7,7 @@ from dataclasses import asdict
 import pytest
 
 from jev_factorio.background import BackgroundWorkLoop
-from jev_factorio.checkpoint_io import save_checkpoint
+from jev_factorio.checkpoint_io import checkpoint_data, save_checkpoint
 from jev_factorio.controller import HierarchicalLoop
 from jev_factorio.input_controller import input_loop_type
 from jev_factorio.memory import CampaignMemory
@@ -39,7 +39,12 @@ def test_identical_bytes_skip_but_every_changed_state_is_written(tmp_path, monke
     saved = json.loads(path.read_bytes())
     expected = asdict(memory)
     expected.pop('capital_investment', None)
-    assert set(saved) == set(expected)
+    expected.pop('blocked_recovery', None)
+    assert saved == expected == checkpoint_data(memory)
+    expected_payload = json.dumps(expected, sort_keys=True, allow_nan=False).encode('utf-8')
+    assert path.read_bytes() == expected_payload
+    # Historical checkpoint bytes keep unrelated nullable fields in the schema.
+    assert saved['active_goal'] is None
 
 
 @pytest.mark.parametrize('change', ['delete', 'overwrite', 'replace', 'other_path', 'loaded_instance'])

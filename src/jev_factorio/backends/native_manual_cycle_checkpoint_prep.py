@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict
 from pathlib import Path
 
 from ..connector_checkpoint import validate_binding
+from ..checkpoint_io import checkpoint_data
 from ..memory import load_checkpoint
 from .native_attachment import decode_native, readback
 from .native_manual_cycle_migration import (
@@ -64,11 +64,9 @@ def _native_absent(client, session_id: str, actor_unit: int) -> dict:
 
 
 def _prepared_bytes(memory) -> bytes:
-    data = asdict(memory)
+    data = checkpoint_data(memory)
     data['connector_ownership'] = {
         'protocol': 1, 'session_id': memory.session_id, 'routes': {}}
-    if data.get('capital_investment') is None:
-        data.pop('capital_investment', None)
     return json.dumps(data, sort_keys=True, allow_nan=False).encode('utf-8')
 
 

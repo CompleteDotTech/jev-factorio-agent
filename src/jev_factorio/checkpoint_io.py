@@ -185,6 +185,20 @@ def _same_memory(memory, captured: dict) -> bool:
                     for name in names))
 
 
+def checkpoint_data(memory) -> dict:
+    """Return the canonical backward-compatible checkpoint snapshot.
+
+    Optional extension fields with no state are omitted, matching the bytes
+    written before those fields were added. Nonempty values are preserved
+    exactly; unrelated ``None`` fields remain part of the schema.
+    """
+    data = asdict(memory)
+    for name in ('capital_investment', 'blocked_recovery'):
+        if data.get(name) is None:
+            data.pop(name, None)
+    return data
+
+
 @measured("checkpoint")
 def save_checkpoint(memory, path: Path | None) -> None:
     """Cache only successfully synced bytes in this memory object's lifetime.
@@ -237,16 +251,12 @@ def save_checkpoint(memory, path: Path | None) -> None:
         phase_failed = False
         try:
             with span("checkpoint_capture"):
-                data = asdict(memory)
+                data = checkpoint_data(memory)
         except BaseException:
             phase_failed = True
             raise
         finally:
             _elapsed(metrics, 'capture_ns', phase_began, failed=phase_failed)
-        if data.get('capital_investment') is None:
-            data.pop('capital_investment', None)
-        if data.get('blocked_recovery') is None:
-            data.pop('blocked_recovery', None)
         metrics['serialization_calls'] = 1
         phase_began = time.perf_counter_ns()
         phase_failed = False

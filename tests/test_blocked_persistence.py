@@ -131,8 +131,18 @@ def test_wait_backoff_caps_at_five_minutes_and_keeps_blocked_status():
 
 
 class LiveMockBackend(MockBackend):
+    def __init__(self):
+        super().__init__()
+        self.actions = []
+        self.observations = 0
+
     def observe(self):
+        self.observations += 1
         return replace(super().observe(), world_kind="fle")
+
+    def act(self, action):
+        self.actions.append(action)
+        return super().act(action)
 
 
 class LiveClient:

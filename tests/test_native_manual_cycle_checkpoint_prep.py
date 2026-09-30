@@ -89,6 +89,7 @@ def test_legacy_none_prepares_only_empty_binding_and_consumes_one_use(tmp_path):
         'protocol': 1, 'session_id': 'retained-session', 'routes': {}}
     original.pop('connector_ownership')
     original.pop('capital_investment', None)  # normal checkpoint serializer omits null
+    original.pop('blocked_recovery', None)  # empty extension state retains historical bytes
     assert after == original
     assert paths['receipt_path'].read_bytes() == json.dumps({
         'schema': 'jev.native-attachment.v1', 'session_id': 'retained-session',
@@ -99,6 +100,30 @@ def test_legacy_none_prepares_only_empty_binding_and_consumes_one_use(tmp_path):
     with pytest.raises(RuntimeError, match='already reserved'):
         prepare_legacy_empty_connector_checkpoint(client, **kwargs)
     assert client.commands == ['/sc ' + PROBE, ABSENCE_COMMAND]
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='requires POSIX owner lock')
+def test_preparation_and_reconciliation_preserve_nonempty_blocked_recovery(tmp_path):
+    from jev_factorio.blocked_persistence import record_attempt
+
+    def blocked_ledger(memory):
+        memory.status = 'blocked'
+        memory.reason = 'low choice confidence'
+        record_attempt(memory, {'commit': 'a' * 40, 'source_sha256': 'b' * 64},
+                       'c' * 64, memory.reason, 123)
+
+    original, before, paths, kwargs = _fixture(tmp_path, change=blocked_ledger)
+    expected_ledger = original.blocked_recovery
+    client = ReadOnlyClient()
+    result = prepare_legacy_empty_connector_checkpoint(client, **kwargs)
+
+    prepared = load_checkpoint(paths['checkpoint_path'], 'retained-session', 'rocket_launch')
+    assert prepared.blocked_recovery == expected_ledger
+    assert prepared.connector_ownership == {
+        'protocol': 1, 'session_id': 'retained-session', 'routes': {}}
+    assert result['after_sha256'] == _sha(paths['checkpoint_path'].read_bytes())
+    assert paths['backup_path'].read_bytes() == before
+    assert reconcile_legacy_empty_connector_checkpoint(**paths) == 'prepared_checkpoint_present'
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='requires POSIX owner lock')
