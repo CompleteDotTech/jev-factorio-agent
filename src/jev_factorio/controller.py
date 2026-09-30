@@ -92,6 +92,7 @@ class HierarchicalLoop(AgentLoop):
         # unchanged decision fingerprint. A restarted invocation starts again.
         self._persistent_idle_waits = 0
         self._persistent_idle_exhausted = False
+        self._compact_next_record = False
         self._persistent_recovery_status = None
         self._persistent_runtime_wait_level = 0
         if resume_controller and (self.checkpoint is None or not self.checkpoint.is_file()):
@@ -267,6 +268,7 @@ class HierarchicalLoop(AgentLoop):
                 "decision_input_sha256": input_sha256,
                 "recorded_attempts": self._blocked_recovery_attempt_count(),
             }
+            self._compact_next_record = True
             return self._record(
                 snapshot, "observe",
                 "Blocked; idle wait exhausted without changed game evidence "
@@ -282,6 +284,7 @@ class HierarchicalLoop(AgentLoop):
         }
         outcome = ("Decision outcome unresolved; observing for changed evidence" if unresolved
                    else "Blocked; waiting for changed game evidence")
+        self._compact_next_record = True
         return self._record(snapshot, "observe", outcome)
 
     def _record_persistent_attempt(self, snapshot: GameSnapshot, input_sha256: str, *,
@@ -655,6 +658,8 @@ class HierarchicalLoop(AgentLoop):
     @measured("record")
     def _record(self, before: GameSnapshot, action: str, outcome: str,
                 after: GameSnapshot | None = None, verified: bool = False) -> dict:
+        # Consumed by exactly this record, whatever happens below.
+        compact, self._compact_next_record = self._compact_next_record, False
         self._save()
         if self._safety is not None:
             self._safety.publish(
@@ -715,7 +720,11 @@ class HierarchicalLoop(AgentLoop):
             record["previous_iteration_timing"] = previous
         if self.log_file:
             with span("legacy_encode"):
-                encoded = json.dumps(_json_safe(record), allow_nan=False) + "\n"
+                logged = _json_safe(record)
+                if compact:
+                    from .blocked_persistence import compact_wait_record
+                    logged = compact_wait_record(logged)
+                encoded = json.dumps(logged, allow_nan=False) + "\n"
             with span("legacy_write"):
                 self.log_file.parent.mkdir(parents=True, exist_ok=True)
                 with self.log_file.open("a", encoding="utf-8") as stream:
