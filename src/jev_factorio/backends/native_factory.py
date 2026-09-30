@@ -149,9 +149,13 @@ class NativeFactory:
             "assert(entity and entity.valid, 'Campaign entity disappeared'); "
             "rcon.print(helpers.table_to_json({name=entity.name, position=entity.position}))"
         ))
-        return self.backend._tools.get_entity(
-            self.prototype(state["name"]), Position(**state["position"])
-        )
+        # FLE's opaque lookup can perform its own waits/retries. Keep its
+        # inclusive helper wall/CPU time visible during action execution while
+        # SessionRcon continues to count each actual client call separately.
+        with span('fle_helper'):
+            return self.backend._tools.get_entity(
+                self.prototype(state["name"]), Position(**state["position"])
+            )
 
     @staticmethod
     def fluid_connection_points(entity: Any, fluid: str, *, output: bool) -> list[Any]:
