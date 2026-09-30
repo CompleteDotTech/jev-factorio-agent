@@ -88,7 +88,7 @@ def test_changed_economic_observation_rechecked_after_selection(monkeypatch, tmp
     # Controlled policy input exercises a formerly selected plan. It does not
     # change the native protocol, whose positive economic path remains absent.
     with monkeypatch.context() as patch:
-        patch.setattr(coal_admission, 'evaluate', lambda snapshot: {'eligible': True})
+        patch.setattr(coal_admission, 'evaluate', lambda *args: {'eligible': True})
         snapshot, plans = offers(loop)
         plan = next(plan for plan in plans if plan.steps[0].action == coal_supply.COMMAND)
         loop._commit_solid(plan, snapshot)
@@ -108,7 +108,7 @@ def test_retained_network_continues_after_economics_defers(recovery, monkeypatch
     # Seed owned work through the real paid/prepared controller path. This
     # synthetic positive input is scoped to setup and is never native evidence.
     with monkeypatch.context() as patch:
-        patch.setattr(coal_admission, 'evaluate', lambda snapshot: {'eligible': True})
+        patch.setattr(coal_admission, 'evaluate', lambda *args: {'eligible': True})
         first = loop.step()
     assert first['verified'] is (recovery == 'paid')
     assert len(backend.calls) == 1
@@ -132,7 +132,7 @@ def test_paid_funding_continues_when_new_admission_defers(monkeypatch, tmp_path)
     backend = Backend()
     loop = controller(backend, tmp_path, coal_economic_admission=True)
     with monkeypatch.context() as patch:
-        patch.setattr(coal_admission, 'evaluate', lambda snapshot: {'eligible': True})
+        patch.setattr(coal_admission, 'evaluate', lambda *args: {'eligible': True})
         assert loop.step()['verified']
     assert len(backend.calls) == 1 and loop.memory.coal_funding is not None
     assert coal_admission.evaluate(backend.state)['eligible'] is False

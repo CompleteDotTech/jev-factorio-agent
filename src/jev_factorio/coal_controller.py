@@ -63,6 +63,7 @@ class CoalSupplyMixin:
         self._coal_kit_policy = coal_kit_policy
         self._coal_economic_admission = coal_economic_admission
         self._coal_admission_evidence = {}
+        self._coal_admission_cache_key = None
         self._coal_kit_evidence = {}
         self._coal_targets = coal.validate_targets(coal_targets)
         self._coal_fault = False
@@ -188,7 +189,34 @@ class CoalSupplyMixin:
         if (not self._coal_economic_admission or self.memory.coal_commitments
                 or self.memory.coal_funding is not None):
             return True
-        self._coal_admission_evidence = coal_admission.evaluate(snapshot)
+        cache_key = (id(snapshot), snapshot.tick, self.memory.last_tick,
+                     self.memory.active_goal, self.memory.status)
+        if self._coal_admission_cache_key == cache_key:
+            return self._coal_admission_evidence.get("eligible") is True
+        factory = getattr(getattr(self, "backend", None), "_factory", None)
+        while factory is not None and not isinstance(factory, CoalSupplyFactory):
+            factory = getattr(factory, "native", None)
+        try:
+            if factory is None:
+                raise ValueError("Native coal economics adapter is unavailable")
+            projection = factory.economic_projection_v7(snapshot, self.memory)
+            # Compute the complete source+corridor acquisition offer first so
+            # eligibility can distinguish a fundable project from a bill that
+            # happens to be fully carried already. This is a forecast only;
+            # first payment still rechecks the whole carried bill natively.
+            _, acquisition = coal_funding.candidate(
+                snapshot, self.catalog, **self._coal_funding_options())
+            projection["project_setup_cost_estimate"] = (
+                coal_funding.project_setup_cost_estimate(snapshot, acquisition))
+            evidence = coal_admission.evaluate(snapshot, self.memory,
+                                               self.catalog, projection)
+        except (ValueError, KeyError, TypeError, AttributeError, IndexError):
+            evidence = {"eligible": False,
+                        "reason": "native_current_goal_projection_unavailable",
+                        "observed_tick": snapshot.tick,
+                        "session_id": snapshot.session_id}
+        self._coal_admission_evidence = evidence
+        self._coal_admission_cache_key = cache_key
         return self._coal_admission_evidence.get("eligible") is True
 
     def _step_allowed(self, step, snapshot):

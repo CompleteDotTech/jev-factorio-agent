@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import Counter
 from copy import deepcopy
 from dataclasses import asdict, replace
+import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -21,6 +22,8 @@ from ..skills import Plan
 from . import solid_funding as funding
 from .demand import SupplyLedger
 from .coal_supply import source_project
+from .scheduling import SERVICE_TICKS, TRAVEL_TICKS_PER_TILE
+from .service_policy import position
 
 MARKER = 'coal_kit'
 MAX_ACTIONS = funding.MAX_ACTIONS
@@ -88,7 +91,8 @@ def validate_state(state: dict, last_tick: int, targets: list) -> None:
         if any(coal._overlap(area, old) for old in areas):
             raise ValueError('Coal funding bundle shares a mining area')
         areas.append(area)
-        units.add(saved['target']['unit_number']); layouts.add(saved['layout'])
+        units.add(saved['target']['unit_number'])
+        layouts.add(saved['layout'])
         kit.update(spec['name'] for spec in saved['steps'])
         kit.update(spec['name'] for spec in saved['corridor'])
     if len(layouts) != 1 or dict(kit) != state['kit']:
@@ -111,6 +115,83 @@ def proposal(snapshot: GameSnapshot) -> dict:
     if any(row['pending'] for row in solid.routes(snapshot).values()):
         raise ValueError('Pending transport work must reconcile before kit funding')
     return rows
+
+
+def project_setup_cost_estimate(snapshot: GameSnapshot, acquisition: dict) -> dict:
+    """Estimate full initial kit and placement work for economic forecasting.
+
+    Acquisition is the existing deterministic funding planner's fresh estimate.
+    Construction service/travel use the documented serial Manhattan scheduling
+    policy. These are forecasts, not measured upper bounds or native payback.
+    """
+    if not isinstance(acquisition, dict):
+        raise ValueError('Coal project needs a fresh acquisition forecast')
+    if acquisition.get('reason') == 'complete_carried_kit':
+        acquisition_ticks = 0
+        acquisition_actions = 0
+    else:
+        acquisition_ticks = acquisition.get('acquisition_game_ticks_estimate')
+        acquisition_actions = acquisition.get('acquisition_actions_estimate')
+        if (not solid.integer(acquisition_ticks, 0, MAX_TICKS)
+                or not solid.integer(acquisition_actions, 0, MAX_ACTIONS)):
+            raise ValueError('Coal project acquisition forecast is incomplete')
+
+    actor = position(snapshot.player_position)
+    if actor is None:
+        raise ValueError('Coal project travel forecast lacks current actor position')
+    rows = proposal(snapshot)
+    locations = []
+    coal_source_roles = {coal.role(target, 'chest') for target in rows}
+    for target, row in sorted(rows.items()):
+        for spec in row['steps']:
+            if spec['part'] not in row['parts']:
+                locations.append(solid.point(spec['position']))
+        route = coal.route_for(row, snapshot)
+        if route is None:
+            corridor_steps, corridor_parts = row['corridor'], {}
+        else:
+            corridor_steps, corridor_parts = route['steps'], route['parts']
+        for spec in corridor_steps:
+            if spec['part'] not in corridor_parts:
+                locations.append(solid.point(spec['position']))
+    # Match the native whole-kit bill: it also includes any unfinished
+    # non-coal transport cells already registered in the same campaign.
+    for _, route in sorted(solid.routes(snapshot).items(),
+                           key=lambda item: (item[1]['source']['role'], item[0])):
+        if route['source']['role'] in coal_source_roles:
+            continue
+        for spec in route['steps']:
+            if spec['part'] not in route['parts']:
+                locations.append(solid.point(spec['position']))
+    if not locations or len(locations) > 512:
+        raise ValueError('Coal project placement scope is empty or unbounded')
+
+    distance = 0
+    previous = actor
+    for location in locations:
+        distance += abs(previous[0] - location[0]) + abs(previous[1] - location[1])
+        previous = location
+        if distance > 2**31:
+            raise ValueError('Coal project travel forecast overflow')
+    service_ticks = len(locations) * SERVICE_TICKS
+    travel_ticks = math.ceil(distance * TRAVEL_TICKS_PER_TILE)
+    total_ticks = acquisition_ticks + service_ticks + travel_ticks
+    if not 0 < total_ticks <= MAX_TICKS:
+        raise ValueError('Coal project setup forecast exceeds the supported horizon')
+    return {
+        'schema': 'jev.coal-project-setup-cost-estimate.v1',
+        'acquisition_ticks_estimate': acquisition_ticks,
+        'acquisition_actions_estimate': acquisition_actions,
+        'placement_count': len(locations),
+        'placement_service_ticks_estimate': service_ticks,
+        'placement_manhattan_distance_tiles_estimate': distance,
+        'placement_travel_ticks_estimate': travel_ticks,
+        'total_setup_ticks_estimate': total_ticks,
+        'basis': 'deterministic_funding_plus_serial_manhattan_service_policy',
+        'measured': False,
+        'native_payback_proven': False,
+        'mutation_authorized': False,
+    }
 
 
 def bundle(rows: dict) -> dict:
@@ -224,7 +305,8 @@ def fresh_permission(plan: Plan, step: Step, snapshot: GameSnapshot, catalog: Ca
             receipt = f"{marker['observed_tick']}:factory_extract:{p['role']}:{p['item']}"
             if p['receipt'] != receipt or p['receipt'] in snapshot.factory.get('receipts', {}):
                 return False
-            a['parameters'].pop('receipt'); b['parameters'].pop('receipt')
+            a['parameters'].pop('receipt')
+            b['parameters'].pop('receipt')
         return a == b
     except (ValueError, KeyError, TypeError, AttributeError, IndexError):
         return False
