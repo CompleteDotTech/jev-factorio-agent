@@ -783,12 +783,15 @@ def _utility_power_prerequisite_start_evidence(
         return None
 
     # Recompile the direct next power prerequisite against this snapshot. Both
-    # serial and ready-work planners are supported; only an exact offered step
+    # serial and transport-aware planners are supported; only an exact offered step
     # with the current annotation can qualify.
     rebuilt = None
     try:
         from .factory import FactoryPlanner
         from .ready_work import ReadyWorkPlanner
+        from .output_buffers import OutputBufferPlanner
+        from .input_routes import InputRoutePlanner
+        from .mining_outposts import MiningOutpostPlanner
 
         def same_current_plan(current):
             if current is None or current.id != plan.id:
@@ -830,7 +833,28 @@ def _utility_power_prerequisite_start_evidence(
             except (TypeError, ValueError):
                 return False
 
-        for planner_type in (FactoryPlanner, ReadyWorkPlanner):
+        for planner_type in (FactoryPlanner, ReadyWorkPlanner, OutputBufferPlanner,
+                             InputRoutePlanner, MiningOutpostPlanner):
+            if issubclass(planner_type, OutputBufferPlanner):
+                # Atomic observation coherence does not by itself validate the
+                # paid owner records that transport-aware planning consults.
+                # Reuse the durable ownership and native component predicates
+                # before a buffer kit can establish a power-chain purpose.
+                from ..output_buffers import (sources as buffer_sources,
+                                              validate_commitments,
+                                              component_complete)
+                buffer_rows = buffer_sources(snapshot)
+                owners = {source: {'source_unit': row.get('source_unit'),
+                                  'layout': row.get('layout'),
+                                  'parts': row.get('parts')}
+                          for source, row in buffer_rows.items()}
+                validate_commitments(owners, successors='successors' in factory)
+                if any(not component_complete({
+                        'source': source, 'layout': row['layout'],
+                        'part': part, 'receipt': owner['receipt']}, snapshot)
+                       for source, row in buffer_rows.items()
+                       for part, owner in row['parts'].items()):
+                    return None
             current_planner = planner_type(catalog, snapshot, plan.goal)
             current = current_planner._powered(role, tuple(path))
             if same_current_plan(current):
