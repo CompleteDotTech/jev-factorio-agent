@@ -83,13 +83,21 @@ and answer-distribution validation are unchanged.
 Decision contract schema 2 adds a separate `useful_progress` choice for each
 candidate. It asks whether current action-specific evidence supports any useful
 progress toward the local objective, independently of the ordinal benefit
-magnitude. The existing confidence floor applies to that explicit choice:
-`unsupported` and low usefulness confidence reject the plan. Missing answers,
+magnitude. The existing floor applies to the answer's probability of `useful`:
+a plan is eligible only when `useful` is the answer's plurality label and its
+probability is at least the floor, so `unsupported` (or a `useful` label with
+less mass than the floor, possible only above 0.5) rejects the plan as
+`no_demonstrated_progress` or `low_usefulness_confidence`. The model's separately
+reported confidence is not a veto: it is not tied to the answer's probabilities (a
+live answer put 0.60 on `useful` while reporting 0.20, and was rejected on that
+number alone), and it is recorded in the diagnostics for audit only, as for the
+benefit gate. Missing answers,
 missing start evidence, low choice/disruption confidence and contradictory
 negative benefit evidence also reject it. Uncertainty between two positive
 benefit levels affects ranking rather than eligibility. Positive probability
 mass or expected benefit alone cannot admit a plan. `diagnostics.usefulness_gate`
-records the choice, confidence, floor and result. The legacy `benefit_gate`
+records the choice, the `useful` probability, the reported confidence, the floor
+and the result. The legacy `benefit_gate`
 diagnostic remains descriptive with `eligibility_authority=false`; it no longer
 supplies admission authority. Native preconditions, payment, capacity, exact
 receipts and fresh postconditions remain authoritative at dispatch/verification.

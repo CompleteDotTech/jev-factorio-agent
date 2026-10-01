@@ -171,12 +171,15 @@ def test_low_choice_reports_the_other_rejections_in_the_native_failure():
     assert decision.plan_id is None and decision.utilities == {}
     assert decision.source == "observe" and decision.reason == "low choice confidence"
     assert decision.diagnostics["outcome"] == "low_choice_confidence"
+    # The direct plan is eligible on its answer distribution (useful 0.63); only
+    # the global choice abstention (0.34 confidence) blocked it. The investment is
+    # unsupported.
     assert decision.diagnostics["candidate_rejections"] == {
-        "direct": ["low_usefulness_confidence"],
         "investment": ["no_demonstrated_progress"],
     }
     assert decision.diagnostics["usefulness_gate"]["direct"] == {
-        "choice": "useful", "confidence": 0.26, "floor": 0.45, "passed": False,
+        "choice": "useful", "probability": 0.63, "confidence": 0.26,
+        "floor": 0.45, "passed": True,
     }
     assert decision.diagnostics["benefit_gate"]["direct"]["eligibility_authority"] is False
 
@@ -385,11 +388,16 @@ def test_explicit_usefulness_gate_respects_a_higher_floor():
                     _benefit_answers(answers, key[:-len("/benefit")],
                                      {"0": 0.3, "1": 0.35, "2": 0.35}, 0.5)
                 elif key.endswith("/useful_progress"):
-                    answers[key]["confidence"] = 0.7
+                    answers[key].update(
+                        choice="useful", confidence=0.9,
+                        probabilities={"useful": 0.6, "unsupported": 0.4})
             return answers
 
     assert select_plan(WeakSupport(), context, plans).plan_id is not None
-    assert select_plan(WeakSupport(), context, plans, confidence_floor=0.75).plan_id is None
+    rejected = select_plan(WeakSupport(), context, plans, confidence_floor=0.75)
+    assert rejected.plan_id is None
+    assert all("low_usefulness_confidence" in reasons
+               for reasons in rejected.diagnostics["candidate_rejections"].values())
 
 
 def test_all_rejected_with_pruned_candidates_reports_alternatives_not_shown():
@@ -423,3 +431,63 @@ def test_all_rejected_with_pruned_candidates_reports_alternatives_not_shown():
     fits = select_plan(RejectEverything(), {}, plans, max_bytes=100000)
     assert "alternatives_not_shown" not in fits.diagnostics
     assert fits.diagnostics["pruned_candidate_ids"] == []
+
+
+def test_live_0164_decision_is_admitted_on_its_answer_distribution():
+    """Sanitized first native decision after PR 255 (choice 0.47, useful 0.60 at confidence 0.20)."""
+    plans = [Plan(name, "stockpile_fuel", "gather",
+                  (Step("mine_coal", "inventory", "coal", 5),))
+             for name in ("gather", "outpost")]
+
+    class Captured0164(MockJevClient):
+        def evaluate(self, state, questions):
+            answers = super().evaluate(state, questions)
+            answers["candidate"] = {
+                "type": "choice", "choice": "gather", "confidence": 0.47,
+                "probabilities": {"gather": 0.64, "outpost": 0.30, "observe": 0.06},
+            }
+            answers["gather/useful_progress"] = {
+                "type": "choice", "choice": "useful", "confidence": 0.20,
+                "probabilities": {"useful": 0.60, "unsupported": 0.40},
+            }
+            answers["outpost/useful_progress"] = {
+                "type": "choice", "choice": "unsupported", "confidence": 0.42,
+                "probabilities": {"useful": 0.29, "unsupported": 0.71},
+            }
+            _benefit_answers(answers, "gather", {"0": 0.06, "1": 0.74, "2": 0.20}, 0.61)
+            _benefit_answers(answers, "outpost", {"0": 0.43, "1": 0.56, "2": 0.01}, 0.34)
+            answers["outpost/needs_observation"]["noul"] = 0.6
+            return answers
+
+    decision = select_plan(Captured0164(), {}, plans)
+    assert decision.plan_id == "gather" and decision.diagnostics["outcome"] == "selected"
+    assert decision.diagnostics["candidate_rejections"] == {
+        "outpost": ["missing_start_evidence", "no_demonstrated_progress"]}
+    assert decision.diagnostics["usefulness_gate"]["gather"]["passed"] is True
+
+
+def test_disruption_and_choice_gates_are_unchanged_by_the_usefulness_rule():
+    plans, context, _ = batch()
+
+    class Gates(MockJevClient):
+        def __init__(self, which):
+            self.which = which
+
+        def evaluate(self, state, questions):
+            answers = super().evaluate(state, questions)
+            for key in list(answers):
+                if key.endswith("/useful_progress"):
+                    answers[key].update(choice="useful", confidence=0.1,
+                                        probabilities={"useful": 0.7, "unsupported": 0.3})
+                elif self.which == "disruption" and key.endswith("/disruption"):
+                    answers[key]["confidence"] = 0.1
+                elif self.which == "choice" and key == "candidate":
+                    answers[key]["confidence"] = 0.1
+            return answers
+
+    assert select_plan(Gates("none"), context, plans).plan_id is not None
+    assert select_plan(Gates("choice"), context, plans).plan_id is None
+    rejected = select_plan(Gates("disruption"), context, plans)
+    assert rejected.plan_id is None
+    assert all("low_disruption_confidence" in reasons
+               for reasons in rejected.diagnostics["candidate_rejections"].values())
