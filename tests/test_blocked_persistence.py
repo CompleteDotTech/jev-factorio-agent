@@ -1135,6 +1135,84 @@ def test_persistent_provider_block_is_durable_operator_handoff_and_not_replayed(
     assert provider_path.read_bytes() == provider_bytes
 
 
+def test_persistent_called_provider_failure_hands_off_after_wal_and_never_replays(
+        tmp_path, monkeypatch):
+    import requests
+    import jev_factorio.controller as controller
+    from jev_factorio.provider_health import ProviderCircuit
+
+    backend = LiveMockBackend()
+    checkpoint = tmp_path / "called-provider-checkpoint.json"
+    provider_path = tmp_path / "called-provider.json"
+
+    class RateLimitedClient:
+        model = "test-provider-model"
+        url = "https://provider.invalid/test"
+        uses_http_provider = False
+        last_usage = None
+        last_model = None
+
+        def __init__(self):
+            self.calls = 0
+            self.wal_seen_before_call = False
+
+        def evaluate(self, *_args, **_kwargs):
+            self.calls += 1
+            saved = CampaignMemory.load(
+                checkpoint, backend.session_id, "bootstrap_mining")
+            pending = saved.blocked_recovery["attempts"][-1]
+            provider = json.loads(provider_path.read_text(encoding="utf-8"))
+            assert pending["outcome"] == "pending"
+            assert "selection_batch" in pending
+            assert provider["in_flight"] is not None
+            self.wal_seen_before_call = True
+            response = requests.Response()
+            response.status_code = 429
+            raise requests.HTTPError("bounded test rate limit", response=response)
+
+    client = RateLimitedClient()
+    circuit = ProviderCircuit(client, provider_path, clock=lambda: 10.0)
+    loop, backend, checkpoint, _plans = _alternative_loop(
+        tmp_path, monkeypatch, 2, backend=backend, jev=circuit)
+    memory = CampaignMemory.load(checkpoint, backend.session_id, "bootstrap_mining")
+    memory.status = "running"
+    memory.reason = "low choice confidence"
+    memory.stalled_decisions = 4
+    memory.failures = {"retained-plan": 2}
+    memory.save(checkpoint)
+
+    first = loop.step()
+    assert client.wal_seen_before_call is True and client.calls == 1
+    assert first["status"] == "blocked" and first["model_call"] is True
+    assert first["decision"]["model_called"] is True
+    assert first["persistent_recovery"]["phase"] == "provider_blocked"
+    assert first["persistent_recovery"]["provider_category"] == "rate_limit"
+    assert loop.memory.blocked_recovery["attempts"][-1]["outcome"] == "provider_blocked"
+    assert loop.memory.stalled_decisions == 4
+    assert loop.memory.failures == {"retained-plan": 2}
+    assert backend.actions == []
+
+    provider_bytes = provider_path.read_bytes()
+    provider_state = json.loads(provider_bytes)
+    assert provider_state["phase"] == "cooldown"
+    assert provider_state["category"] == "rate_limit"
+    assert provider_state["in_flight"] is None
+
+    resumed = HierarchicalLoop(
+        backend, jev=ProviderCircuit(client, provider_path, clock=lambda: 10.0),
+        policy="jev", target="bootstrap_mining", checkpoint=str(checkpoint),
+        resume_controller=True, tick_seconds=0, persist_recoverable_blocks=True)
+    monkeypatch.setattr(controller, "select_plan",
+                        lambda *_args, **_kwargs: pytest.fail("provider selection retried"))
+    second = resumed.step()
+    assert second["status"] == "blocked" and second["model_call"] is False
+    assert resumed.terminal is True
+    assert client.calls == 1 and backend.actions == []
+    assert resumed.memory.stalled_decisions == 4
+    assert resumed.memory.failures == {"retained-plan": 2}
+    assert provider_path.read_bytes() == provider_bytes
+
+
 def test_bounded_alternatives_are_writeahead_distinct_and_exhaust_once(tmp_path, monkeypatch):
     import jev_factorio.controller as controller
 
