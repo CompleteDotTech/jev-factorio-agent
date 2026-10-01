@@ -198,3 +198,16 @@ def test_compaction_keeps_json_distinct_material_values(left, right):
     assert shared == {}
     assert type(documents["p0"]["materials"]["proof"]["value"]) is type(left)
     assert type(documents["p1"]["materials"]["proof"]["value"]) is type(right)
+
+
+def test_prepared_offered_objects_cannot_replace_json_distinct_original_plan():
+    from dataclasses import replace
+    original = Plan("p", "stockpile_fuel", "candidate",
+                    (Step("mine_coal", "inventory", "coal", 5),),
+                    materials={"proof": {"flag": True}})
+    tampered = replace(original, materials={"proof": {"flag": 1}})
+    assert original == tampered  # Python equality alone is not the contract.
+    state = {"facts": MockBackend().observe().for_jev(), "active_goal": "stockpile_fuel"}
+    batch = question_batch(state, [tampered])
+    with pytest.raises(ValueError, match="Invalid"):
+        select_plan(MockJevClient(), state, [original], prepared_batch=batch)

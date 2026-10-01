@@ -1560,8 +1560,12 @@ def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float 
     else:
         context, questions, offered = prepared_batch
         offered_ids = [plan.id for plan in offered]
+        original_plans = {plan.id: plan for plan in plans}
         if (not offered_ids or len(offered_ids) != len(set(offered_ids))
-                or any(plan not in plans for plan in offered)
+                or len(original_plans) != len(plans)
+                or any(plan.id not in original_plans
+                       or _json_identity(plan.to_dict()) != _json_identity(
+                           original_plans[plan.id].to_dict()) for plan in offered)
                 or set(context.get("candidate_plans", {})) != set(offered_ids)
                 or set(questions) != {"candidate", *(
                     plan_id + suffix for plan_id in offered_ids
