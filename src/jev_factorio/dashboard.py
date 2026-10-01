@@ -25,6 +25,11 @@ from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from . import dashboard_mission, research_catalog
+from .wait_record_codec import (
+    Decoder as WaitRecordDecoder, Encoder as WaitRecordEncoder,
+    decision_anchor_candidate, encode_line as encode_wait_line,
+    parse_json as parse_wait_json, persistent_wait,
+)
 
 SCHEMA = "jev.dashboard.v1"
 MAX_LINE = 262144
@@ -36,7 +41,8 @@ CREDENTIAL = re.compile(r"(?:Bearer\s+\S+|\b(?:sk|ts|pk)-[\w-]{12,})", re.I)
 RECORD_KEYS = ("controller", "policy", "tick", "session_id", "world_kind", "goal", "target",
                "status", "reason", "action", "outcome", "verified", "completed_goals",
                "decision", "model_call", "requested_model", "resolved_model", "usage", "pending",
-               "persistent_recovery")
+               "persistent_recovery", "code_revision", "process_id", "run_id", "segment_id",
+               "execution_id")
 STATE_KEYS = ("tick", "session_id", "world_kind", "inventory", "player_position", "nearby_resources",
               "placed_entities", "drill_status", "drill_fuel", "drill_output_connected",
               "iron_ore_collected", "production_rates", "researched", "victory", "victory_source")
@@ -113,7 +119,8 @@ def project_record(value: dict) -> dict:
             "phase": phase if phase in {
                 "waiting_for_changed_game_evidence", "evaluating_changed_game_evidence",
                 "selected_plan_entered_normal_execution", "provider_blocked",
-                "evaluation_outcome_unknown_waiting", "idle_wait_exhausted",
+                "evaluation_outcome_unknown_waiting", "alternatives_exhausted_waiting",
+                "idle_wait_exhausted",
             } else "unknown",
             "reason": recovery.get("reason") if isinstance(recovery.get("reason"), str) else None,
             "next_observation_seconds": (
@@ -175,6 +182,7 @@ class EventWriter:
         self.disabled = False
         self.lock = threading.Lock()
         self.secrets = secret_values()
+        self._wait_record_encoder = WaitRecordEncoder("dashboard")
 
     def emit(self, kind: str, stage: int, **data: Any) -> None:
         with self.lock:
@@ -186,12 +194,26 @@ class EventWriter:
                 event = {"schema": SCHEMA, "run_id": self.run_id, "seq": self.seq,
                          "time": now, "at": datetime.fromtimestamp(now, timezone.utc).isoformat(),
                          "kind": kind, "stage": stage, "data": sanitize(data, self.secrets)}
-                encoded = (json.dumps(event, allow_nan=False, ensure_ascii=True) + "\n").encode()
+                prepared = None
+                if kind == "decision_recorded":
+                    prepared = self._wait_record_encoder.prepare(
+                        event, wait=persistent_wait(event, "dashboard"), anchor_candidate=True)
+                if prepared is not None and prepared.is_delta:
+                    encoded = encode_wait_line(prepared)
+                else:
+                    encoded = (json.dumps(event, allow_nan=False, ensure_ascii=True) + "\n").encode()
                 if len(encoded) > MAX_LINE:
                     event["data"] = {"_display_truncated": "Event exceeds dashboard byte limit"}
                     encoded = (json.dumps(event) + "\n").encode()
+                    prepared = None
                 if os.write(self.fd, encoded) != len(encoded):
                     raise OSError("short telemetry write")
+                if prepared is not None:
+                    self._wait_record_encoder.commit(prepared, len(encoded))
+                elif kind == "decision_recorded":
+                    self._wait_record_encoder.reset()
+                else:
+                    self._wait_record_encoder.skip(len(encoded))
             except Exception:
                 self.disabled = True
                 print("Dashboard telemetry disabled after a display-write failure; gameplay is unchanged.",
@@ -356,6 +378,7 @@ class Tail:
         self.path, self.offset, self.identity = path, 0, None
         self.pending = b""
         self.dropping = False
+        self.last_sizes: list[int] = []
         self.status = "waiting"
         self.invalid = 0
         self.reset = False
@@ -363,6 +386,7 @@ class Tail:
 
     def poll(self) -> list[dict]:
         self.reset = False
+        self.last_sizes = []
         try:
             with open_regular(self.path) as stream:
                 info = os.fstat(stream.fileno())
@@ -395,10 +419,11 @@ class Tail:
             try:
                 if len(line) > MAX_LINE:
                     raise ValueError("oversized")
-                value = json.loads(line, parse_constant=lambda _: None)
+                value = parse_wait_json(line)
                 if not isinstance(value, dict):
                     raise ValueError("non-object")
                 records.append(value)
+                self.last_sizes.append(len(line) + 1)
             except (ValueError, UnicodeError, RecursionError):
                 self.invalid += 1
         if len(self.pending) > MAX_LINE:
@@ -429,6 +454,10 @@ class Monitor:
         self.last_run = None
         self.last_seq = 0
         self.rejected = 0
+        self._dashboard_decoder = WaitRecordDecoder("dashboard")
+        self._legacy_decoder = WaitRecordDecoder("gameplay")
+        self.reconstruction_status = "waiting_for_anchor"
+        self._tail_invalid_seen = 0
         # None until the first observation; research already done then has no known tick.
         self.research_seen: dict[str, int | None] | None = None
 
@@ -531,13 +560,56 @@ class Monitor:
                     and len(seen) < research_catalog.MAX_TECHNOLOGIES):
                 seen.setdefault(tech, None if first else tick)
 
+    def _mark_reconstruction_gap(self) -> None:
+        """Drop current-view claims until a new full record re-establishes them."""
+        self._dashboard_decoder.reset()
+        self._legacy_decoder.reset()
+        self.reconstruction_status = "gap"
+        self.view.update(
+            gap=True, reconstruction_status="gap", last_event_time=None,
+            kind=None, stage=None, status=None, lifecycle=None,
+            state={}, state_observed_time=None,
+            goal=None, plan=None, step_index=None, pending=None,
+            verified=None, outcome=None, decision=None, request=None,
+            response=None, action=None, parameters=None,
+            model_busy=False, model_started_at=None, model_ms=None,
+        )
+        self.view.pop("mission_record", None)
+        self.view.pop("persistent_recovery", None)
+
     def poll(self) -> None:
         with self.lock:
+            previous_invalid = self.tail.invalid
             rows = self.tail.poll()
+            invalid_added = self.tail.invalid > previous_invalid
+            self._tail_invalid_seen = self.tail.invalid
             if self.tail.reset:
                 self.events.clear()
                 self.view, self.last_run, self.last_seq, self.research_seen = {}, None, 0, None
-            for row in rows:
+                self._dashboard_decoder.reset()
+                self._legacy_decoder.reset()
+                self.reconstruction_status = "waiting_for_anchor"
+            if invalid_added:
+                # A skipped malformed line could have been the required full
+                # anchor. Require the next full decision record to re-sync.
+                self._mark_reconstruction_gap()
+            for row, raw_size in zip(rows, self.tail.last_sizes):
+                try:
+                    if self.legacy:
+                        row = self._legacy_decoder.decode(row, raw_size, anchor_candidate=True)
+                        decoded_anchor = self._legacy_decoder.last_was_anchor
+                    else:
+                        row = self._dashboard_decoder.decode(
+                            row, raw_size,
+                            anchor_candidate=decision_anchor_candidate(row, "dashboard"))
+                        decoded_anchor = self._dashboard_decoder.last_was_anchor
+                except (ValueError, TypeError, KeyError, RecursionError):
+                    self.rejected += 1
+                    self._mark_reconstruction_gap()
+                    continue
+                if decoded_anchor:
+                    self.reconstruction_status = "ok"
+                    self.view["reconstruction_status"] = "ok"
                 if self.legacy:
                     # Legacy records expose completed decisions, NOT in-flight model phases.
                     if not isinstance(row.get("state"), dict) or "action" not in row:
@@ -645,7 +717,8 @@ class Monitor:
             return copy.deepcopy({"version": self.version, "view": view, "events": list(self.events),
                                   "source": {"mode": "legacy" if self.legacy else "events", "status": self.tail.status,
                                              "invalid": self.tail.invalid + self.rejected,
-                                             "partial": bool(self.tail.pending) or self.tail.dropping},
+                                             "partial": bool(self.tail.pending) or self.tail.dropping,
+                                             "reconstruction_status": self.reconstruction_status},
                                   "supervisor": self.supervision, "server_time": time.time()})
 
     def follow(self) -> None:

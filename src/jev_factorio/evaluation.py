@@ -13,11 +13,9 @@ from .telemetry import WAIT_ACTIONS, validate_attempt
 
 
 def read_records(path: Path) -> list[dict]:
-    def invalid_constant(value):
-        raise ValueError("Non-finite number in evaluation log")
-
-    with path.open(encoding="utf-8") as stream:
-        records = [json.loads(line, parse_constant=invalid_constant) for line in stream if line.strip()]
+    from .wait_record_codec import iter_stream
+    with path.open("rb") as stream:
+        records = list(iter_stream(stream, "gameplay", max_records=None, skip_blank=True))
     if not records:
         raise ValueError("Empty evaluation log")
     if any(not isinstance(r, dict) or r.get("controller") != "hierarchical" for r in records):

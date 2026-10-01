@@ -84,15 +84,11 @@ def hash_file(path: Path, maximum: int = 16 * 1024**3) -> dict:
 def records(raw: bytes) -> list[dict]:
     if not raw or len(raw) > MAX_LOG or not raw.endswith(b'\n'):
         raise ValueError('Expected a bounded complete JSONL stream')
-    lines = raw.splitlines()
-    if len(lines) > MAX_RECORDS: raise ValueError('Record count budget exceeded')
-    result = []
-    for line in lines:
-        if not line or len(line) > MAX_JSON: raise ValueError('Invalid or oversized JSONL record')
-        row = load_json(line)
-        if not isinstance(row, dict): raise ValueError('JSONL records must be objects')
-        result.append(row)
-    return result
+    from .wait_record_codec import decode_jsonl
+    try:
+        return decode_jsonl(raw, 'gameplay', max_line=MAX_JSON, max_records=MAX_RECORDS)
+    except ValueError as error:
+        raise ValueError('Invalid, oversized, or unreconstructable gameplay JSONL') from error
 
 
 def write_new(path: Path, raw: bytes) -> None:

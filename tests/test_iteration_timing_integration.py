@@ -55,6 +55,26 @@ def test_real_controller_record_checkpoint_research_and_gap(tmp_path):
     assert report['native_acceptance_proven'] is False
 
 
+def test_gameplay_writer_uses_lf_byte_count_without_text_translation(tmp_path, monkeypatch):
+    loop = controller(Backend(), tmp_path)
+    path = tmp_path / 'gameplay.jsonl'
+    loop.log_file = path
+    original_open = Path.open
+    observed_newline = []
+
+    def capture_open(target, *args, **kwargs):
+        if target == path:
+            observed_newline.append(kwargs.get('newline'))
+        return original_open(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'open', capture_open)
+    with redirect_stdout(io.StringIO()):
+        assert loop.step()['verified']
+
+    assert observed_newline == ['\n']
+    assert b'\r\n' not in path.read_bytes()
+
+
 def test_atomic_observation_nested_adapters_only_one_logical_io(monkeypatch):
     backend,native,payload,calls=setup(monkeypatch,craft=True)
     backend._instance.rcon_client=SessionRcon(backend._instance.rcon_client)

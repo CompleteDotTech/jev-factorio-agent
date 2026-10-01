@@ -46,6 +46,13 @@ def _read(root: Path, name: str) -> bytes:
 
 
 def _records(raw: bytes, label: str) -> list[dict]:
+    if label == 'gameplay':
+        from .wait_record_codec import decode_jsonl
+        try:
+            return decode_jsonl(raw, 'gameplay', max_line=16 * 1024 * 1024,
+                                max_records=50000)
+        except ValueError as error:
+            raise ValueError(label + ': invalid or unreconstructable JSONL') from error
     if not raw or not raw.endswith(b'\n'):
         raise ValueError(label + ': missing complete final newline')
     result = []

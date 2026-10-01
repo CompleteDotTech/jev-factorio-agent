@@ -33,11 +33,9 @@ def analyze(path: Path) -> dict:
     regressions, unknown = set(), set()
     models = set()
     phase_names = {"observe", "pre_dispatch_observe", "post_dispatch_observe", "dispatch"}
-    with path.open(encoding="utf-8") as stream:
-        while raw := stream.readline(MAX_LINE + 1):
-            if len(raw.encode("utf-8")) > MAX_LINE or not raw.endswith("\n"):
-                raise ValueError("Oversized or incomplete gameplay record")
-            row = json.loads(raw)
+    from .wait_record_codec import iter_stream
+    with path.open("rb") as stream:
+        for row in iter_stream(stream, "gameplay", max_line=MAX_LINE, max_records=None):
             timestamp = datetime.fromisoformat(row["recorded_at_utc"].replace("Z", "+00:00"))
             if timestamp.tzinfo is None:
                 raise ValueError("Timezone required for gameplay timestamps")
