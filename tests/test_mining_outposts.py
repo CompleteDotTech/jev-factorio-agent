@@ -1349,3 +1349,105 @@ def test_full_capability_stack_builds_and_reloads_with_background_memory(tmp_pat
     assert loaded.input_routes_schema == 1 and loaded.outposts_schema == 1
     assert loaded.outpost_commitments == loop.memory.outpost_commitments
     assert len(backend.calls) == 2
+
+
+def lone_investment_planner(state, data, amount=20):
+    """A planner whose whole frontier is the policy-chosen outpost build."""
+    planner = MiningOutpostPlanner(data, state, 'rocket_launch')
+    primary = planner._need(RESOURCE, amount)
+    assert primary.steps[0].action == outposts.COMMAND
+    planner.plan = lambda: primary
+    planner.focus = ('pipe', 41)
+    return planner, primary
+
+
+def test_lone_proposed_outpost_investment_is_offered_with_the_direct_path():
+    state, data = state_fixture()
+    planner, primary = lone_investment_planner(state, data)
+    plans = planner.candidates()
+    assert len(plans) == 2 and plans[0].id == primary.id
+    alternative = plans[1]
+    step = alternative.steps[0]
+    assert step.action in {'factory_gather', 'factory_extract'}
+    assert step.allowed(state) and not step.satisfied(state)
+    marker = alternative.materials['direct_alternative_to_proposed_outpost']
+    assert marker['investment_plan_id'] == primary.id
+    assert marker['resource'] == RESOURCE and marker['requested_amount'] == 20
+    assert marker['observed_tick'] == state.tick
+    assert 'direct_alternative_to_proposed_outpost' not in (plans[0].materials or {})
+    assert plans[0].steps[0].action == outposts.COMMAND  # deterministic priority is unchanged
+    assert len({plan.id for plan in plans}) == 2
+
+
+def test_started_outpost_prefix_stays_the_only_candidate():
+    state, data = state_fixture()
+    build(state, 'chest')
+    planner = MiningOutpostPlanner(data, state, 'rocket_launch')
+    primary = planner._need(RESOURCE, 20)
+    assert primary.steps[0].action == outposts.COMMAND and primary.steps[0].parameters['part'] == 'drill'
+    planner.plan = lambda: primary
+    planner.focus = ('pipe', 41)
+    plans = planner.candidates()
+    assert [plan.id for plan in plans] == [primary.id]
+    assert all('direct_alternative_to_proposed_outpost' not in (plan.materials or {}) for plan in plans)
+
+
+@pytest.mark.parametrize('mode', ['small', 'bootstrap', 'existing_ore'])
+def test_direct_primary_is_not_given_a_second_alternative(mode):
+    state, data = state_fixture()
+    amount = 20
+    if mode == 'small':
+        amount = 2
+    if mode == 'bootstrap':
+        state.factory['entities']['recipe:iron-plate']['products_finished'] = 0
+    if mode == 'existing_ore':
+        state.factory['entities']['legacy:chest'] = machine('wooden-chest', output={RESOURCE: 50})
+    planner = MiningOutpostPlanner(data, state, 'rocket_launch')
+    primary = planner._need(RESOURCE, amount)
+    assert primary.steps[0].action in {'factory_gather', 'factory_extract'}
+    assert planner._proposed_outposts == {}
+    planner.plan = lambda: primary
+    planner.focus = ('pipe', 41)
+    assert all('direct_alternative_to_proposed_outpost' not in (plan.materials or {})
+               for plan in planner.candidates())
+
+
+@pytest.mark.parametrize('kind', ['wait', 'none', 'same_plan', 'error', 'disallowed', 'satisfied'])
+def test_unusable_direct_alternative_is_not_offered(kind, monkeypatch):
+    from jev_factorio.planning.input_routes import InputRoutePlanner
+    state, data = state_fixture()
+    planner, primary = lone_investment_planner(state, data)
+    direct = InputRoutePlanner._need(planner, RESOURCE, 20)
+
+    def fake(self, item, amount, path=()):
+        if kind == 'wait':
+            return planner._wait('crafting_idle')
+        if kind == 'none':
+            return None
+        if kind == 'same_plan':
+            return primary
+        if kind == 'error':
+            raise ValueError('direct path unavailable')
+        return direct
+
+    if kind == 'disallowed':
+        state.factory['player_bound'] = False
+    monkeypatch.setattr(InputRoutePlanner, '_need', fake)
+    if kind == 'satisfied':
+        monkeypatch.setattr(type(direct.steps[0]), 'satisfied', lambda self, snapshot: True)
+        monkeypatch.setattr(type(direct.steps[0]), 'allowed', lambda self, snapshot: True)
+    if kind == 'disallowed':
+        monkeypatch.setattr(type(direct.steps[0]), 'allowed', lambda self, snapshot: False)
+    assert [plan.id for plan in planner.candidates()] == [primary.id]
+
+
+def test_direct_alternative_survives_the_request_budget_and_both_plans_are_questioned():
+    state, data = state_fixture()
+    planner, primary = lone_investment_planner(state, data)
+    plans = planner.candidates()
+    context = {'facts': state.for_jev(), **scheduling_context(state, data, plans, 'rocket_launch')}
+    _, questions, offered = question_batch(context, plans)
+    assert [plan.id for plan in offered] == [plan.id for plan in plans]
+    assert set(questions['candidate']['criteria']) == {plan.id for plan in plans} | {'observe'}
+    for plan in plans:
+        assert plan.id + '/benefit' in questions

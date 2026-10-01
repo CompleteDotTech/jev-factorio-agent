@@ -77,6 +77,27 @@ prevents a competing direct-route prepare/build, and a committed direct route
 prevents an outpost build. Generic placement and production-site search respect
 reserved outpost footprints.
 
+### A declined investment is not the only plan
+
+Once a producer is established and its ore shortage is large, the planner prefers
+the outpost investment to hand-gathering. That preference is a policy heuristic,
+not native payback evidence, and the decision question says so. An infrastructure
+primary is normally the whole candidate frontier, so a model that rates the
+speculative build as no demonstrated contribution left the controller with nothing
+to do. On an idle factory (empty furnaces, no ore or plates in inventory) that
+state never changes, and persistent recovery could only wait.
+
+While an outpost is still `proposed`, a lone investment plan is now accompanied by
+the direct plan the same request yields with the investment policy bypassed, for
+example gathering the missing ore. The alternative carries
+`direct_alternative_to_proposed_outpost` in its plan materials and must have an
+allowed, unsatisfied first step that is a gather, insert, extract or craft; a passive
+wait, an identical plan or an unavailable path is not offered. The investment stays
+first, so the deterministic policy is unchanged. A started paid outpost prefix
+remains the only candidate. Jev still judges every offered plan, no confidence gate
+is relaxed, and native preconditions, payment and postconditions still decide
+execution.
+
 ## Construction, commissioning, and service
 
 1. Acquire one bounded kit through the existing paid crafting/gathering paths,
