@@ -203,7 +203,9 @@ class CampaignMemory:
                         or type(entry["checkpoint_sha256"]) is not str
                         or re.fullmatch(r"[0-9a-f]{64}", entry["checkpoint_sha256"]) is None
                         or type(entry["stalled_decisions"]) is not int
-                        or entry["stalled_decisions"] < 1
+                        # Verified background work may reset the streak before
+                        # a persistent block consumes its one-use authorization.
+                        or entry["stalled_decisions"] < 0
                         or not isinstance(entry["reason"], str)
                         or entry["reason"] not in _BLOCKED_REEVALUATION_REASONS
                         or type(entry["tick"]) is not int or not 0 <= entry["tick"] <= memory.last_tick
