@@ -8,12 +8,18 @@ from ..mining_outposts import (COMMAND, PARTS, RESOURCES, current, flow_complete
                                remaining_kit, role, sources)
 from .input_routes import InputRoutePlanner
 from .research_trigger import current_machine_input_requirement, current_trigger
+from .service_visits import service_visit
+
+# First actions a direct (non-investment) alternative may take; passive waits never qualify.
+DIRECT_ALTERNATIVE_ACTIONS = frozenset({'factory_gather', 'factory_insert', 'factory_extract', 'factory_craft'})
 
 
 class MiningOutpostPlanner(InputRoutePlanner):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._outpost_acquiring = False
+        # Plan id -> the (item, amount, path) whose proposed-outpost investment it answers.
+        self._proposed_outposts = {}
 
     def _acquire_outpost(self, item, amount, path):
         previous = (self._outpost_acquiring, self._acquiring_route,
@@ -147,14 +153,26 @@ class MiningOutpostPlanner(InputRoutePlanner):
                         'admission': admission,
                     }
                     prerequisite = replace(prerequisite, materials=materials)
+                    if row['state'] == 'proposed':
+                        # A kit prerequisite chosen for a policy investment is
+                        # equally a lone infrastructure primary (for example a
+                        # handcraft), so it also needs the direct alternative.
+                        self._proposed_outposts[prerequisite.id] = {
+                            'item': item, 'amount': requested_amount, 'path': tuple(path)}
                     return prerequisite
             spec = next(s for s in row['steps'] if s['part'] not in row['parts'])
-            return self._plan(COMMAND, 'outpost_component', parameters={
+            plan = self._plan(COMMAND, 'outpost_component', parameters={
                 'resource': item, 'layout': row['layout'], 'part': spec['part'],
                 'receipt': f"{self.snapshot.tick}:{row['layout']}:{spec['part']}",
             }, costs={**kit, 'coal': 5}, timeout=18000,
                 identity=f"{row['layout']}:{spec['part']}",
                 description=f"Build paid {spec['name']} for {item} mining outpost; preserve existing furnace")
+            if row['state'] == 'proposed':
+                # The planner chose this speculative investment by policy over the
+                # direct path; remember the request so the alternative can be offered.
+                self._proposed_outposts[plan.id] = {
+                    'item': item, 'amount': requested_amount, 'path': tuple(path)}
+            return plan
         if not row['topology']:
             self._buffer_service = True
             return self._wait('outpost_flow', row['layout'], 3, item, timeout=1800,
@@ -188,8 +206,47 @@ class MiningOutpostPlanner(InputRoutePlanner):
                               identity=f"outpost-collect:{row['layout']}:{target}")
         return super()._need(item, amount, path)
 
+    def _with_direct_alternative(self, plans):
+        """Offer the direct path next to a lone policy-chosen outpost investment.
+
+        An infrastructure primary is otherwise the whole frontier, so declining a
+        speculative investment left nothing to do. The alternative is the plan the
+        same request yields with the investment policy bypassed, exactly as the
+        policy's own early return computes it. Only a still-proposed outpost
+        qualifies; a started paid prefix remains the sole candidate. Nothing here
+        lowers a gate or grants execution: the model still judges both plans and
+        native preconditions still decide dispatch.
+        """
+        if len(plans) != 1:
+            return plans
+        primary = plans[0]
+        context = self._proposed_outposts.get(primary.id)
+        if context is None:
+            return plans
+        worker = self._candidate_worker()
+        try:
+            alternative = InputRoutePlanner._need(
+                worker, context['item'], context['amount'], context['path'])
+        except (KeyError, ValueError):
+            return plans
+        if (alternative is None or alternative.id == primary.id
+                or alternative.steps[0].action not in DIRECT_ALTERNATIVE_ACTIONS
+                or not alternative.steps[0].allowed(self.snapshot)
+                or alternative.steps[0].satisfied(self.snapshot)):
+            return plans
+        prefix = (f"Next production batch: {self.focus[1]} {self.focus[0]}. "
+                  if self.focus else "")
+        alternative = replace(alternative, description=prefix + alternative.description, materials={
+            **(alternative.materials or {}),
+            'direct_alternative_to_proposed_outpost': {
+                'schema': 1, 'observed_tick': self.snapshot.tick,
+                'resource': context['item'], 'requested_amount': context['amount'],
+                'investment_plan_id': primary.id,
+                'basis': 'planner_policy_investment_has_no_native_payback_evidence'}})
+        return [*plans, service_visit(self, alternative)]
+
     def candidates(self):
-        plans = super().candidates()
+        plans = self._with_direct_alternative(super().candidates())
         evidence = {key: {name: row[name] for name in ('layout', 'state', 'remaining', 'topology', 'flow')}
                     for key, row in sources(self.snapshot).items()}
         return [replace(plan, materials={**(plan.materials or {}), 'mining_outposts': evidence,
