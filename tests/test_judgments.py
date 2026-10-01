@@ -9,6 +9,61 @@ from jev_factorio.judgments import InvalidJudgment, question_batch, select_plan,
 from jev_factorio.skills import Plan, Step, compile_plans
 
 
+def _parent_demand_batch():
+    from test_mining_outposts import native_direct_parent_demand_plans
+    from jev_factorio.planning.decision_support import scheduling_context
+    snapshot, catalog, _, plans = native_direct_parent_demand_plans()
+    state = {'facts': snapshot.for_jev(),
+             **scheduling_context(snapshot, catalog, plans, 'rocket_launch')}
+    return state, plans
+
+
+def test_two_candidate_request_explains_validated_parent_input_without_waiving_choice_gate():
+    state, plans = _parent_demand_batch()
+    context, questions, offered = question_batch(state, plans, max_bytes=48000)
+    direct = next(plan for plan in plans if plan.steps[0].action == 'factory_gather')
+    key = 'direct_alternative_parent_demand_start_evidence'
+    assert direct.materials['work_intent']['scope'] == 'lookahead'
+    assert context['candidate_evidence'][direct.id]['work_scope_provenance'] == {
+        'compiled_scope': 'lookahead', 'qualified_current_scope': 'immediate',
+        'basis': 'same_tick_current_parent_demand_and_catalog_recipe_input_path',
+    }
+    assert [plan.id for plan in offered] == [plan.id for plan in plans]
+    for question in ('candidate', direct.id + '/useful_progress', direct.id + '/benefit'):
+        assert key in questions[question]['instructions']
+        assert 'compilation provenance' in questions[question]['instructions']
+        assert 'not harvested output already observed' in questions[question]['instructions']
+    assert key not in questions[plans[0].id + '/benefit']['instructions']
+    assert len(json.dumps({'context': context, 'questions': questions},
+                          separators=(',', ':'), allow_nan=False).encode()) <= 48000
+
+    class UncertainChoice(MockJevClient):
+        def evaluate(self, state, questions):
+            answers = super().evaluate(state, questions)
+            answers['candidate']['confidence'] = .34
+            return answers
+
+    result = select_plan(UncertainChoice(), state, plans)
+    assert result.plan_id is None and result.reason == 'low choice confidence'
+
+
+@pytest.mark.parametrize(('field', 'replacement'), [
+    ('schema', True), ('observed_tick', -1), ('session_id', 'other-session'),
+    ('parent_plan_id', 'missing-parent'), ('gather_quantity', True),
+    ('gather_inventory_target', 999), ('parent_local_target_item', 'unrelated-item'),
+    ('does_not_establish_outpost_payback_or_completion', False),
+])
+def test_parent_input_explanation_requires_current_matching_typed_evidence(field, replacement):
+    state, plans = _parent_demand_batch()
+    direct = next(plan for plan in plans if plan.steps[0].action == 'factory_gather')
+    key = 'direct_alternative_parent_demand_start_evidence'
+    state['candidate_evidence'][direct.id][key][field] = replacement
+    _, questions, offered = question_batch(state, plans, max_bytes=48000)
+    assert len(offered) == 2
+    for question in ('candidate', direct.id + '/useful_progress', direct.id + '/benefit'):
+        assert key not in questions[question]['instructions']
+
+
 def batch():
     snapshot = MockBackend().observe()
     plans, _ = compile_plans("stockpile_fuel", snapshot)

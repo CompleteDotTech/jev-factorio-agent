@@ -1361,6 +1361,169 @@ def lone_investment_planner(state, data, amount=20):
     return planner, primary
 
 
+def native_direct_parent_demand_plans():
+    """Build the direct alternative from a current atomic-decoder fixture."""
+    state, data = state_fixture()
+    data.recipes['pipe'] = recipe('pipe', {'iron-plate': 1})
+    state.world_kind = 'fle'
+    state.inventory = {'wooden-chest': 1, 'burner-mining-drill': 1, 'coal': 50}
+    furnace = state.factory['entities']['recipe:iron-plate']
+    furnace.update(unit_number=2547, name='stone-furnace', recipe='iron-plate',
+                   fuel={'coal': 50}, input={}, output={}, products_finished=100,
+                   crafting=False)
+    state.factory['production_sites'] = {
+        'protocol': 1, 'session_id': state.session_id, 'tick': state.tick,
+        'sources': {'recipe:iron-plate': {
+            'state': 'owned', 'reason': 'owned legacy furnace',
+            'anchor': 'cell-site:legacy-iron-furnace',
+            'position': {'x': 0, 'y': 0}, 'belt_count': 1,
+            'bill': {'stone-furnace': 1, 'burner-mining-drill': 1,
+                     'burner-inserter': 2, 'wooden-chest': 1,
+                     'transport-belt': 1},
+            'source_unit': 2547,
+        }},
+    }
+    state.factory['acceptance_runtime'] = {
+        'schema': 1, 'session_id': state.session_id, 'actor_unit': 17,
+        'player_index': 1, 'surface_index': 1, 'force_index': 1,
+        'speed': 1, 'tick_paused': False,
+        'mods': {'base': data.version, 'core': data.version},
+    }
+    state = decode_native_fixture(state, native_catalog=data)
+    planner = MiningOutpostPlanner(data, state, 'rocket_launch')
+    planner._set_focus('pipe', 41)
+    primary = planner._need(
+        'iron-ore', 20, ('item:pipe', 'item:iron-plate'))
+    assert primary.steps[0].action == outposts.COMMAND
+    planner.plan = lambda: primary
+    return state, data, primary, planner.candidates()
+
+
+def test_native_direct_alternative_retains_current_parent_demand_without_payoff_claim():
+    state, data, primary, plans = native_direct_parent_demand_plans()
+    assert len(plans) == 2 and plans[0].id == primary.id
+    parent, direct = plans
+    assert direct.steps[0].action == 'factory_gather'
+    assert direct.steps[0].parameters == {'resource': 'iron-ore', 'quantity': 41}
+    assert direct.materials['local_objective'] == parent.materials['local_objective']
+
+    row = candidate_evidence(state, data, plans)[direct.id]
+    evidence = row['direct_alternative_parent_demand_start_evidence']
+    assert evidence is not None
+    assert row['work_scope'] == 'immediate'
+    assert row['local_target'] == {
+        'item': 'pipe', 'inventory_target': 41, 'ultimate_goal': 'rocket_launch'}
+    assert evidence['parent_local_target_item'] == row['local_target']['item']
+    assert evidence['parent_local_target_inventory'] == row['local_target']['inventory_target']
+    assert evidence['parent_proposed_request_amount'] == 20
+    assert evidence['ready_work_raw_target'] == 41
+    assert evidence['current_direct_recipe_path'] == [
+        'pipe', 'iron-plate', 'iron-ore']
+    assert evidence['native_actor_bound_and_inventory_fresh'] is True
+    assert evidence['useful_partial_benefit_level'] == 1
+    assert evidence['does_not_establish_gathered_output_or_local_target_completion'] is True
+    assert evidence['does_not_establish_outpost_payback_or_completion'] is True
+    assert row['local_target_completion_evidence'] is None
+    assert row['utility_power_prerequisite_start_evidence'] is None
+
+    # The unchanged public request budget must still carry both choices and
+    # the full evidence rows; this is prompt construction only, not a model call.
+    support = scheduling_context(state, data, plans, 'rocket_launch')
+    context, questions, offered = question_batch(
+        {'facts': state.for_jev(), **support}, plans)
+    assert [plan.id for plan in offered] == [plan.id for plan in plans]
+    encoded = json.dumps(
+        {'context': context, 'questions': questions}, ensure_ascii=False,
+        allow_nan=False, separators=(',', ':')).encode('utf-8')
+    assert len(encoded) <= 32000
+
+
+@pytest.mark.parametrize('tamper', [
+    'stale_parent_tick',
+    'parent_not_offered',
+    'request_amount_mismatch',
+    'dependency_path_mismatch',
+    'local_target_mismatch',
+    'stale_raw_prerequisite',
+    'compiled_raw_target_mismatch',
+    'native_fair_target_missing',
+])
+def test_native_direct_parent_demand_witness_fails_closed_on_stale_or_mismatched_inputs(tamper):
+    state, data, _, plans = native_direct_parent_demand_plans()
+    parent, direct = plans
+    parent_materials = deepcopy(parent.materials)
+    direct_materials = deepcopy(direct.materials)
+    marker = direct_materials['direct_alternative_to_proposed_outpost']
+
+    if tamper == 'stale_parent_tick':
+        marker['observed_tick'] -= 1
+    elif tamper == 'parent_not_offered':
+        pass  # The candidate pair below intentionally omits the parent.
+    elif tamper == 'request_amount_mismatch':
+        marker['requested_amount'] += 1
+    elif tamper == 'dependency_path_mismatch':
+        wrong_path = ['pipe', 'iron-ore']
+        requests = [
+            parent_materials['proposed_outpost_request'],
+            marker['proposed_outpost_request'],
+            marker['parent_purpose']['proposed_outpost_request'],
+        ]
+        for request in requests:
+            request['planner_item_path'] = list(wrong_path)
+    elif tamper == 'local_target_mismatch':
+        direct_materials['local_objective']['inventory_target'] += 1
+    elif tamper == 'stale_raw_prerequisite':
+        direct_materials['raw_prerequisite']['observed_tick'] -= 1
+    elif tamper == 'compiled_raw_target_mismatch':
+        marker['compiled_gather_target']['inventory_target'] += 1
+    elif tamper == 'native_fair_target_missing':
+        state.factory.get('fair_resource_targets', {}).pop('iron-ore', None)
+
+    parent = replace(parent, materials=parent_materials)
+    direct = replace(direct, materials=direct_materials)
+    pair = [direct] if tamper == 'parent_not_offered' else [parent, direct]
+    row = candidate_evidence(state, data, pair)[direct.id]
+    assert row['direct_alternative_parent_demand_start_evidence'] is None
+    assert row['work_scope'] != 'immediate'
+    assert row['work_scope_provenance'] == {
+        'compiled_scope': 'lookahead', 'qualified_current_scope': None,
+        'basis': 'current_parent_demand_not_verified',
+    }
+
+
+@pytest.mark.parametrize('mutation', [
+    lambda state, catalog, annotation: annotation.update(observed_tick=state.tick - 1),
+    lambda state, catalog, annotation: annotation.update(consumer_unit=999),
+    lambda state, catalog, annotation: catalog.technologies['study'].update(enabled=False),
+])
+def test_parent_utility_annotation_requires_same_tick_current_consumer_and_demand(mutation):
+    from test_utility_power_prerequisite_evidence import fixture as utility_fixture
+    from jev_factorio.planning.decision_support import _current_parent_utility_demand
+    from jev_factorio.planning.factory import FactoryPlanner
+
+    data, state, _ = utility_fixture(goal='rocket_launch', fuel=1, coal=50)
+    state.world_kind = 'fle'
+    state.factory['acceptance_runtime'] = {
+        'schema': 1, 'session_id': state.session_id, 'actor_unit': 17,
+        'player_index': 1, 'surface_index': 1, 'force_index': 1,
+        'speed': 1, 'tick_paused': False,
+        'mods': {'base': data.version, 'core': data.version},
+    }
+    state = decode_native_fixture(state, native_catalog=data)
+    planner = FactoryPlanner(data, state, 'rocket_launch')
+    power_plan = planner._powered('utility:lab', ('technology:study',))
+    assert power_plan is not None
+    annotation = deepcopy(power_plan.materials['utility_power_prerequisite'])
+    assert _current_parent_utility_demand(
+        state, data, annotation, 'rocket_launch') is not None
+
+    changed_state, changed_catalog, changed_annotation = (
+        deepcopy(state), deepcopy(data), deepcopy(annotation))
+    mutation(changed_state, changed_catalog, changed_annotation)
+    assert _current_parent_utility_demand(
+        changed_state, changed_catalog, changed_annotation, 'rocket_launch') is None
+
+
 def test_lone_proposed_outpost_investment_is_offered_with_the_direct_path():
     state, data = state_fixture()
     planner, primary = lone_investment_planner(state, data)

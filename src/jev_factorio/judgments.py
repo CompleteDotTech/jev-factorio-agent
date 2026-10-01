@@ -108,6 +108,75 @@ class Decision:
     diagnostics: dict = field(default_factory=dict)
 
 
+def _qualified_direct_parent_demand(plan, row, selected, facts) -> bool:
+    """Check bindings before explaining a validated current gather purpose."""
+    witness = row.get('direct_alternative_parent_demand_start_evidence')
+    if (not isinstance(witness, dict) or not isinstance(facts, dict)
+            or len(plan.steps) != 1):
+        return False
+    step = plan.steps[0]
+    parameters = step.parameters if isinstance(step.parameters, dict) else {}
+    parent_id = witness.get('parent_plan_id')
+    parents = [candidate for candidate in selected if candidate.id == parent_id]
+    path = witness.get('current_direct_recipe_path')
+    raw = row.get('raw_prerequisite')
+    start = row.get('gather_start_evidence')
+    local = row.get('local_target')
+    provenance = row.get('work_scope_provenance')
+    intent = (plan.materials or {}).get('work_intent')
+    return (
+        type(witness.get('schema')) is int and witness['schema'] == 1
+        and type(facts.get('tick')) is int
+        and type(witness.get('observed_tick')) is int
+        and witness['observed_tick'] == facts['tick']
+        and isinstance(facts.get('session_id'), str) and bool(facts['session_id'])
+        and witness.get('session_id') == facts['session_id']
+        and witness.get('basis') == 'same_tick_current_parent_demand_and_catalog_recipe_input_path'
+        and len(parents) == 1 and parents[0].id != plan.id
+        and len(parents[0].steps) == 1
+        and parents[0].steps[0].action == witness.get('parent_action') == 'factory_outpost_build'
+        and witness.get('parent_outpost_still_proposed_and_allowed') is True
+        and witness.get('parent_work_intent_scope') == row.get('work_scope') == 'immediate'
+        and isinstance(provenance, dict) and isinstance(intent, dict)
+        and provenance.get('compiled_scope') == intent.get('scope')
+        and provenance.get('compiled_scope') in {'immediate', 'lookahead'}
+        and provenance.get('qualified_current_scope') == 'immediate'
+        and provenance.get('basis') == witness.get('basis')
+        and step.action == 'factory_gather' and step.effect == 'inventory'
+        and step.costs in (None, {})
+        and parameters.get('resource') == step.item == witness.get('gather_resource')
+        and all(type(witness.get(key)) is int for key in (
+            'gather_quantity', 'gather_inventory_now', 'gather_inventory_target',
+            'parent_local_target_inventory', 'parent_proposed_request_amount'))
+        and type(parameters.get('quantity')) is int
+        and 1 <= parameters['quantity'] == witness.get('gather_quantity') <= 50
+        and witness['gather_inventory_now'] >= 0
+        and witness['parent_proposed_request_amount'] >= 1
+        and type(step.threshold) is int
+        and step.threshold == witness.get('gather_inventory_target')
+        and step.threshold == witness['gather_inventory_now'] + parameters['quantity']
+        and isinstance(local, dict)
+        and local.get('item') == witness.get('parent_local_target_item')
+        and local.get('inventory_target') == witness.get('parent_local_target_inventory')
+        and isinstance(path, list) and 2 <= len(path) <= 32
+        and path[0] == local.get('item') and path[-1] == step.item
+        and isinstance(raw, dict) and raw.get('observed_tick') == facts['tick']
+        and raw.get('planner_item_path') == path
+        and isinstance(start, dict) and start.get('observed_tick') == facts['tick']
+        and start.get('session_id') == facts['session_id']
+        and start.get('resource_in_current_observation') is True
+        and start.get('fair_target_identity_observed') is True
+        and start.get('resource_inventory_now') == witness.get('gather_inventory_now')
+        and start.get('target_inventory_after_this_step') == step.threshold
+        and witness.get('native_actor_bound_and_inventory_fresh') is True
+        and type(witness.get('useful_partial_benefit_level')) is int
+        and witness['useful_partial_benefit_level'] == 1
+        and witness.get('gather_and_later_recipe_output_require_fresh_native_verification') is True
+        and witness.get('does_not_establish_gathered_output_or_local_target_completion') is True
+        and witness.get('does_not_establish_outpost_payback_or_completion') is True
+        and witness.get('parent_utility_annotation_is_not_power_start_evidence') is True)
+
+
 def _qualified_utility_lab_dependency(plan, row, local, tick) -> bool:
     if not isinstance(row, dict) or not isinstance(local, dict):
         return False
@@ -613,6 +682,23 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
             pointer = f"`candidate_plans[{json.dumps(plan.id)}]`"
             row = evidence.get(plan.id)
             row = row if isinstance(row, dict) else {}
+            direct_parent_hint = (
+                " `direct_alternative_parent_demand_start_evidence` binds this bounded "
+                "gather to the current immediate parent target through a same-tick "
+                "native-catalog recipe input path. The plan's `work_intent.scope` "
+                "is its compilation provenance; `work_scope_provenance` distinguishes "
+                "that scope from the immediate scope qualified by current evidence. "
+                "The proposed outpost request and "
+                "the compiled gather target are distinct recorded quantities. If "
+                "the native gather postcondition verifies, this is evidenced recipe "
+                "input progress (level 1), not harvested output already observed, "
+                "local-target completion, outpost payback, electricity, or research "
+                "completion. Later steps need fresh native checks. A contrary "
+                "current fact can make usefulness unsupported or lower benefit."
+                if _qualified_direct_parent_demand(plan, row, selected, facts) else "")
+            if direct_parent_hint:
+                questions['candidate']['instructions'] += (
+                    f" For {pointer}:" + direct_parent_hint)
             raw = row.get('raw_prerequisite')
             raw_path = raw.get('planner_item_path') if isinstance(raw, dict) else None
             gather_start = row.get('gather_start_evidence')
@@ -1406,6 +1492,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "evidence. A planner proposal or future unverified result alone is not proof. "
                     "Report confidence in this usefulness choice, not in completing the game. "
                     "This judgment does not authorize execution or waive native checks."
+                    + direct_parent_hint
                 ),
             }
             questions[plan.id + "/benefit"] = {
@@ -1416,7 +1503,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "from one bounded local production action. A current "
                     "`raw_prerequisite` is evidence that gathering supplies an input to "
                     "the named native recipe, not that the later craft already happened."
-                    + raw_gather_hint + craft_hint + bill_craft_hint + place_hint + fuel_hint
+                    + raw_gather_hint + direct_parent_hint + craft_hint + bill_craft_hint + place_hint + fuel_hint
                     + utility_lab_hint + power_hint + transfer_hint + input_hint
                     + outpost_kit_hint + pickup_hint + research_trigger_hint
                     + local_target_completion_hint
