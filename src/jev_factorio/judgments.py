@@ -223,7 +223,7 @@ def _qualified_utility_lab_dependency(plan, row, local, tick) -> bool:
     )
 
 
-def _qualified_power_child(step, row, evidence, tick):
+def _qualified_power_child(step, row, evidence, tick, facts=None):
     child = evidence.get('child_start_evidence')
     kind = evidence.get('next_action_kind')
     contracts = {
@@ -233,6 +233,8 @@ def _qualified_power_child(step, row, evidence, tick):
         'utility_chain_output_pickup_start': ('factory_extract', {'output_pickup_start_evidence'}),
         'utility_chain_recipe_input_transfer_start': ('factory_insert', {'recipe_input_transfer_start_evidence'}),
         'utility_chain_furnace_fuel_transfer_start': ('factory_insert', {'fuel_transfer_start_evidence'}),
+        'utility_chain_buffer_build_start': ('factory_buffer_build', {'buffer_build_start_evidence'}),
+        'utility_chain_buffer_fuel_transfer_start': ('factory_insert', {'buffer_fuel_start_evidence'}),
     }
     if kind not in contracts or not isinstance(child, dict):
         return False
@@ -244,7 +246,8 @@ def _qualified_power_child(step, row, evidence, tick):
             or type(child.get('observed_tick')) is not int or child['observed_tick'] != tick
             or child.get('item') != (parameters.get('item')
                                      if action in {'factory_insert', 'factory_extract'} else step.item)
-            or child.get('role') != (parameters.get('role') or parameters.get('resource'))
+            or child.get('role') != (parameters.get('source') if action == 'factory_buffer_build'
+                                    else parameters.get('role') or parameters.get('resource'))
             or child.get('quantity') != parameters.get('quantity')
             or child.get('step_costs') != (step.costs or {})
             or child.get('witness_fields') != sorted(fields)
@@ -258,6 +261,10 @@ def _qualified_power_child(step, row, evidence, tick):
     if any(type(w.get('observed_tick')) is not int or w.get('observed_tick') != tick
            for w in witnesses.values()):
         return False
+    if action == 'factory_buffer_build':
+        return _qualified_buffer_build(facts, step, witnesses['buffer_build_start_evidence'], tick)
+    if kind == 'utility_chain_buffer_fuel_transfer_start':
+        return _qualified_buffer_fuel(facts, step, witnesses['buffer_fuel_start_evidence'], tick)
     if action == 'factory_gather':
         gather = witnesses['gather_start_evidence']
         quantity = parameters.get('quantity')
@@ -313,7 +320,7 @@ def _qualified_power_child(step, row, evidence, tick):
             and witness.get('coal_to_transfer') == quantity and witness.get('native_receipt') == receipt)
 
 
-def _qualified_utility_power_dependency(plan, row, tick):
+def _qualified_utility_power_dependency(plan, row, tick, facts=None):
     """Give prerequisite guidance only for a current, action-bound witness."""
     evidence = row.get('utility_power_prerequisite_start_evidence')
     annotation = (plan.materials or {}).get('utility_power_prerequisite')
@@ -372,7 +379,7 @@ def _qualified_utility_power_dependency(plan, row, tick):
     if evidence.get('next_action') != step.action:
         return False
     kind = evidence.get('next_action_kind')
-    if _qualified_power_child(step, row, evidence, tick):
+    if _qualified_power_child(step, row, evidence, tick, facts):
         return True
     if kind in {'boiler_fuel_transfer_start', 'boiler_fuel_gather_start'}:
         fuel, deficit, carried = (evidence.get('boiler_coal_now'),
@@ -430,6 +437,160 @@ def _qualified_utility_power_dependency(plan, row, tick):
 def _json_identity(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False,
                       separators=(",", ":"))
+
+
+def _qualified_unused_buffer_receipt(facts, proof, receipt, tick):
+    """Check the producer's bounded same-tick query of the native receipt map."""
+    try:
+        observation = proof['native_receipt_query']
+        factory = facts['factory']
+        count = observation['receipt_count']
+        if (set(observation) != {'schema','session_id','tick','receipt_count','receipt','present','map_verified'}
+                or type(observation['schema']) is not int or observation['schema'] != 1
+                or observation['session_id'] != facts['session_id']
+                or type(observation['tick']) is not int or observation['tick'] != tick
+                or observation['receipt'] != receipt or observation['present'] is not False
+                or observation['map_verified'] is not True
+                or type(count) is not int or count < 0):
+            return False
+        if ('native_transfer_receipt_count' in factory
+                and (type(factory['native_transfer_receipt_count']) is not int
+                     or factory['native_transfer_receipt_count'] != count)):
+            return False
+        if 'receipts' in factory:
+            receipts = factory['receipts']
+            return isinstance(receipts, dict) and len(receipts) == count and receipt not in receipts
+        return (type(factory.get('native_transfer_receipt_count')) is int
+                and factory['native_transfer_receipt_count'] == count)
+    except (KeyError,TypeError,ValueError):
+        return False
+
+
+def _qualified_buffer_fuel(facts, step, proof, tick):
+    """Qualify bounded fuel for a paid output arm, never commissioned flow."""
+    from .output_buffers import PARTS, SOURCES, SUCCESSOR_SOURCES, validate_commitments
+    try:
+        p = step.parameters
+        factory, inventory = facts['factory'], facts['inventory']
+        buffers = factory['output_buffers']
+        row = buffers['sources'][proof['source_role']]
+        source = factory['entities'][row['source']]
+        arm = factory['entities'][p['role']]
+        quantity, fuel, capacity = p['quantity'], arm['fuel'].get('coal', 0), arm['fuel_insertable']['coal']
+        coal, ready = inventory['coal'], source['output'][row['item']]
+        if (step.action != 'factory_insert' or step.effect != 'transfer'
+                or set(p) != {'role', 'item', 'quantity', 'receipt'} or p['item'] != 'coal'
+                or type(quantity) is not int or step.costs != {'coal': quantity}
+                or type(tick) is not int or type(proof.get('observed_tick')) is not int
+                or proof['observed_tick'] != tick or proof.get('session_id') != facts['session_id']
+                or type(buffers.get('protocol')) is not int or buffers['protocol'] != 1
+                or buffers.get('session_id') != facts['session_id'] or buffers.get('tick') != tick
+                or not isinstance(facts.get('game_version'), str) or not facts['game_version'].startswith('2.0.')
+                or proof.get('native_catalog_version') != facts['game_version']
+                or proof.get('basis') != 'current_paid_output_buffer_arm_commissioning'
+                or row.get('source') != proof['source_role'] or row.get('item') != row['source'].removeprefix('recipe:')
+                or row.get('source_unit') != proof.get('source_unit') or row['item'] != proof.get('source_item')
+                or row.get('layout') != proof.get('layout') or row.get('parts') != proof.get('paid_parts')
+                or set(row['parts']) != set(PARTS) or row.get('state') != 'ready' or row.get('topology') is not True
+                or row['parts']['inserter']['role'] != p['role'] or proof.get('burner_role') != p['role']
+                or row['parts']['inserter']['unit_number'] != proof.get('burner_unit')
+                or type(fuel) is not int or not 0 <= fuel < 2
+                or type(capacity) is not int or capacity <= 0
+                or type(coal) is not int or type(ready) is not int or ready < 1
+                or not 0 < quantity <= min(coal, 5-fuel, capacity)
+                or any(type(proof.get(k)) is not int for k in ('fuel_now','fuel_insertable_now',
+                    'coal_in_inventory_now','coal_to_transfer','current_coal_deficit','ready_source_output_now'))
+                or proof['fuel_now'] != fuel or proof['fuel_insertable_now'] != capacity
+                or proof['coal_in_inventory_now'] != coal or proof['coal_to_transfer'] != quantity
+                or proof['current_coal_deficit'] != min(5-fuel, capacity) or proof['ready_source_output_now'] != ready
+                or proof.get('actor_inventory_now') != inventory
+                or p['receipt'] != f"{tick}:factory_insert:{p['role']}:coal" or proof.get('native_receipt') != p['receipt']
+                or not _qualified_unused_buffer_receipt(facts, proof, p['receipt'], tick)
+                or factory.get('player_connected') is not True or factory.get('player_bound') is not True
+                or type(factory.get('crafting_queue')) is not int or factory['crafting_queue'] != 0
+                or any(proof.get(k) is not True for k in ('planned_receipt_absent_now',
+                    'player_connected_and_bound_now','crafting_queue_empty_now',
+                    'native_transfer_and_later_flow_require_verification','flow_not_established'))):
+            return False
+        owners = buffers['sources']
+        if len(owners) > len(SOURCES | SUCCESSOR_SOURCES):
+            return False
+        validate_commitments({role: {'source_unit': owner['source_unit'], 'layout': owner['layout'],
+                                    'parts': owner['parts']} for role, owner in owners.items()},
+                             successors=bool(set(owners) & SUCCESSOR_SOURCES))
+        if any(paid['receipt'] == p['receipt'] for owner in owners.values() for paid in owner['parts'].values()):
+            return False
+        if source.get('unit_number') != row['source_unit'] or source.get('name') != 'stone-furnace':
+            return False
+        for name, paid in row['parts'].items():
+            entity = factory['entities'][paid['role']]
+            if entity.get('unit_number') != paid['unit_number'] or entity.get('name') != PARTS[name]:
+                return False
+        return True
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return False
+
+
+def _qualified_buffer_build(facts, step, proof, tick):
+    """Qualify owned paid start conditions, leaving geometry and flow native."""
+    from .output_buffers import PARTS, SOURCES, SUCCESSOR_SOURCES, validate, validate_commitments
+    try:
+        parameters = step.parameters
+        validate(parameters)
+        factory, inventory = facts['factory'], facts['inventory']
+        buffers = factory['output_buffers']
+        role, part = parameters['source'], parameters['part']
+        row = buffers['sources'][role]
+        component = PARTS[part]
+        if (step.action != 'factory_buffer_build' or step.effect != 'buffer_component'
+                or step.costs != {component: 1}
+                or type(tick) is not int or type(proof.get('observed_tick')) is not int
+                or proof['observed_tick'] != tick or proof.get('session_id') != facts['session_id']
+                or type(buffers.get('protocol')) is not int or buffers['protocol'] != 1
+                or buffers.get('session_id') != facts['session_id'] or buffers.get('tick') != tick
+                or proof.get('basis') != 'current_paid_partial_output_buffer_next_component'
+                or not isinstance(facts.get('game_version'), str)
+                or not facts['game_version'].startswith('2.0.')
+                or proof.get('native_catalog_version') != facts['game_version']
+                or proof.get('source_role') != role or proof.get('source_unit') != row['source_unit']
+                or proof.get('source_item') != row['item'] or row['item'] != role.removeprefix('recipe:')
+                or row.get('source') != role or row.get('state') != 'building'
+                or proof.get('layout') != parameters['layout'] or row['layout'] != parameters['layout']
+                or proof.get('part') != part or proof.get('component_item') != component
+                or type(proof.get('component_quantity')) is not int or proof['component_quantity'] != 1
+                or not row['parts'] or proof.get('paid_parts') != row['parts']
+                or next((p for p in PARTS if p not in row['parts']), None) != part
+                or proof.get('actor_inventory_now') != inventory
+                or type(inventory.get(component)) is not int or inventory[component] < 1
+                or parameters['receipt'] != f"buffer:{tick}:{row['source_unit']}:{part}"
+                or proof.get('receipt') != parameters['receipt']
+                or not _qualified_unused_buffer_receipt(facts, proof, parameters['receipt'], tick)
+                or factory.get('player_connected') is not True or factory.get('player_bound') is not True
+                or type(factory.get('crafting_queue')) is not int or factory['crafting_queue'] != 0
+                or any(proof.get(key) is not True for key in (
+                    'paid_component_in_inventory_now', 'planned_receipt_absent_now',
+                    'player_connected_and_bound_now', 'crafting_queue_empty_now',
+                    'native_prepare_rechecks_geometry_and_clearance',
+                    'approach_and_placement_require_native_verification', 'flow_not_established'))):
+            return False
+        owners = buffers['sources']
+        if not isinstance(owners, dict) or len(owners) > len(SOURCES | SUCCESSOR_SOURCES):
+            return False
+        validate_commitments({source: {'source_unit': owner['source_unit'], 'layout': owner['layout'],
+                                      'parts': owner['parts']} for source, owner in owners.items()},
+                             successors=bool(set(owners) & SUCCESSOR_SOURCES))
+        if any(paid['receipt'] == parameters['receipt'] for owner in owners.values() for paid in owner['parts'].values()):
+            return False
+        source = factory['entities'][role]
+        if source.get('unit_number') != row['source_unit'] or source.get('name') != 'stone-furnace':
+            return False
+        for name, paid in row['parts'].items():
+            entity = factory['entities'][paid['role']]
+            if entity.get('unit_number') != paid['unit_number'] or entity.get('name') != PARTS[name]:
+                return False
+        return True
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return False
 
 
 def _qualified_buffer_component(facts, plan, proof, start, path, tick):
@@ -1046,6 +1207,28 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                         "confirms the target threshold. It does not establish arrival, patch "
                         "yield, harvested quantity, or completion before that verification.")
             placement_start = row.get('placement_start_evidence')
+            buffer_build_start = row.get('buffer_build_start_evidence')
+            buffer_fuel_start = row.get('buffer_fuel_start_evidence')
+            qualified_buffer_fuel = (len(plan.steps) == 1 and row.get('work_scope') == 'immediate'
+                and _qualified_buffer_fuel(facts, plan.steps[0], buffer_fuel_start, tick))
+            buffer_fuel_hint = (
+                " `buffer_fuel_start_evidence` binds bounded carried coal to this current paid "
+                "output-buffer arm, its observed coal deficit and capacity, ready source stock "
+                "and unused receipt. Fuel prepares the current transport prerequisite; native "
+                "transfer, inventory delta and later commissioning flow remain unverified. "
+                "Contrary current facts can make progress unsupported."
+                if qualified_buffer_fuel else "")
+            qualified_buffer_build = (len(plan.steps) == 1
+                and row.get('work_scope') == 'immediate'
+                and _qualified_buffer_build(facts, plan.steps[0], buffer_build_start, tick))
+            buffer_build_hint = (
+                " `buffer_build_start_evidence` binds this one carried component to the current "
+                "paid partial output-buffer owner, its next missing part, native identities and "
+                "planned receipt. This is bounded construction preparation; native prepare "
+                "must recheck geometry and clearance, approach and placement need their receipt "
+                "and fresh postcondition, and transport flow remains unverified. Contrary current "
+                "facts can make progress unsupported."
+                if qualified_buffer_build else "")
             placement_dependency = row.get('placement_dependency')
             placement_step = plan.steps[0] if len(plan.steps) == 1 else None
             placement_path = (placement_dependency.get('planner_item_path')
@@ -1228,7 +1411,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "Construction still needs the existing native site, "
                 "receipt and fresh postcondition checks. A contrary current "
                 "fact can lower the score."
-                if _qualified_utility_power_dependency(plan, row, tick) else ""
+                if _qualified_utility_power_dependency(plan, row, tick, facts) else ""
             )
             fuel = row.get('fuel_prerequisite')
             fuel_step = plan.steps[0] if len(plan.steps) == 1 else None
@@ -1610,7 +1793,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 raw_gather_hint + direct_parent_hint + craft_hint + bill_craft_hint
                 + place_hint + fuel_hint + utility_lab_hint + power_hint
                 + transfer_hint + input_hint + outpost_kit_hint + pickup_hint
-                + research_trigger_hint + component_hint
+                + research_trigger_hint + component_hint + buffer_build_hint + buffer_fuel_hint
             )
             usefulness_contribution_hint = ''
             if power_hint:
@@ -1650,6 +1833,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     + direct_parent_hint.replace(' (level 1)', '')
                     + usefulness_contribution_hint
                     + component_hint
+                    + buffer_build_hint
+                    + buffer_fuel_hint
                 ),
             }
             questions[plan.id + "/benefit"] = {
@@ -1750,6 +1935,17 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                        "facts are present, so do not mark another observation needed merely "
                        "because later recipe output or technology unlock is unverified."
                        if qualified_research_trigger else "")
+                    + (" This paid output arm has observed ownership, coal headroom, a bounded "
+                       "current deficit, carried coal, actor readiness and unused receipt. Judge "
+                       "start observations from those values; future transfer and flow verification "
+                       "are not missing current start observations."
+                       if qualified_buffer_fuel else "")
+                    + (" This paid buffer component has observed ownership, actor readiness, "
+                       "inventory and an unused planned receipt. Native prepare performs bounded "
+                       "geometry/clearance checks before placement; future approach, receipt and "
+                       "flow verification are not additional missing observations before preparation. "
+                       "Judge any contrary current start fact independently."
+                       if qualified_buffer_build else "")
                     + (" For a placement, `placement_start_evidence` combines a current "
                        "surveyed site offer with observed actor/queue facts. Judge missing "
                        "start facts from those "
