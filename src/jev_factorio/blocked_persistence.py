@@ -15,6 +15,11 @@ from copy import deepcopy
 RECOVERABLE_REASONS = frozenset({
     "Candidate evidence insufficient", "low choice confidence",
 })
+_PROVIDER_OPERATOR_EVENT = "provider_circuit_operator_recovery_required"
+_PROVIDER_CATEGORIES = frozenset({
+    "application_schema", "service_network", "authentication_authorization",
+    "account_quota", "rate_limit", "unknown_outcome", "unknown",
+})
 MAX_ATTEMPTS = 1024
 MAX_WAIT_LEVEL = 9
 MAX_WAIT_SECONDS = 300.0
@@ -28,6 +33,8 @@ _CLOCK_FACTORY_RECEIPT = re.compile(r"[0-9]+:(factory_insert|factory_extract):([
 _CLOCK_RECEIPT = re.compile(r"[0-9]+:(.+)\Z")
 _BACKGROUND_WAIT_ID = re.compile(r"background-wait:(.+)\Z")
 _PLANNED_RECEIPT_KEYS = {"receipt", "planned_native_receipt_id"}
+_MAX_SELECTION_BATCH_CANDIDATES = 254
+MAX_SELECTION_BATCHES_PER_STATE = 3
 _ROUTE_DIAGNOSTIC_CLOCK_KEYS = frozenset({"cached", "survey_tick", "next_survey_tick"})
 _VOLATILE_KEYS = frozenset({
     "tick", "observed_tick", "checked_tick", "last_tick", "started_tick", "finished_tick",
@@ -37,7 +44,8 @@ _VOLATILE_KEYS = frozenset({
 })
 _SYSTEM_HISTORY_EVENTS = frozenset({
     "blocked_decision_reevaluation_consumed", "blocked_recovery_attempt", "blocked_recovery_wait",
-    "blocked_recovery_archive_committed",
+    "blocked_recovery_archive_committed", "blocked_recovery_alternatives_exhausted",
+    "blocked_recovery_alternative_batch_limit",
 })
 
 
@@ -120,6 +128,218 @@ def _canonical_planned_id(value: str) -> str:
     if match is None:
         return value
     return "background-wait:" + _canonical_receipt(match.group(1))
+
+
+def _candidate_id_map(candidate_ids: list[str]) -> dict[str, str]:
+    mapping = {}
+    canonical_ids = set()
+    for candidate_id in candidate_ids:
+        if type(candidate_id) is not str or not candidate_id or len(candidate_id) > 512:
+            raise ValueError("Invalid persistent selection candidate ID")
+        canonical = _canonical_planned_id(candidate_id)
+        if canonical in canonical_ids:
+            raise ValueError("Persistent selection candidate IDs collide after clock normalization")
+        mapping[candidate_id] = canonical
+        canonical_ids.add(canonical)
+    return mapping
+
+
+def _validate_selection_batch(value: object) -> dict:
+    required = {"schema", "state_sha256", "frontier_sha256", "request_sha256", "offered"}
+    if (not isinstance(value, dict) or set(value) != required
+            or type(value.get("schema")) is not int or value["schema"] != 1
+            or any(type(value.get(key)) is not str or not _SHA256.fullmatch(value[key])
+                   for key in ("state_sha256", "frontier_sha256", "request_sha256"))
+            or not isinstance(value.get("offered"), list)
+            or not 1 <= len(value["offered"]) <= _MAX_SELECTION_BATCH_CANDIDATES):
+        raise ValueError("Invalid persistent selection batch metadata")
+    seen_ids = set()
+    seen_candidates = set()
+    for row in value["offered"]:
+        if (not isinstance(row, dict) or set(row) != {"plan_id", "candidate_sha256"}
+                or type(row.get("plan_id")) is not str or not row["plan_id"]
+                or len(row["plan_id"]) > 512
+                or type(row.get("candidate_sha256")) is not str
+                or not _SHA256.fullmatch(row["candidate_sha256"])):
+            raise ValueError("Invalid persistent offered candidate metadata")
+        if row["plan_id"] in seen_ids or row["candidate_sha256"] in seen_candidates:
+            raise ValueError("Duplicate persistent offered candidate metadata")
+        seen_ids.add(row["plan_id"])
+        seen_candidates.add(row["candidate_sha256"])
+    if value["offered"] != sorted(value["offered"], key=lambda item: (item["plan_id"], item["candidate_sha256"])):
+        raise ValueError("Persistent offered candidate metadata is not canonical")
+    return value
+
+
+def _replace_candidate_ids(value, mapping: dict[str, str]):
+    """Canonicalize dynamic plan IDs in request keys and explanatory text."""
+    ordered = sorted(mapping.items(), key=lambda pair: len(pair[0]), reverse=True)
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            if type(key) is not str:
+                raise ValueError("Selection request contains a non-string key")
+            new_key = mapping.get(key, key)
+            if key not in mapping:
+                for old, new in ordered:
+                    if new_key.startswith(old + "/"):
+                        new_key = new + new_key[len(old):]
+                        break
+            if new_key in result:
+                raise ValueError("Selection request candidate keys collide after normalization")
+            result[new_key] = _replace_candidate_ids(item, mapping)
+        return result
+    if isinstance(value, list):
+        return [_replace_candidate_ids(item, mapping) for item in value]
+    if isinstance(value, tuple):
+        return [_replace_candidate_ids(item, mapping) for item in value]
+    if type(value) is str:
+        result = value
+        for old, new in ordered:
+            if old == new:
+                continue
+            # IDs appear as question keys and as candidate_plans pointers.
+            # Replace only a delimited identifier, never an arbitrary substring.
+            pattern = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(old)
+                                 + r"(?![A-Za-z0-9_])")
+            result = pattern.sub(lambda _match, replacement=new: replacement, result)
+        return result
+    return value
+
+
+def _selection_request_sha256(context: dict, questions: dict, plans: list[dict], *,
+                              current_tick: int) -> str:
+    raw_ids = [plan.get("id") for plan in plans if isinstance(plan, dict)]
+    if len(raw_ids) != len(plans) or any(type(value) is not str for value in raw_ids):
+        raise ValueError("Invalid plans in persistent selection request")
+    mapping = _candidate_id_map(raw_ids)
+    # Walk the prompt context as its own root so the existing stable-value
+    # rules see candidate_plans/candidate_evidence at their normal paths. In
+    # particular, planned craft-job UUIDs must not create a fresh fingerprint
+    # when the compiler emits the same candidate again on the next tick.
+    canonical_context = _replace_candidate_ids(deepcopy(context), mapping)
+    canonical_questions = _replace_candidate_ids(deepcopy(questions), mapping)
+    stable_body = {
+        "state": _stable(canonical_context, current_tick=current_tick),
+        "questions": _stable(canonical_questions, current_tick=current_tick),
+    }
+    encoded = json.dumps(stable_body, sort_keys=True, separators=(",", ":"),
+                         allow_nan=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _candidate_semantic_sha256(plan: dict, evidence: object, *, current_tick: int) -> str:
+    if not isinstance(plan, dict) or type(plan.get("id")) is not str:
+        raise ValueError("Invalid persistent selection candidate")
+    payload = _stable({"plans": [deepcopy(plan)],
+                       "candidate_evidence": {"candidate": deepcopy(evidence)}},
+                      current_tick=current_tick)
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def selection_state_sha256(state: dict, plans: list[dict], *, session_id: str,
+                           source_revision: dict, target: str, policy: str,
+                           confidence_floor: float, current_tick: int) -> str:
+    """Bind recovery batches to unchanged native decision facts, not plan order.
+
+    Candidate-specific evidence is bound by each candidate digest; the state
+    key deliberately excludes that derived map so a newly surfaced candidate
+    cannot make an already offered candidate look unseen. Native facts, active
+    objective/history, source contract, session, and policy remain in the key.
+    """
+    if not isinstance(state, dict) or not isinstance(plans, list):
+        raise ValueError("Invalid persistent selection frontier")
+    plan_ids = [plan.get("id") for plan in plans if isinstance(plan, dict)]
+    if len(plan_ids) != len(plans):
+        raise ValueError("Invalid persistent selection candidate")
+    _candidate_id_map(plan_ids)
+    stable_state = deepcopy(state)
+    stable_state.pop("candidate_evidence", None)
+    stable_state.pop("candidate_plans", None)
+    stable_state.pop("deterministic_ranking", None)
+    payload = {
+        "schema": 1, "kind": "persistent_selection_state", "session_id": session_id,
+        "source_revision": _source(source_revision), "target": target, "policy": policy,
+        "confidence_floor": confidence_floor,
+        "state": _stable(stable_state, current_tick=current_tick),
+    }
+    if (type(session_id) is not str or not session_id or type(target) is not str or not target
+            or policy != "jev" or type(current_tick) is not int or current_tick < 0
+            or type(confidence_floor) not in {int, float} or not 0 <= confidence_floor <= 1):
+        raise ValueError("Invalid persistent selection state identity")
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def selection_frontier_sha256(state: dict, plans: list[dict], *, session_id: str,
+                              source_revision: dict, target: str, policy: str,
+                              confidence_floor: float, current_tick: int) -> str:
+    """Bind a candidate frontier independent of candidate ordering."""
+    state_sha256 = selection_state_sha256(
+        state, plans, session_id=session_id, source_revision=source_revision,
+        target=target, policy=policy, confidence_floor=confidence_floor,
+        current_tick=current_tick)
+    evidence = state.get("candidate_evidence", {}) if isinstance(state, dict) else {}
+    if not isinstance(evidence, dict):
+        raise ValueError("Invalid persistent candidate evidence map")
+    candidates = []
+    for plan in plans:
+        if not isinstance(plan, dict) or type(plan.get("id")) is not str:
+            raise ValueError("Invalid persistent selection candidate")
+        canonical_id = _canonical_planned_id(plan["id"])
+        candidates.append({
+            "plan_id": canonical_id,
+            "candidate_sha256": _candidate_semantic_sha256(
+                plan, evidence.get(plan["id"]), current_tick=current_tick),
+        })
+    if len({row["plan_id"] for row in candidates}) != len(candidates):
+        raise ValueError("Persistent selection candidate IDs collide after clock normalization")
+    candidates.sort(key=lambda row: (row["plan_id"], row["candidate_sha256"]))
+    payload = {"schema": 1, "kind": "persistent_selection_frontier",
+               "state_sha256": state_sha256, "candidates": candidates}
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def selection_batch_metadata(context: dict, questions: dict, offered: list,
+                             *, state_sha256: str, frontier_sha256: str,
+                             current_tick: int) -> dict:
+    """Create a bounded, stable identity for the exact prepared request batch."""
+    if (not isinstance(context, dict) or not isinstance(questions, dict)
+            or not isinstance(offered, list) or not 1 <= len(offered) <= _MAX_SELECTION_BATCH_CANDIDATES
+            or type(current_tick) is not int or current_tick < 0
+            or type(state_sha256) is not str or not _SHA256.fullmatch(state_sha256)
+            or type(frontier_sha256) is not str or not _SHA256.fullmatch(frontier_sha256)):
+        raise ValueError("Invalid persistent selection batch")
+    plan_rows = []
+    for plan in offered:
+        row = plan.to_dict() if hasattr(plan, "to_dict") else plan
+        if not isinstance(row, dict) or type(row.get("id")) is not str:
+            raise ValueError("Invalid offered persistent selection plan")
+        plan_rows.append(deepcopy(row))
+    raw_ids = [row["id"] for row in plan_rows]
+    if len(raw_ids) != len(set(raw_ids)):
+        raise ValueError("Duplicate offered persistent selection candidate IDs")
+    mapping = _candidate_id_map(raw_ids)
+    evidence = context.get("candidate_evidence", {})
+    if not isinstance(evidence, dict):
+        raise ValueError("Invalid prepared candidate evidence")
+    request_sha256 = _selection_request_sha256(
+        context, questions, plan_rows, current_tick=current_tick)
+    offered_rows = []
+    for row in plan_rows:
+        plan_id = row["id"]
+        offered_rows.append({
+            "plan_id": mapping[plan_id],
+            "candidate_sha256": _candidate_semantic_sha256(
+                row, evidence.get(plan_id), current_tick=current_tick),
+        })
+    offered_rows.sort(key=lambda item: (item["plan_id"], item["candidate_sha256"]))
+    metadata = {"schema": 1, "state_sha256": state_sha256,
+                "frontier_sha256": frontier_sha256, "request_sha256": request_sha256,
+                "offered": offered_rows}
+    return _validate_selection_batch(metadata)
 
 
 def _stable(value, *, path: tuple = (), current_tick: int | None = None,
@@ -226,7 +446,9 @@ def _stable(value, *, path: tuple = (), current_tick: int | None = None,
 
 def decision_input_sha256(state: dict, plans: list[dict], *, session_id: str,
                           source_revision: dict, target: str, policy: str,
-                          confidence_floor: float, current_tick: int) -> str:
+                          confidence_floor: float, current_tick: int,
+                          questions: dict | None = None,
+                          selection_batch: dict | None = None) -> str:
     """Hash the actual decision facts/candidates while excluding known clocks."""
     if (type(session_id) is not str or not session_id
             or type(target) is not str or not target or policy != "jev"
@@ -240,6 +462,16 @@ def decision_input_sha256(state: dict, plans: list[dict], *, session_id: str,
         "state": _stable(deepcopy(state), current_tick=current_tick),
         "plans": _stable(deepcopy(plans), path=("plans",), current_tick=current_tick),
     }
+    if questions is not None or selection_batch is not None:
+        if not isinstance(questions, dict) or selection_batch is None:
+            raise ValueError("A persistent prepared request requires its batch metadata")
+        batch = _validate_selection_batch(selection_batch)
+        expected = selection_batch_metadata(
+            state, questions, plans, state_sha256=batch["state_sha256"],
+            frontier_sha256=batch["frontier_sha256"], current_tick=current_tick)
+        if expected != batch:
+            raise ValueError("Persistent selection batch does not match its prepared request")
+        payload["selection_batch"] = batch
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -266,11 +498,14 @@ def _validate_state(value: object, session_id: str) -> dict:
     if not isinstance(attempts, list) or len(attempts) > MAX_ATTEMPTS:
         raise ValueError("Persistent blocked-recovery attempt ledger is invalid or full")
     seen = set()
+    selection_counts = {}
+    selection_candidates = {}
     for row in attempts:
         legacy_required = {"source_revision", "decision_input_sha256", "reason", "tick"}
         required = legacy_required | {"outcome"}
+        batched_required = required | {"selection_batch"}
         if not isinstance(row, dict) or frozenset(row) not in {
-                frozenset(legacy_required), frozenset(required)}:
+                frozenset(legacy_required), frozenset(required), frozenset(batched_required)}:
             raise ValueError("Invalid persistent blocked-recovery attempt")
         # Older local prototypes did not distinguish an in-flight call from a
         # completed rejection. Treat those rows as ambiguous and never replay.
@@ -283,6 +518,19 @@ def _validate_state(value: object, session_id: str) -> dict:
                 or type(row["decision_input_sha256"]) is not str
                 or not _SHA256.fullmatch(row["decision_input_sha256"])):
             raise ValueError("Invalid persistent blocked-recovery attempt")
+        if "selection_batch" in row:
+            batch = _validate_selection_batch(row["selection_batch"])
+            batch_source = _source(row["source_revision"])
+            state_key = (batch_source["commit"], batch_source["source_sha256"],
+                         batch["state_sha256"])
+            selection_counts[state_key] = selection_counts.get(state_key, 0) + 1
+            if selection_counts[state_key] > MAX_SELECTION_BATCHES_PER_STATE:
+                raise ValueError("Persistent selection batch limit is exceeded for one state")
+            observed = selection_candidates.setdefault(state_key, set())
+            offered_digests = {item["candidate_sha256"] for item in batch["offered"]}
+            if observed.intersection(offered_digests):
+                raise ValueError("Persistent selection candidate was already offered for this state")
+            observed.update(offered_digests)
         row_source = _source(row["source_revision"])
         key = (row_source["commit"], row_source["source_sha256"], row["decision_input_sha256"])
         if key in seen:
@@ -296,6 +544,41 @@ def _validate_state(value: object, session_id: str) -> dict:
             or not 0 <= value["wait_level"] <= MAX_WAIT_LEVEL):
         raise ValueError("Invalid persistent blocked-recovery backoff")
     return value
+
+
+def _has_provider_operator_handoff(reason: object, history: object, attempts: list) -> bool:
+    """Validate the terminal provider handoff without making it auto-recoverable."""
+    if not isinstance(reason, str) or not isinstance(history, list):
+        return False
+    provider_inputs = {
+        row.get("decision_input_sha256") for row in attempts
+        if isinstance(row, dict) and row.get("outcome") == "provider_blocked"
+    }
+    for event in history:
+        if (not isinstance(event, dict)
+                or event.get("kind") != _PROVIDER_OPERATOR_EVENT
+                or event.get("decision_input_sha256") not in provider_inputs
+                or type(event.get("model_called")) is not bool
+                or event.get("category") not in _PROVIDER_CATEGORIES
+                or event.get("provider_phase") not in {"cooldown", "exhausted", "blocked"}):
+            continue
+        attempts_count = event.get("attempts")
+        budget_limit = event.get("budget_limit")
+        if (attempts_count is not None
+                and (type(attempts_count) is not int or attempts_count < 0)):
+            continue
+        if (budget_limit is not None
+                and (type(budget_limit) is not int or budget_limit < 1)):
+            continue
+        attempts_text = "unknown" if attempts_count is None else str(attempts_count)
+        budget_text = "unknown" if budget_limit is None else str(budget_limit)
+        expected_reason = (
+            "Provider circuit requires operator recovery: "
+            f"{event['category']} ({event['provider_phase']}, probes "
+            f"{attempts_text}/{budget_text})")
+        if event.get("reason") == reason == expected_reason:
+            return True
+    return False
 
 
 def validate_memory_state(memory, current_source: dict, *, allow_source_change: bool = False) -> None:
@@ -312,7 +595,9 @@ def validate_memory_state(memory, current_source: dict, *, allow_source_change: 
             allow_source_change and memory.status == "blocked"
             and memory.reason in RECOVERABLE_REASONS):
         raise ValueError("Persistent blocked-recovery source changed; explicit source authorization is required")
-    if memory.status == "blocked" and memory.reason not in RECOVERABLE_REASONS:
+    if (memory.status == "blocked" and memory.reason not in RECOVERABLE_REASONS
+            and not _has_provider_operator_handoff(
+                memory.reason, memory.history, state["attempts"])):
         raise ValueError("Persistent recovery does not admit this blocked reason")
 
 
@@ -322,13 +607,13 @@ def validate_checkpoint_metadata(data: object, current_source: dict, *,
     if not isinstance(data, dict):
         raise ValueError("Persistent blocked-recovery checkpoint is malformed")
     status, reason = data.get("status"), data.get("reason")
-    if status == "blocked" and reason not in RECOVERABLE_REASONS:
-        raise ValueError("Persistent recovery does not admit this blocked reason")
     state = data.get("blocked_recovery")
     session_id = data.get("session_id")
     if type(session_id) is not str or not session_id:
         raise ValueError("Persistent blocked-recovery session identity is missing")
     if state is None:
+        if status == "blocked" and reason not in RECOVERABLE_REASONS:
+            raise ValueError("Persistent recovery does not admit this blocked reason")
         if status == "blocked" and not allow_source_change:
             raise ValueError("Blocked resume requires source-authorized first recovery")
         return
@@ -339,6 +624,10 @@ def validate_checkpoint_metadata(data: object, current_source: dict, *,
             allow_source_change and status == "blocked"
             and reason in RECOVERABLE_REASONS):
         raise ValueError("Persistent blocked-recovery source changed; explicit source authorization is required")
+    if (status == "blocked" and reason not in RECOVERABLE_REASONS
+            and not _has_provider_operator_handoff(
+                reason, data.get("history"), state["attempts"])):
+        raise ValueError("Persistent recovery does not admit this blocked reason")
 
 
 def ensure_state(memory, source_revision: dict, *, allow_source_change: bool = False) -> dict:
@@ -398,22 +687,62 @@ def find_attempt(memory, source_revision: dict, input_sha256: str, *, archive_in
     return archived
 
 
+def selection_attempts_for_state(memory, source_revision: dict, state_sha256: str,
+                                 *, archive_index=None) -> list[dict]:
+    """Return verified prepared-batch WAL rows for one source-bound game state."""
+    source = _source(source_revision)
+    if type(state_sha256) is not str or not _SHA256.fullmatch(state_sha256):
+        raise ValueError("Invalid persistent selection state fingerprint")
+    if memory.blocked_recovery_archive is not None and archive_index is None:
+        raise ValueError("Blocked-recovery archive index is required for selection history")
+    rows = {}
+    if archive_index is not None:
+        for row in archive_index.selection_attempts(
+                source, state_sha256, memory=memory):
+            rows[row["decision_input_sha256"]] = deepcopy(row)
+    if memory.blocked_recovery is not None:
+        state = _validate_state(memory.blocked_recovery, memory.session_id)
+        for row in state["attempts"]:
+            if row["source_revision"] != source:
+                continue
+            batch = row.get("selection_batch")
+            if isinstance(batch, dict) and batch["state_sha256"] == state_sha256:
+                rows[row["decision_input_sha256"]] = deepcopy(row)
+    result = [rows[key] for key in sorted(rows)]
+    if len(result) > MAX_SELECTION_BATCHES_PER_STATE:
+        raise ValueError("Persistent selection batch limit is exceeded for one state")
+    seen_candidates = set()
+    for row in result:
+        batch = _validate_selection_batch(row.get("selection_batch"))
+        for offered in batch["offered"]:
+            candidate_sha256 = offered["candidate_sha256"]
+            if candidate_sha256 in seen_candidates:
+                raise ValueError("Persistent selection candidate was already offered for this state")
+            seen_candidates.add(candidate_sha256)
+    return result
+
+
 def record_attempt(memory, source_revision: dict, input_sha256: str,
                    reason: str | None, tick: int, *, allow_source_change: bool = False,
-                   archive_index=None) -> None:
+                   archive_index=None, selection_batch: dict | None = None) -> None:
     if (reason is not None and (type(reason) is not str or reason not in RECOVERABLE_REASONS)
             or not _SHA256.fullmatch(input_sha256)
             or type(tick) is not int or tick < 0):
         raise ValueError("Invalid persistent blocked-recovery attempt input")
+    if selection_batch is not None:
+        selection_batch = deepcopy(_validate_selection_batch(selection_batch))
     state = ensure_state(memory, source_revision, allow_source_change=allow_source_change)
     if len(state["attempts"]) >= MAX_ATTEMPTS:
         raise ValueError("Persistent blocked-recovery attempt ledger is full")
     if was_attempted(memory, source_revision, input_sha256,
                      allow_source_change=allow_source_change, archive_index=archive_index):
         raise ValueError("Persistent blocked-recovery input was already attempted")
-    state["attempts"].append({"source_revision": _source(source_revision),
-                              "decision_input_sha256": input_sha256,
-                              "reason": reason, "tick": tick, "outcome": "pending"})
+    attempt = {"source_revision": _source(source_revision),
+               "decision_input_sha256": input_sha256,
+               "reason": reason, "tick": tick, "outcome": "pending"}
+    if selection_batch is not None:
+        attempt["selection_batch"] = selection_batch
+    state["attempts"].append(attempt)
     state["last_input_sha256"] = input_sha256
     state["wait_level"] = 1
 
