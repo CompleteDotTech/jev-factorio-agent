@@ -66,6 +66,159 @@ def construction_pickup_bill(snapshot, catalog, row, part, item):
         return None
 
 
+def buffer_build_start(snapshot, catalog, parameters):
+    """Prove the current paid next component can enter native preparation.
+
+    Observed ownership and inventory are start conditions. Geometry, approach,
+    placement and transport remain the native dispatch/receipt responsibilities.
+    """
+    from ..output_buffers import allowed, validate
+    try:
+        validate(parameters)
+        role, part = parameters['source'], parameters['part']
+        rows = sources(snapshot)
+        row = rows.get(role)
+        identity = (snapshot.session_id, snapshot.tick)
+        runtime = snapshot.factory.get('acceptance_runtime', {})
+        if (not isinstance(row, dict) or not current(row, snapshot)
+                or row.get('source') != role or row.get('item') != role.removeprefix('recipe:')
+                or row.get('state') != 'building' or not row.get('parts')
+                or row.get('layout') != parameters['layout']
+                or next((p for p in PARTS if p not in row['parts']), None) != part
+                or snapshot.game_version != catalog.version
+                or not isinstance(catalog.version, str) or not catalog.version.startswith('2.0.')
+                or getattr(snapshot, '_atomic_inventory_verified', None) != identity
+                or getattr(snapshot, '_coherent_observation_verified', None) != identity
+                or snapshot.factory.get('observation_snapshot_schema') != 2
+                or snapshot.factory.get('tick') != snapshot.tick
+                or type(snapshot.factory.get('crafting_queue')) is not int
+                or runtime.get('schema') != 1 or runtime.get('session_id') != snapshot.session_id
+                or runtime.get('mods', {}).get('base') != catalog.version
+                or runtime.get('speed') != 1 or runtime.get('tick_paused') is not False
+                or parameters['receipt'] != f"buffer:{snapshot.tick}:{row['source_unit']}:{part}"
+                or not isinstance(snapshot.factory.get('receipts'), dict)
+                or parameters['receipt'] in snapshot.factory.get('receipts', {})
+                or not allowed(parameters, snapshot)):
+            return None
+        validate_commitments({source: {'source_unit': entry['source_unit'],
+            'layout': entry['layout'], 'parts': entry['parts']} for source, entry in rows.items()},
+            successors='successors' in snapshot.factory)
+        if any(paid['receipt'] == parameters['receipt']
+                for entry in rows.values() for paid in entry['parts'].values()):
+            return None
+        entity = snapshot.factory['entities'][role]
+        if entity.get('name') != 'stone-furnace':
+            return None
+        for paid_part, paid in row['parts'].items():
+            owned = snapshot.factory['entities'][paid['role']]
+            if owned.get('unit_number') != paid['unit_number'] or owned.get('name') != PARTS[paid_part]:
+                return None
+        quantity = snapshot.inventory.get(PARTS[part])
+        if type(quantity) is not int or quantity < 1:
+            return None
+        return {'observed_tick': snapshot.tick, 'session_id': snapshot.session_id,
+            'native_catalog_version': catalog.version, 'source_role': role,
+            'source_unit': row['source_unit'], 'source_item': row['item'],
+            'layout': row['layout'], 'paid_parts': row['parts'], 'part': part,
+            'component_item': PARTS[part], 'component_quantity': 1,
+            'receipt': parameters['receipt'], 'actor_inventory_now': dict(snapshot.inventory),
+            'native_receipt_query': {'schema': 1, 'session_id': snapshot.session_id,
+                'tick': snapshot.tick, 'receipt': parameters['receipt'],
+                'present': False, 'map_verified': True,
+                'receipt_count': len(snapshot.factory['receipts'])},
+            'paid_component_in_inventory_now': True, 'planned_receipt_absent_now': True,
+            'player_connected_and_bound_now': True, 'crafting_queue_empty_now': True,
+            'basis': 'current_paid_partial_output_buffer_next_component',
+            'native_prepare_rechecks_geometry_and_clearance': True,
+            'approach_and_placement_require_native_verification': True,
+            'flow_not_established': True}
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def buffer_fuel_start(snapshot, catalog, parameters):
+    """Current paid output arm can accept bounded coal to commission ready stock."""
+    try:
+        if (set(parameters) != {'role', 'item', 'quantity', 'receipt'}
+                or parameters['item'] != 'coal'):
+            return None
+        identity = (snapshot.session_id, snapshot.tick)
+        runtime = snapshot.factory.get('acceptance_runtime', {})
+        receipts = snapshot.factory.get('receipts')
+        if (snapshot.game_version != catalog.version or not isinstance(catalog.version, str)
+                or not catalog.version.startswith('2.0.')
+                or getattr(snapshot, '_atomic_inventory_verified', None) != identity
+                or getattr(snapshot, '_coherent_observation_verified', None) != identity
+                or snapshot.factory.get('observation_snapshot_schema') != 2
+                or snapshot.factory.get('tick') != snapshot.tick
+                or runtime.get('schema') != 1 or runtime.get('session_id') != snapshot.session_id
+                or runtime.get('mods', {}).get('base') != catalog.version
+                or runtime.get('speed') != 1 or runtime.get('tick_paused') is not False
+                or snapshot.factory.get('player_connected') is not True
+                or snapshot.factory.get('player_bound') is not True
+                or type(snapshot.factory.get('crafting_queue')) is not int
+                or snapshot.factory['crafting_queue'] != 0
+                or not isinstance(receipts, dict)):
+            return None
+        rows = sources(snapshot)
+        validate_commitments({source: {'source_unit': row['source_unit'],
+            'layout': row['layout'], 'parts': row['parts']} for source, row in rows.items()},
+            successors='successors' in snapshot.factory)
+        if any(paid['receipt'] == parameters['receipt']
+                for row in rows.values() for paid in row['parts'].values()):
+            return None
+        for source, row in rows.items():
+            paid = row.get('parts', {}).get('inserter', {})
+            if paid.get('role') != parameters['role']:
+                continue
+            if (not current(row, snapshot) or row.get('source') != source
+                    or row.get('item') != source.removeprefix('recipe:')
+                    or row.get('state') != 'ready' or row.get('topology') is not True
+                    or set(row['parts']) != set(PARTS)):
+                return None
+            machine = snapshot.factory['entities'][source]
+            if machine.get('name') != 'stone-furnace':
+                return None
+            for name, owner in row['parts'].items():
+                entity = snapshot.factory['entities'][owner['role']]
+                if entity.get('unit_number') != owner['unit_number'] or entity.get('name') != PARTS[name]:
+                    return None
+            arm = snapshot.factory['entities'][parameters['role']]
+            fuel = arm.get('fuel', {}).get('coal', 0)
+            capacity = arm.get('fuel_insertable', {}).get('coal')
+            carried, quantity = snapshot.inventory.get('coal'), parameters['quantity']
+            ready = machine.get('output', {}).get(row['item'])
+            receipt = parameters['receipt']
+            if (type(fuel) is not int or not 0 <= fuel < 2
+                    or type(capacity) is not int or capacity <= 0
+                    or type(carried) is not int or carried < 1
+                    or type(quantity) is not int or not 0 < quantity <= min(carried, 5-fuel, capacity)
+                    or type(ready) is not int or ready < 1
+                    or receipt != f'{snapshot.tick}:factory_insert:{parameters["role"]}:coal'
+                    or receipt in receipts):
+                return None
+            return {'observed_tick': snapshot.tick, 'session_id': snapshot.session_id,
+                'native_catalog_version': catalog.version, 'source_role': source,
+                'source_unit': row['source_unit'], 'source_item': row['item'],
+                'layout': row['layout'], 'paid_parts': row['parts'],
+                'burner_role': parameters['role'], 'burner_unit': paid['unit_number'],
+                'fuel_now': fuel, 'fuel_insertable_now': capacity,
+                'coal_in_inventory_now': carried, 'coal_to_transfer': quantity,
+                'current_coal_deficit': min(5-fuel, capacity), 'ready_source_output_now': ready,
+                'native_receipt': receipt, 'actor_inventory_now': dict(snapshot.inventory),
+                'native_receipt_query': {'schema': 1, 'session_id': snapshot.session_id,
+                    'tick': snapshot.tick, 'receipt': receipt, 'present': False,
+                    'map_verified': True, 'receipt_count': len(receipts)},
+                'basis': 'current_paid_output_buffer_arm_commissioning',
+                'planned_receipt_absent_now': True, 'player_connected_and_bound_now': True,
+                'crafting_queue_empty_now': True,
+                'native_transfer_and_later_flow_require_verification': True,
+                'flow_not_established': True}
+        return None
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
 class OutputBufferPlanner(ReadyWorkPlanner):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)

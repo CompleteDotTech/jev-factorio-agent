@@ -494,6 +494,47 @@ def _local_fuel_recipe_dependency(snapshot, catalog, plan, fuel_transfer_start):
     }
 
 
+def _buffer_build_start_evidence(snapshot, catalog, plan):
+    if len(plan.steps) != 1 or plan.steps[0].action != 'factory_buffer_build':
+        return None
+    from .output_buffers import buffer_build_start
+    step = plan.steps[0]
+    proof = buffer_build_start(snapshot, catalog, step.parameters)
+    if (proof is None or step.effect != 'buffer_component'
+            or step.costs != {proof['component_item']: 1}
+            or not step.allowed(snapshot) or step.satisfied(snapshot)):
+        return None
+    return proof
+
+
+def _buffer_fuel_start_evidence(snapshot, catalog, plan):
+    if len(plan.steps) != 1 or plan.steps[0].action != 'factory_insert':
+        return None
+    from .output_buffers import buffer_fuel_start
+    step = plan.steps[0]
+    proof = buffer_fuel_start(snapshot, catalog, step.parameters)
+    service = (plan.materials or {}).get('fuel_service', {})
+    if not isinstance(service, dict):
+        return None
+    consumers = service.get('consumers')
+    if proof is None or not isinstance(consumers, list) or not consumers:
+        return None
+    primary = consumers[0]
+    if (step.effect != 'transfer' or step.costs != {'coal': proof['coal_to_transfer']}
+            or service.get('schema') != 2 or service.get('observed_tick') != snapshot.tick
+            or type(service.get('consumer_count')) is not int
+            or service['consumer_count'] != len(consumers)
+            or service.get('acquisition_performed_by_this_plan') is not False
+            or primary != {'role': proof['burner_role'], 'fuel': proof['fuel_now'],
+                'target': proof['fuel_now']+proof['current_coal_deficit'],
+                'deficit': proof['current_coal_deficit'], 'insertable': proof['fuel_insertable_now']}
+            or type(service.get('carried_spendable')) is not int
+            or proof['coal_to_transfer'] != min(proof['current_coal_deficit'], service['carried_spendable'])
+            or not step.allowed(snapshot) or step.satisfied(snapshot)):
+        return None
+    return proof
+
+
 def _placement_start_evidence(snapshot, plan):
     if len(plan.steps) != 1 or plan.steps[0].action != 'factory_place':
         return None
@@ -620,7 +661,8 @@ def _utility_lab_research_dependency(snapshot, catalog, plan):
 def _utility_power_prerequisite_start_evidence(
         snapshot, catalog, plan, gather_start, local_target_completion, *,
         craft_start=None, recipe_input_transfer_start=None, output_pickup_start=None,
-        raw_prerequisite=None, fuel_prerequisite=None, fuel_transfer_start=None):
+        raw_prerequisite=None, fuel_prerequisite=None, fuel_transfer_start=None,
+        buffer_build_start=None, buffer_fuel_start=None):
     """Bind a power-chain prerequisite to a current consumer and native topology.
 
     This supports only the next planner-selected prerequisite. It never claims
@@ -933,7 +975,8 @@ def _utility_power_prerequisite_start_evidence(
     def child_start(kind, fields):
         witnesses = {name: deepcopy(value) for name, value in fields.items()}
         child_parameters = dict(step.parameters or {})
-        role_value = child_parameters.get('role')
+        role_value = child_parameters.get('role') or (child_parameters.get('source')
+            if step.action == 'factory_buffer_build' else None)
         path_value = next((value.get('planner_item_path') for value in witnesses.values()
                            if isinstance(value, dict)
                            and isinstance(value.get('planner_item_path'), list)), None)
@@ -996,7 +1039,12 @@ def _utility_power_prerequisite_start_evidence(
         # or a burner-furnace service transfer. These are accepted only from the
         # established same-tick witnesses; boiler fuel remains below and still
         # requires the complete, connected consumer chain.
-        if (isinstance(recipe_input_transfer_start, dict)
+        if (isinstance(buffer_fuel_start, dict)
+                and buffer_fuel_start == _buffer_fuel_start_evidence(snapshot, catalog, plan)):
+            action_kind = 'utility_chain_buffer_fuel_transfer_start'
+            child_evidence = child_start(action_kind, {
+                'buffer_fuel_start_evidence': buffer_fuel_start})
+        elif (isinstance(recipe_input_transfer_start, dict)
                 and recipe_input_transfer_start.get('observed_tick') == tick
                 and recipe_input_transfer_start.get('basis') ==
                     'current_planner_recipe_input_and_owned_native_machine'
@@ -1201,6 +1249,13 @@ def _utility_power_prerequisite_start_evidence(
             return None
         action_kind = 'utility_chain_handcraft_start'
         child_evidence = child_start(action_kind, {'craft_start_evidence': craft_start})
+    elif step.action == 'factory_buffer_build':
+        if (not isinstance(buffer_build_start, dict)
+                or buffer_build_start != _buffer_build_start_evidence(snapshot, catalog, plan)):
+            return None
+        action_kind = 'utility_chain_buffer_build_start'
+        child_evidence = child_start(action_kind, {
+            'buffer_build_start_evidence': buffer_build_start})
     elif step.action == 'factory_extract':
         if (not isinstance(output_pickup_start, dict)
                 or output_pickup_start.get('observed_tick') != tick
@@ -2952,6 +3007,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                 fuel_transfer_start['planner_item_path'] = list(
                     local_dependency['planner_item_path'])
                 fuel_transfer_start['local_recipe_dependency'] = local_dependency
+        buffer_build_start = _buffer_build_start_evidence(snapshot, catalog, plan)
+        buffer_fuel_start = _buffer_fuel_start_evidence(snapshot, catalog, plan)
         utility_power_start = _utility_power_prerequisite_start_evidence(
             snapshot, catalog, plan, gather_start, local_target_completion,
             craft_start=craft_start,
@@ -2959,7 +3016,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             output_pickup_start=output_pickup_start,
             raw_prerequisite=prerequisite_evidence,
             fuel_prerequisite=fuel_prerequisite,
-            fuel_transfer_start=fuel_transfer_start)
+            fuel_transfer_start=fuel_transfer_start,
+            buffer_build_start=buffer_build_start, buffer_fuel_start=buffer_fuel_start)
         if utility_power_start is not None:
             # This exact recompiled child is on the current power-consumer path.
             # It is an immediate prerequisite action, not predicted generation
@@ -2996,6 +3054,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'local_target_completion_evidence': local_target_completion,
             'shared_bill_craft': shared_bill_craft,
             'placement_start_evidence': placement_start,
+            'buffer_build_start_evidence': buffer_build_start,
+            'buffer_fuel_start_evidence': buffer_fuel_start,
             'placement_dependency': placement_dependency,
             'utility_lab_research_dependency': utility_lab_dependency,
             'utility_power_prerequisite_start_evidence': utility_power_start,
