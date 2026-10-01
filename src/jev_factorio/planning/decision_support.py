@@ -954,7 +954,7 @@ def _utility_power_prerequisite_start_evidence(
             'observed_tick': tick,
             'kind': kind,
             'action': step.action,
-            'item': (child_parameters.get('item') if step.action == 'factory_insert'
+            'item': (child_parameters.get('item') if step.action in {'factory_insert', 'factory_extract'}
                      else step.item),
             'role': role_value or child_parameters.get('resource'),
             'quantity': child_parameters.get('quantity'),

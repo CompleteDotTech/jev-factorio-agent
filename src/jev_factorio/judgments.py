@@ -243,7 +243,7 @@ def _qualified_power_child(step, row, evidence, tick):
     if (step.action != action or child.get('action') != action or child.get('kind') != kind
             or type(child.get('observed_tick')) is not int or child['observed_tick'] != tick
             or child.get('item') != (parameters.get('item')
-                                     if action == 'factory_insert' else step.item)
+                                     if action in {'factory_insert', 'factory_extract'} else step.item)
             or child.get('role') != (parameters.get('role') or parameters.get('resource'))
             or child.get('quantity') != parameters.get('quantity')
             or child.get('step_costs') != (step.costs or {})
@@ -1474,6 +1474,31 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "Verify each action normally and reevaluate from a fresh native observation."
                 if qualified_research_trigger else ""
             )
+            # Reuse the same qualifications for independent eligibility and
+            # magnitude; score-level guidance belongs only to magnitude.
+            contribution_hint = (
+                raw_gather_hint + direct_parent_hint + craft_hint + bill_craft_hint
+                + place_hint + fuel_hint + utility_lab_hint + power_hint
+                + transfer_hint + input_hint + outpost_kit_hint + pickup_hint
+                + research_trigger_hint
+            )
+            usefulness_contribution_hint = ''
+            if power_hint:
+                usefulness_contribution_hint += (
+                    ' `utility_power_prerequisite_start_evidence` binds this exact bounded child action '
+                    'to a same-tick current consumer demand and paid native prerequisite '
+                    'path; preparation need not already supply operating power. The '
+                    'receipt and fresh postcondition checks still apply, and contrary '
+                    'current facts can make usefulness unsupported.'
+                )
+            if pickup_hint:
+                usefulness_contribution_hint += (
+                    ' `output_pickup_start_evidence` binds already observed output at an '
+                    'owned native machine, its current planner path, bounded quantity '
+                    'and planned receipt. Collecting it can supply a bounded useful '
+                    'intermediate; the pickup and inventory delta still need verification. '
+                    'Contrary current facts can make usefulness unsupported.'
+                )
             questions[plan.id + "/useful_progress"] = {
                 "type": "choice",
                 "criteria": {
@@ -1492,7 +1517,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "evidence. A planner proposal or future unverified result alone is not proof. "
                     "Report confidence in this usefulness choice, not in completing the game. "
                     "This judgment does not authorize execution or waive native checks."
-                    + direct_parent_hint
+                    + direct_parent_hint.replace(' (level 1)', '')
+                    + usefulness_contribution_hint
                 ),
             }
             questions[plan.id + "/benefit"] = {
@@ -1503,9 +1529,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "from one bounded local production action. A current "
                     "`raw_prerequisite` is evidence that gathering supplies an input to "
                     "the named native recipe, not that the later craft already happened."
-                    + raw_gather_hint + direct_parent_hint + craft_hint + bill_craft_hint + place_hint + fuel_hint
-                    + utility_lab_hint + power_hint + transfer_hint + input_hint
-                    + outpost_kit_hint + pickup_hint + research_trigger_hint
+                    + contribution_hint
                     + local_target_completion_hint
                 ),
                 "criteria": ([

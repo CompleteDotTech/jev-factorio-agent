@@ -1368,6 +1368,7 @@ def test_ready_owned_output_pickup_has_current_start_facts_without_claiming_tran
     assert len(json.dumps({'state': context, 'questions': questions},
                           ensure_ascii=False, allow_nan=False).encode('utf-8')) <= 32000
     assert 'bounded useful intermediate' in questions[plan.id + '/benefit']['instructions']
+    assert 'bounded useful intermediate' in questions[plan.id + '/useful_progress']['instructions']
     assert 'future pickup and inventory delta' in questions[
         plan.id + '/needs_observation']['instructions']
 
@@ -1378,6 +1379,8 @@ def test_ready_owned_output_pickup_has_current_start_facts_without_claiming_tran
         {'facts': state.for_jev(), **stale_support}, [plan])
     assert 'bounded useful intermediate' not in stale_questions[
         plan.id + '/benefit']['instructions']
+    assert 'bounded useful intermediate' not in stale_questions[
+        plan.id + '/useful_progress']['instructions']
     assert 'future pickup and inventory delta' not in stale_questions[
         plan.id + '/needs_observation']['instructions']
 
