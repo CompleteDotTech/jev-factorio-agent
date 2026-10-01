@@ -363,7 +363,11 @@ class OutputBufferPlanner(ReadyWorkPlanner):
                 return self._wait("machine_output", item, max(1, target), row["chest_role"],
                                   timeout=7200, identity=f"collect:{row['layout']}:{target}")
             output = next(entry["amount"] for entry in recipe["products"] if entry["name"] == item)
-            prerequisite = self._production(recipe, row["source"], min(20, math.ceil(missing / output)), path)
+            # The owned-buffer branch bypasses FactoryPlanner._need's normal
+            # product visit. Retain that recipe edge for its immediate input
+            # gather/transfer and apply the same recursive-cycle guard.
+            production_path = self._visit("item:" + item, path)
+            prerequisite = self._production(recipe, row["source"], min(20, math.ceil(missing / output)), production_path)
             return prerequisite or self._wait("machine_output", item, min(10, missing), row["chest_role"],
                                               timeout=7200, identity=f"collect:{row['layout']}:{missing}")
         return super()._need(item, amount, path)
@@ -378,6 +382,9 @@ class OutputBufferPlanner(ReadyWorkPlanner):
                 }):
             return [primary] if self._buffer_service else [service_visit(self, primary)]
         candidates = [primary]
+        partial = self._partial_current_target_craft()
+        if partial is not None:
+            candidates.append(partial)
         for item, amount in list(sorted(self.targets.items()))[:32]:
             if self.snapshot.inventory.get(item, 0) >= amount:
                 continue

@@ -971,7 +971,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
             gather_step = plan.steps[0] if len(plan.steps) == 1 else None
             gather_parameters = gather_step.parameters if gather_step is not None else None
             qualified_raw_gather = (
-                len(selected) == 1 and gather_step is not None
+                gather_step is not None
                 and gather_step.action == 'factory_gather'
                 and gather_step.effect == 'inventory'
                 and gather_step.costs in (None, {})
@@ -999,6 +999,13 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 and bool(raw['direct_recipe'])
                 and gather_start.get('resource_in_current_observation') is True
                 and gather_start.get('fair_target_identity_observed') is True
+                and gather_start.get('observed_tick') == tick
+                and isinstance(facts.get('session_id'), str) and bool(facts['session_id'])
+                and gather_start.get('session_id') == facts['session_id']
+                and isinstance(facts.get('inventory'), dict)
+                and type(facts['inventory'].get(gather_step.item, 0)) is int
+                and facts['inventory'].get(gather_step.item, 0) ==
+                    gather_start.get('resource_inventory_now')
                 and gather_start.get('travel_is_lower_bound_not_arrival_proof') is True
                 and type(gather_start.get('resource_inventory_now')) is int
                 and gather_start['resource_inventory_now'] >= 0
@@ -1018,10 +1025,11 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "Use level 2 only with an independent current blocker fact. "
                 "A contrary current fact can lower the score. Native harvest and "
                 "later recipe steps still require fresh verification."
-                if qualified_raw_gather else "")
+                if qualified_raw_gather and len(selected) == 1 else "")
             target_completion = row.get('local_target_completion_evidence')
             local_target = row.get('local_target')
             local_target_completion_hint = ""
+            current_target_craft_usefulness_hint = ""
             target_step = plan.steps[0] if len(plan.steps) == 1 else None
             if target_step is not None:
                 parameters = target_step.parameters if isinstance(target_step.parameters, dict) else {}
@@ -1095,6 +1103,35 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     and target_dependency.get('basis') ==
                         'current_recursive_planner_provenance_and_native_recipe')
                 if qualified_target_completion:
+                    inventory = facts.get('inventory')
+                    factory = facts.get('factory')
+                    costs = target_step.costs
+                    if (isinstance(inventory, dict) and isinstance(costs, dict) and costs
+                            and isinstance(factory, dict)
+                            and factory.get('player_connected') is True
+                            and factory.get('player_bound') is True
+                            and type(factory.get('crafting_queue')) is int
+                            and factory['crafting_queue'] == 0
+                            and type(factory.get('craft_jobs_protocol')) is int
+                            and factory['craft_jobs_protocol'] == 1
+                            and local_target.get('inventory_target') == current_target
+                            and type(inventory.get(target, 0)) is int
+                            and inventory.get(target, 0) == current
+                            and 0 < expected_output < shortfall
+                            and all(isinstance(item, str) and bool(item)
+                                    and type(amount) is int and amount > 0
+                                    and type(inventory.get(item, 0)) is int
+                                    and inventory.get(item, 0) >= amount
+                                    for item, amount in costs.items())):
+                        current_target_craft_usefulness_hint = (
+                            " `local_target_completion_evidence` binds this direct craft to "
+                            "the same-tick current target, carried stock and native recipe "
+                            "output. Its currently carried ingredients can supply a useful "
+                            "partial target batch; the remaining shortfall stays open. This "
+                            "does not establish crafted inventory, target completion, blocker "
+                            "removal or future research. Output requires the native receipt "
+                            "and fresh postcondition; contrary current facts can make "
+                            "usefulness unsupported.")
                     closes = target_completion[
                         'would_close_current_shortfall_if_native_receipt_verifies']
                     if closes:
@@ -1796,6 +1833,17 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 + research_trigger_hint + component_hint + buffer_build_hint + buffer_fuel_hint
             )
             usefulness_contribution_hint = ''
+            if qualified_raw_gather:
+                usefulness_contribution_hint += (
+                    ' `raw_prerequisite` binds this bounded gather to the same-tick '
+                    'current local target through a validated native recipe input path. '
+                    '`gather_start_evidence` binds its observed resource, fair target '
+                    'and current carried raw inventory. Gathering can supply a useful '
+                    'recipe input; it does not establish harvested inventory, later '
+                    'recipe output, target completion or removal of a blocker. Harvest '
+                    'and subsequent steps require fresh native verification. Contrary '
+                    'current facts can make usefulness unsupported.'
+                )
             if power_hint:
                 usefulness_contribution_hint += (
                     ' `utility_power_prerequisite_start_evidence` binds this exact bounded child action '
@@ -1832,6 +1880,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "This judgment does not authorize execution or waive native checks."
                     + direct_parent_hint.replace(' (level 1)', '')
                     + usefulness_contribution_hint
+                    + current_target_craft_usefulness_hint
                     + component_hint
                     + buffer_build_hint
                     + buffer_fuel_hint
