@@ -26,6 +26,16 @@ calibrated comparison of the economic values of different items. Both model and
 fallback see the same ranked, admitted frontier; urgent candidates are considered
 before byte-budget trimming. No new action is invented by this ranking.
 
+When the entire frontier is the single `background-wait:` candidate for a
+tracked native craft (offered only when no independent ready work exists), there
+is nothing to choose or to judge useful, and a model call can only abstain or
+reject it. `select_plan` therefore selects it without a call
+(`source: passive-wait`, `model_called: false`, diagnostics `model_skipped` and
+`passive_wait`). Persistence is unchanged: the write-ahead attempt and any
+one-use source authorization are recorded for that fingerprint before this
+selection, exactly as for a model decision. Buffer and capital waits, and a wait
+offered next to other work, are still judged by the model.
+
 Identical executable alternatives collapse after the existing failure-budget
 filter. The retained plan keeps its original identity, and different receipt
 identities remain distinct. The compiler's capability, output-lock, ownership,

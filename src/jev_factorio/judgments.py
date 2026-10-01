@@ -1639,6 +1639,24 @@ def benefit_gate(answer: dict, confidence_floor: float) -> dict:
     }
 
 
+def is_lone_passive_background_wait(plans) -> bool:
+    """True only for the sole candidate being the tracked craft's passive wait.
+
+    The background planner offers this plan only when no independent ready work
+    exists, and it is a single observation-only ``factory_wait`` on the crafting
+    queue. There is nothing to choose between and nothing to judge useful:
+    asking the model can only abstain or reject, and the rejection used to end
+    the run while the craft completed. Other waits (buffer, capital) keep their
+    own ids and are judged as before.
+    """
+    if len(plans) != 1:
+        return False
+    plan = plans[0]
+    return (isinstance(plan.id, str) and plan.id.startswith("background-wait:")
+            and len(plan.steps) == 1 and plan.steps[0].action == "factory_wait"
+            and plan.steps[0].effect == "crafting_idle")
+
+
 def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float = 0.45,
                 max_bytes: int = DEFAULT_MAX_REQUEST_BYTES, *, prepared_batch=None) -> Decision:
     _number(confidence_floor)
@@ -1675,6 +1693,15 @@ def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float 
                    "pruned_candidate_ids": [p.id for p in plans if p not in offered],
                    "request_bytes": request_bytes, "max_request_bytes": max_bytes,
                    "candidate_rejections": {}}
+    if is_lone_passive_background_wait(plans) and [p.id for p in offered] == [plans[0].id]:
+        # No model call: the write-ahead attempt and any one-use source
+        # authorization were already recorded by the caller for this exact
+        # fingerprint, so persistence and audit are unchanged.
+        return Decision(plans[0].id, "passive-wait",
+                        "Only the tracked craft's passive wait is available; nothing to judge",
+                        context, questions, model_called=False,
+                        diagnostics={**diagnostics, "outcome": "selected",
+                                     "model_skipped": True, "passive_wait": True})
     try:
         answers = client.evaluate(context, questions)
     except ProviderBlocked as error:

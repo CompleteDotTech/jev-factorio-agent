@@ -491,3 +491,47 @@ def test_disruption_and_choice_gates_are_unchanged_by_the_usefulness_rule():
     assert rejected.plan_id is None
     assert all("low_disruption_confidence" in reasons
                for reasons in rejected.diagnostics["candidate_rejections"].values())
+
+
+def _wait_plan(plan_id="background-wait:123:factory_craft_job:iron-gear-wheel"):
+    from jev_factorio.skills import Step
+    return Plan(plan_id, "stockpile_fuel", "observe the tracked native crafting queue",
+                (Step("factory_wait", "crafting_idle", timeout_ticks=300),))
+
+
+class ExplodingClient:
+    def evaluate(self, state, questions):
+        raise AssertionError("a lone passive wait must not call the model")
+
+
+def test_lone_passive_background_wait_is_selected_without_a_model_call():
+    plan = _wait_plan()
+    context, questions, offered = question_batch({}, [plan])
+    decision = select_plan(ExplodingClient(), {}, [plan],
+                           prepared_batch=(context, questions, offered))
+    assert decision.plan_id == plan.id and decision.source == "passive-wait"
+    assert decision.model_called is False
+    assert decision.diagnostics["outcome"] == "selected"
+    assert decision.diagnostics["model_skipped"] is True
+    assert decision.diagnostics["passive_wait"] is True
+    # The unprepared path behaves the same way.
+    assert select_plan(ExplodingClient(), {}, [plan]).plan_id == plan.id
+
+
+def test_passive_wait_skip_is_limited_to_the_sole_background_wait():
+    from jev_factorio.judgments import is_lone_passive_background_wait
+    from jev_factorio.skills import Step
+    wait = _wait_plan()
+    other, _, _ = batch()
+    assert is_lone_passive_background_wait([wait]) is True
+    assert is_lone_passive_background_wait([wait, other[0]]) is False
+    assert is_lone_passive_background_wait([]) is False
+    assert is_lone_passive_background_wait([_wait_plan("buffer-wait:1")]) is False
+    two_steps = Plan(wait.id, wait.goal, "x", (wait.steps[0], wait.steps[0]))
+    assert is_lone_passive_background_wait([two_steps]) is False
+    assert is_lone_passive_background_wait([Plan(
+        wait.id, wait.goal, "x", (Step("mine_coal", "inventory", "coal", 5),))]) is False
+    # A wait next to other work is still judged by the model as before.
+    decision = select_plan(MockJevClient(), {}, [wait, other[0]])
+    assert decision.model_called is True
+
