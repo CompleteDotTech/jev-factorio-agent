@@ -82,6 +82,74 @@ def test_low_confidence_or_missing_evidence_abstains():
     assert select_plan(MissingEvidence(), context, plans).plan_id is None
 
 
+def test_low_choice_reports_the_other_rejections_in_the_native_failure():
+    """Sanitized 0161 response: the near-tie did not contain eligible plans."""
+    plans = [Plan(name, "stockpile_fuel", "gather",
+                  (Step("mine_coal", "inventory", "coal", 5),))
+             for name in ("direct", "investment")]
+
+    class CapturedConfidence(MockJevClient):
+        calls = 0
+
+        def evaluate(self, state, questions):
+            self.calls += 1
+            answers = super().evaluate(state, questions)
+            answers["candidate"] = {
+                "type": "choice", "choice": "direct", "confidence": 0.34,
+                "probabilities": {"direct": 0.56, "investment": 0.41, "observe": 0.03},
+            }
+            answers["direct/useful_progress"] = {
+                "type": "choice", "choice": "useful", "confidence": 0.26,
+                "probabilities": {"useful": 0.63, "unsupported": 0.37},
+            }
+            answers["investment/useful_progress"] = {
+                "type": "choice", "choice": "unsupported", "confidence": 0.42,
+                "probabilities": {"useful": 0.29, "unsupported": 0.71},
+            }
+            _benefit_answers(answers, "direct", {"0": 0.04, "1": 0.72, "2": 0.24}, 0.57)
+            _benefit_answers(answers, "investment", {"0": 0.42, "1": 0.56, "2": 0.02}, 0.35)
+            return answers
+
+    client = CapturedConfidence()
+    decision = select_plan(client, {}, plans)
+    assert client.calls == 1
+    assert decision.plan_id is None and decision.utilities == {}
+    assert decision.source == "observe" and decision.reason == "low choice confidence"
+    assert decision.diagnostics["outcome"] == "low_choice_confidence"
+    assert decision.diagnostics["candidate_rejections"] == {
+        "direct": ["low_usefulness_confidence"],
+        "investment": ["no_demonstrated_progress"],
+    }
+    assert decision.diagnostics["usefulness_gate"]["direct"] == {
+        "choice": "useful", "confidence": 0.26, "floor": 0.45, "passed": False,
+    }
+    assert decision.diagnostics["benefit_gate"]["direct"]["eligibility_authority"] is False
+
+
+@pytest.mark.parametrize("abstain", [False, True])
+def test_global_choice_rejection_still_blocks_independently_qualified_plans(abstain):
+    plans, context, _ = batch()
+
+    class GlobalRejection(MockJevClient):
+        def evaluate(self, state, questions):
+            answers = super().evaluate(state, questions)
+            choice = answers["candidate"]
+            if abstain:
+                choice["choice"] = "observe"
+                choice["probabilities"] = {name: float(name == "observe")
+                                           for name in choice["probabilities"]}
+            else:
+                choice["confidence"] = 0.34
+            return answers
+
+    decision = select_plan(GlobalRejection(), context, plans)
+    assert decision.plan_id is None and decision.utilities == {}
+    assert decision.diagnostics["outcome"] == (
+        "model_abstention" if abstain else "low_choice_confidence")
+    assert decision.diagnostics["candidate_rejections"] == {}
+    assert all(gate["passed"] for gate in decision.diagnostics["usefulness_gate"].values())
+
+
 def test_request_count_and_byte_budget_are_bounded():
     plans = [Plan(str(i), "fuel", "gather", (Step("mine_coal", "inventory", "coal", 5),))
              for i in range(300)]
