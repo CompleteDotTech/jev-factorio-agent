@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 from dataclasses import replace
 
 from ..mining_outposts import (COMMAND, PARTS, RESOURCES, current, flow_complete,
@@ -20,6 +21,61 @@ class MiningOutpostPlanner(InputRoutePlanner):
         self._outpost_acquiring = False
         # Plan id -> the (item, amount, path) whose proposed-outpost investment it answers.
         self._proposed_outposts = {}
+
+    def _remember_proposed_outpost(self, plan, item, amount, path):
+        """Retain the current parent purpose for a possible direct alternative.
+
+        This is planner provenance only. Decision support rechecks it against
+        the candidate pair and current native snapshot before using it as
+        immediate-work evidence.
+        """
+        materials = plan.materials or {}
+        local = materials.get('local_objective')
+        intent = materials.get('work_intent')
+        item_path = [entry.removeprefix('item:') for entry in path
+                     if isinstance(entry, str) and entry.startswith('item:')]
+        if item_path[-1:] != [item]:
+            item_path.append(item)
+        parameters = plan.steps[0].parameters or {}
+        proposal_request = {
+            'schema': 1,
+            'observed_tick': self.snapshot.tick,
+            'resource': item,
+            'requested_amount': amount,
+            'layout': parameters.get('layout'),
+            'planner_item_path': item_path,
+        }
+        parent_purpose = None
+        if (isinstance(local, dict) and isinstance(local.get('item'), str)
+                and local['item'] and type(local.get('inventory_target')) is int
+                and local['inventory_target'] > 0
+                and isinstance(intent, dict)
+                and intent.get('scope') == 'immediate'
+                and intent.get('observed_tick') == self.snapshot.tick
+                and item_path[:1] == [local['item']]
+                and item_path[-1:] == [item]
+                and len(item_path) <= 32):
+            parent_purpose = {
+                'schema': 1,
+                'observed_tick': self.snapshot.tick,
+                'local_objective': deepcopy(local),
+                'work_intent': deepcopy(intent),
+                'proposed_outpost_request': deepcopy(proposal_request),
+            }
+            power = materials.get('utility_power_prerequisite')
+            if isinstance(power, dict):
+                parent_purpose['utility_power_prerequisite'] = deepcopy(power)
+            economics = materials.get('economics')
+            if isinstance(economics, dict):
+                parent_purpose['economics'] = deepcopy(economics)
+        materials = dict(materials)
+        materials['proposed_outpost_request'] = proposal_request
+        plan = replace(plan, materials=materials)
+        self._proposed_outposts[plan.id] = {
+            'item': item, 'amount': amount, 'path': tuple(path),
+            'parent_purpose': parent_purpose,
+        }
+        return plan
 
     def _acquire_outpost(self, item, amount, path):
         previous = (self._outpost_acquiring, self._acquiring_route,
@@ -157,8 +213,8 @@ class MiningOutpostPlanner(InputRoutePlanner):
                         # A kit prerequisite chosen for a policy investment is
                         # equally a lone infrastructure primary (for example a
                         # handcraft), so it also needs the direct alternative.
-                        self._proposed_outposts[prerequisite.id] = {
-                            'item': item, 'amount': requested_amount, 'path': tuple(path)}
+                        prerequisite = self._remember_proposed_outpost(
+                            prerequisite, item, requested_amount, path)
                     return prerequisite
             spec = next(s for s in row['steps'] if s['part'] not in row['parts'])
             plan = self._plan(COMMAND, 'outpost_component', parameters={
@@ -170,8 +226,7 @@ class MiningOutpostPlanner(InputRoutePlanner):
             if row['state'] == 'proposed':
                 # The planner chose this speculative investment by policy over the
                 # direct path; remember the request so the alternative can be offered.
-                self._proposed_outposts[plan.id] = {
-                    'item': item, 'amount': requested_amount, 'path': tuple(path)}
+                plan = self._remember_proposed_outpost(plan, item, requested_amount, path)
             return plan
         if not row['topology']:
             self._buffer_service = True
@@ -236,13 +291,30 @@ class MiningOutpostPlanner(InputRoutePlanner):
             return plans
         prefix = (f"Next production batch: {self.focus[1]} {self.focus[0]}. "
                   if self.focus else "")
+        direct_marker = {
+            'schema': 2, 'observed_tick': self.snapshot.tick,
+            'resource': context['item'], 'requested_amount': context['amount'],
+            'investment_plan_id': primary.id,
+            'basis': 'planner_policy_investment_has_no_native_payback_evidence',
+        }
+        proposal_request = (primary.materials or {}).get('proposed_outpost_request')
+        if isinstance(proposal_request, dict):
+            direct_marker['proposed_outpost_request'] = deepcopy(proposal_request)
+        if context.get('parent_purpose') is not None:
+            direct_marker['parent_purpose'] = deepcopy(context['parent_purpose'])
+        step = alternative.steps[0]
+        if step.action == 'factory_gather':
+            parameters = step.parameters or {}
+            direct_marker['compiled_gather_target'] = {
+                'resource': parameters.get('resource'),
+                'quantity': parameters.get('quantity'),
+                'inventory_target': step.threshold,
+                'ready_work_raw_target': worker.raw_targets.get(context['item']),
+                'basis': 'speculative_worker_current_raw_target',
+            }
         alternative = replace(alternative, description=prefix + alternative.description, materials={
             **(alternative.materials or {}),
-            'direct_alternative_to_proposed_outpost': {
-                'schema': 1, 'observed_tick': self.snapshot.tick,
-                'resource': context['item'], 'requested_amount': context['amount'],
-                'investment_plan_id': primary.id,
-                'basis': 'planner_policy_investment_has_no_native_payback_evidence'}})
+            'direct_alternative_to_proposed_outpost': direct_marker})
         return [*plans, service_visit(self, alternative)]
 
     def candidates(self):
