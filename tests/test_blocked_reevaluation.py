@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -516,9 +516,10 @@ def test_authorized_reevaluation_is_consumed_by_a_model_free_passive_wait(
             blocked_source_revision=OLD_SOURCE)
 
 
+@pytest.mark.parametrize('stalled', [0, 1])
 def test_persistent_block_below_threshold_is_reevaluated_and_commits_a_passive_wait(
-        tmp_path, monkeypatch):
-    """The live post-0173 shape: persistent ledger, one stalled decision, lone craft wait."""
+        tmp_path, monkeypatch, stalled):
+    """Persisted blocks remain valid after a verified craft resets the streak."""
     from jev_factorio import controller, judgments
 
     wait = Plan("background-wait:1:factory_craft_job:pipe", "bootstrap_mining",
@@ -527,7 +528,7 @@ def test_persistent_block_below_threshold_is_reevaluated_and_commits_a_passive_w
     prior = {"commit": "1" * 40, "source_sha256": "b" * 64}
     backend, checkpoint, _sha, _original, loop = _make_loop(
         tmp_path, monkeypatch, selection=lambda _snapshot: [wait], persistent=True,
-        stalled=1, prior_ledger_source=prior)
+        stalled=stalled, prior_ledger_source=prior)
     monkeypatch.setattr(controller, "select_plan", judgments.select_plan)
 
     loop.step()
@@ -536,6 +537,50 @@ def test_persistent_block_below_threshold_is_reevaluated_and_commits_a_passive_w
     assert loop.memory.status == "running" and loop._reevaluate_blocked_once is False
     saved = CampaignMemory.load(checkpoint, backend.session_id, "bootstrap_mining")
     assert [e["state"] for e in saved.blocked_reevaluations] == ["consumed"]
+    assert saved.blocked_reevaluations[0]['stalled_decisions'] == stalled
     assert saved.blocked_recovery["source_revision"]["commit"] == "2" * 40
     assert saved.blocked_recovery["attempts"][-1]["outcome"] == "selected"
-
+    consumed = saved.blocked_reevaluations
+    saved.save(checkpoint)
+    assert CampaignMemory.load(checkpoint, backend.session_id,
+                               'bootstrap_mining').blocked_reevaluations == consumed
+    # The live campaign loads through every composed checkpoint extension.
+    # Exercise the public loader, retaining a paid buffer owner and history.
+    from jev_factorio.background import BackgroundWorkLoop
+    from jev_factorio.buffer_controller import buffered_loop_type
+    from jev_factorio.input_controller import input_loop_type
+    from jev_factorio.outpost_controller import outpost_loop_type
+    from jev_factorio.solid_controller import solid_loop_type
+    from jev_factorio.coal_controller import coal_loop_type
+    from jev_factorio.memory import load_checkpoint
+    full_loop = coal_loop_type(solid_loop_type(outpost_loop_type(
+        input_loop_type(buffered_loop_type(BackgroundWorkLoop)))))
+    full = full_loop.memory_type(**asdict(saved))
+    full.solid_epoch = {'actor_index': 1, 'surface_index': 1, 'force_index': 1}
+    full.coal_epoch = dict(full.solid_epoch)
+    full.coal_targets = ['utility:boiler', 'recipe:copper-plate']
+    full.solid_intents = [{'source': 'coal:' + target + ':chest',
+                          'target': target, 'item': 'coal', 'destination': 'fuel'}
+                         for target in full.coal_targets]
+    full.output_commitments = {'recipe:iron-plate': {
+        'source_unit': 44, 'layout': 'output:44:test', 'parts': {'chest': {
+            'role': 'output-chest:44', 'unit_number': 45,
+            'receipt': 'paid-chest-receipt', 'paid': 1}}}}
+    full_path = tmp_path / 'composed-checkpoint.json'
+    full.save(full_path)
+    reopened = load_checkpoint(full_path, backend.session_id, 'bootstrap_mining')
+    assert asdict(reopened) == asdict(full)
+    reopened.save(full_path)
+    assert asdict(load_checkpoint(full_path, backend.session_id,
+                                  'bootstrap_mining')) == asdict(full)
+    for invalid_count in (-1, True, False, '0', 0.0):
+        invalid = json.loads(checkpoint.read_bytes())
+        invalid['blocked_reevaluations'][0]['stalled_decisions'] = invalid_count
+        with pytest.raises(ValueError, match='Invalid blocked-decision re-evaluation ledger entry'):
+            CampaignMemory.from_bytes(json.dumps(invalid).encode(),
+                                      backend.session_id, 'bootstrap_mining')
+    duplicate = json.loads(checkpoint.read_bytes())
+    duplicate['blocked_reevaluations'].append(dict(duplicate['blocked_reevaluations'][0]))
+    with pytest.raises(ValueError, match='Decision contract was already re-evaluated'):
+        CampaignMemory.from_bytes(json.dumps(duplicate).encode(),
+                                  backend.session_id, 'bootstrap_mining')
