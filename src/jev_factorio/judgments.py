@@ -1969,10 +1969,11 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "type": "score",
                 "instructions": (
                     f"How disruptive are the steps in {pointer} to the existing factory "
-                    "in `facts`, under `execution_contract`? Judge construction or "
-                    "alteration of infrastructure separately from uncertainty about "
-                    "approach, route clearance or execution success; native preconditions "
-                    "and postconditions still apply."
+                    "in `facts`, under `execution_contract`?" + (
+                        " Judge construction or alteration of infrastructure separately "
+                        "from uncertainty about approach, route clearance or execution "
+                        "success; native preconditions and postconditions still apply."
+                        if _native_additive_connection_contract(plan, facts) else "")
                 ),
                 "criteria": [
                     "Only moves, gathers resources, waits, fuels an existing machine, "
