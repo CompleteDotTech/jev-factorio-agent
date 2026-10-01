@@ -917,6 +917,35 @@ def test_pending_attempt_or_plan_still_ends_the_wait_with_a_tracked_job(tmp_path
     assert loop._persistent_block_active() is False
 
 
+def test_blocked_persistent_run_commits_a_lone_passive_wait_without_a_model_call(
+        tmp_path, monkeypatch):
+    import jev_factorio.controller as controller
+    from jev_factorio import judgments
+
+    loop, backend, checkpoint, requests, _ = _idle_loop(
+        tmp_path, monkeypatch, idle_observations=0)
+    monkeypatch.setattr(controller, "select_plan", judgments.select_plan)
+
+    def no_model(*_args, **_kwargs):
+        raise AssertionError("a lone passive wait must not call the model")
+
+    monkeypatch.setattr(loop.jev, "evaluate", no_model, raising=False)
+    wait = Plan("background-wait:1:factory_craft_job:iron-gear-wheel", "bootstrap_mining",
+                "Observe the tracked native crafting queue",
+                (Step("factory_wait", "crafting_idle", timeout_ticks=60),))
+    loop._work_candidates = lambda snapshot: ([wait], "")
+
+    loop.step()
+
+    assert requests == []
+    assert loop.memory.status != "blocked" and loop.terminal is False
+    events = [e for e in loop.memory.history if e.get("kind") == "plan_committed"]
+    assert events and events[-1]["plan"] == wait.id and events[-1]["source"] == "passive-wait"
+    rows = loop.memory.blocked_recovery["attempts"]
+    assert rows[-1]["outcome"] == "selected"  # recorded like any selection
+    assert loop._decision.model_called is False
+
+
 def _log_lines(path):
     import json
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]

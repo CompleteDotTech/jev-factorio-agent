@@ -147,12 +147,14 @@ def _checkpoint(path: Path, backend: FLEMockBackend, *, stalled=4,
 
 
 def _make_loop(tmp_path, monkeypatch, *, selection, max_stalled_decisions=4,
-               blocked_reason="Candidate evidence insufficient"):
+               blocked_reason="Candidate evidence insufficient", persistent=False):
     from jev_factorio import blocked_reevaluation
     import jev_factorio.controller as controller
 
     monkeypatch.setattr(blocked_reevaluation, "validate_source_revision", lambda _revision: dict(SOURCE))
-    monkeypatch.setattr(controller, "gameplay_context", lambda: {})
+    revision = {"commit": "2" * 40, "source_sha256": "c" * 64}
+    monkeypatch.setattr(controller, "gameplay_context",
+                        (lambda: {"code_revision": revision}) if persistent else (lambda: {}))
     backend = FLEMockBackend()
     checkpoint = tmp_path / "checkpoint.json"
     checkpoint_sha, original = _checkpoint(checkpoint, backend, reason=blocked_reason)
@@ -162,6 +164,8 @@ def _make_loop(tmp_path, monkeypatch, *, selection, max_stalled_decisions=4,
         max_stalled_decisions=max_stalled_decisions,
         reevaluate_blocked_once=True, exact_checkpoint_sha256=checkpoint_sha,
         blocked_source_revision=OLD_SOURCE,
+        **({"persist_recoverable_blocks": True, "persistent_idle_observations": 0}
+           if persistent else {}),
     )
     if loop._safety is not None:
         loop._safety.admission = lambda _memory, _snapshot: None
@@ -443,3 +447,33 @@ def test_operational_denial_does_not_consume_re_evaluation(gate, tmp_path, monke
     assert loop.memory.blocked_reevaluations == []
     assert loop._reevaluate_blocked_once is True
     assert backend.actions == []
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+def test_authorized_reevaluation_is_consumed_by_a_model_free_passive_wait(
+        tmp_path, monkeypatch, persistent):
+    from jev_factorio import controller, judgments
+
+    wait = Plan("background-wait:1:factory_craft_job:iron-gear-wheel", "bootstrap_mining",
+                "Observe the tracked native crafting queue",
+                (Step("factory_wait", "crafting_idle", timeout_ticks=60),))
+    backend, checkpoint, _sha, _original, loop = _make_loop(
+        tmp_path, monkeypatch, selection=lambda _snapshot: [wait], persistent=persistent)
+    monkeypatch.setattr(controller, "select_plan", judgments.select_plan)
+
+    loop.step()
+
+    assert loop._decision.model_called is False and loop._decision.plan_id == wait.id
+    assert loop.memory.status == "running" and loop._reevaluate_blocked_once is False
+    saved = CampaignMemory.load(checkpoint, backend.session_id, "bootstrap_mining")
+    assert [e["state"] for e in saved.blocked_reevaluations] == ["consumed"]
+    assert any(e.get("kind") == "plan_committed" and e["source"] == "passive-wait"
+               for e in saved.history)
+    # The authorization is spent and the checkpoint is no longer blocked.
+    with pytest.raises(ValueError, match="already consumed|quiescent eligible blocked"):
+        HierarchicalLoop(
+            FLEMockBackend(), jev=LiveSelectionClient(), policy="jev",
+            target="bootstrap_mining", checkpoint=str(checkpoint), resume_controller=True,
+            reevaluate_blocked_once=True,
+            exact_checkpoint_sha256=hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+            blocked_source_revision=OLD_SOURCE)
