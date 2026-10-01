@@ -1560,6 +1560,51 @@ def _current_item_dependency_path(snapshot, catalog, path, root, tail):
     return True
 
 
+def _buffer_component_start_evidence(snapshot, catalog, plan, craft_start, pickup_start):
+    """Verify the paid construction bridge separately from recipe ancestry."""
+    annotation = (plan.materials or {}).get('buffer_component_prerequisite')
+    if not isinstance(annotation, dict) or len(plan.steps) != 1:
+        return None
+    from .output_buffers import construction_pickup_bill
+    from ..output_buffers import sources as buffer_sources
+    try:
+        step = plan.steps[0]
+        item = (step.parameters or {}).get('item') if step.action == 'factory_extract' else step.item
+        expected = construction_pickup_bill(snapshot, catalog,
+            buffer_sources(snapshot).get(annotation.get('source_role')),
+            annotation.get('next_part'), item)
+        if annotation != expected or expected is None:
+            return None
+        if step.action == 'factory_extract':
+            if not isinstance(pickup_start, dict):
+                return None
+            path = pickup_start['planner_item_path']
+            component = expected['component_item']
+            index = path.index(component)
+            if (not 0 < pickup_start['planned_pickup_quantity'] <= min(50, expected['component_input_deficit'])
+                    or not _current_item_dependency_path(snapshot, catalog,
+                        path[index:], component, item)):
+                return None
+        elif step.action == 'factory_craft':
+            if (not isinstance(craft_start, dict)
+                    or craft_start != _craft_start_evidence(snapshot, catalog, step)
+                    or any(craft_start.get(key) is not True for key in (
+                        'input_costs_match_native_recipe', 'inputs_in_inventory_now',
+                        'recipe_unlocked_and_handcraftable', 'player_connected_and_bound',
+                        'crafting_queue_empty'))
+                    or not 0 < craft_start['expected_products_after_native_verification'].get(item, 0)
+                        <= expected['component_input_deficit']
+                    or not step.allowed(snapshot) or step.satisfied(snapshot)
+                    or getattr(snapshot, '_atomic_inventory_verified', None) !=
+                        (snapshot.session_id, snapshot.tick)):
+                return None
+        else:
+            return None
+        return expected
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
 def _ready_work_raw_target(snapshot, catalog, goal, local_item, local_target, resource):
     """Recompute the current raw-material horizon for a local ready-work target."""
     from .demand import SupplyLedger, horizon_demands
@@ -2945,6 +2990,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'fuel_prerequisite': fuel_prerequisite,
             'fuel_transfer_start_evidence': fuel_transfer_start,
             'craft_start_evidence': craft_start,
+            'buffer_component_prerequisite_start_evidence': _buffer_component_start_evidence(
+                snapshot, catalog, plan, craft_start, output_pickup_start),
             'craft_dependency': craft_dependency,
             'local_target_completion_evidence': local_target_completion,
             'shared_bill_craft': shared_bill_craft,

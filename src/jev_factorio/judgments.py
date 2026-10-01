@@ -432,6 +432,111 @@ def _json_identity(value):
                       separators=(",", ":"))
 
 
+def _qualified_buffer_component(facts, plan, proof, start, path, tick):
+    """Check a current paid construction bridge, not a target recipe edge."""
+    from .output_buffers import PARTS, SOURCES, SUCCESSOR_SOURCES, validate_commitments
+    from .planning.catalog import Catalog
+
+    try:
+        if len(plan.steps) != 1:
+            return False
+        step = plan.steps[0]
+        materials = plan.materials or {}
+        factory = facts['factory']
+        inventory = facts['inventory']
+        buffers = factory['output_buffers']
+        row = buffers['sources'][proof['source_role']]
+        part = proof['next_part']
+        component = proof['component_item']
+        item = proof['pickup_item']
+        required = proof['component_input_required']
+        carried = proof['actor_item_now']
+        deficit = proof['component_input_deficit']
+        if (not isinstance(proof, dict) or proof != materials.get('buffer_component_prerequisite')
+                or proof.get('basis') != 'current_paid_output_buffer_missing_component_bill'
+                or type(tick) is not int or type(proof.get('observed_tick')) is not int
+                or proof.get('observed_tick') != tick
+                or type(buffers.get('protocol')) is not int or buffers['protocol'] != 1
+                or buffers.get('session_id') != facts['session_id'] or buffers.get('tick') != tick
+                or proof.get('component_craft_build_and_flow_require_native_verification') is not True
+                or type(proof.get('component_quantity')) is not int or proof['component_quantity'] != 1
+                or part not in PARTS or PARTS[part] != component
+                or row.get('state') != 'building' or row.get('source') != proof['source_role']
+                or row.get('item') != row['source'].removeprefix('recipe:')
+                or row.get('source_unit') != proof['source_unit'] or row.get('layout') != proof['layout']
+                or row.get('parts') != proof['paid_parts'] or not row.get('parts')
+                or next((name for name in PARTS if name not in row['parts']), None) != part
+                or proof['actor_inventory_now'] != inventory
+                or type(required) is not int or type(carried) is not int or type(deficit) is not int
+                or not 0 <= carried < required <= 200 or deficit != required - carried
+                or inventory.get(item, 0) != carried
+                or not isinstance(path, list) or component not in path or path[-1] != item):
+            return False
+        if step.action == 'factory_extract':
+            if (item != start['ready_output_item']
+                    or type(start['planned_pickup_quantity']) is not int
+                    or not 0 < start['planned_pickup_quantity'] <= deficit):
+                return False
+        elif step.action == 'factory_craft':
+            if (item != step.item or start.get('observed_tick') != tick
+                    or start.get('native_recipe') != step.parameters.get('recipe')
+                    or type(step.parameters.get('batches')) is not int
+                    or step.parameters['batches'] < 1
+                    or any(start.get(key) is not True for key in (
+                        'input_costs_match_native_recipe', 'inputs_in_inventory_now',
+                        'recipe_unlocked_and_handcraftable', 'player_connected_and_bound',
+                        'crafting_queue_empty'))
+                    or type(start.get('expected_products_after_native_verification', {}).get(item)) is not int
+                    or not 0 < start['expected_products_after_native_verification'][item] <= deficit
+                    or any(inventory.get(name, 0) < count for name, count in step.costs.items())):
+                return False
+        else:
+            return False
+        owners = buffers['sources']
+        if not isinstance(owners, dict) or len(owners) > len(SOURCES | SUCCESSOR_SOURCES):
+            return False
+        validate_commitments({role: {
+            'source_unit': owner['source_unit'], 'layout': owner['layout'], 'parts': owner['parts']}
+            for role, owner in owners.items()}, successors=bool(set(owners) & SUCCESSOR_SOURCES))
+        if factory['entities'][row['source']]['unit_number'] != row['source_unit']:
+            return False
+        for name, paid in row['parts'].items():
+            entity = factory['entities'][paid['role']]
+            if entity['unit_number'] != paid['unit_number'] or entity['name'] != PARTS[name]:
+                return False
+        recipes = proof['native_recipes']
+        batches = proof['native_recipe_batches']
+        if (not isinstance(recipes, dict) or len(recipes) > 32
+                or not isinstance(batches, dict) or set(batches) != set(recipes)
+                or any(type(count) is not int or not 0 < count <= 200 for count in batches.values())):
+            return False
+        # The producer bound these native recipes to its current catalog. Here
+        # recompute the disclosed bill so altered quantities cannot gain hints.
+        version = facts['game_version']
+        if (not isinstance(version, str) or not version.startswith('2.0.')
+                or proof.get('native_catalog_version') != version):
+            return False
+        catalog = Catalog(version, recipes, {}, {}, {})
+        for name, recipe in recipes.items():
+            if (recipe.get('name') != name or recipe.get('hidden')
+                    or recipe.get('enabled') is not True):
+                return False
+        stock = dict(inventory)
+        stock[item] = 1000000
+        bill = catalog.material_plan(component, 1, stock, [])
+        if (bill.batches != batches or 1000000 - bill.remaining.get(item, 0) != required):
+            return False
+        start = path.index(component)
+        for product, ingredient in zip(path[start:], path[start + 1:]):
+            recipe = catalog.recipe_for(product)
+            if not any(entry.get('type') == 'item' and entry.get('name') == ingredient
+                       and entry.get('amount', 0) > 0 for entry in recipe['ingredients']):
+                return False
+        return path[-1] == item
+    except (ArithmeticError, KeyError, TypeError, ValueError, AttributeError, StopIteration):
+        return False
+
+
 def _compact_plan_documents(plans):
     """Factor identical large material records without deleting any evidence."""
     documents = {plan.id: plan.to_dict() for plan in plans}
@@ -1416,6 +1521,31 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "pickup receipt and player inventory delta still require verification."
                 if qualified_pickup else ""
             )
+            component_proof = row.get('buffer_component_prerequisite_start_evidence')
+            qualified_component = (
+                row.get('work_scope') == 'immediate' and row.get('unknowns') == []
+                and ((qualified_pickup and _qualified_buffer_component(
+                    facts, plan, component_proof, pickup_start, pickup_path, tick))
+                    or (qualified_intermediate_craft and _qualified_buffer_component(
+                        facts, plan, component_proof, craft_start, craft_path, tick))))
+            component_hint = (
+                " `buffer_component_prerequisite_start_evidence` discloses the current paid output-buffer "
+                "construction bridge: the next missing component, native recipe bill, carried "
+                "inventory and remaining input deficit. This action prepares that bounded "
+                "component requirement; this is a construction prerequisite along the planner path, "
+                "not a claim that the component is an ingredient of the local target recipe. "
+                "Component crafting, paid building and actual material flow still need native "
+                "verification. Contrary current facts can make usefulness unsupported."
+                if qualified_component else ""
+            )
+            if qualified_component and qualified_intermediate_craft:
+                craft_hint = (
+                    " `craft_start_evidence` records the current native recipe, actor readiness "
+                    "and carried inputs for this bounded craft. Its product prepares the "
+                    "current missing output-buffer component; the construction bridge is "
+                    "separate from the local target's native recipe ingredients. The craft "
+                    "and later paid construction still require fresh native verification."
+                )
             trigger_start = row.get('native_research_trigger_start_evidence')
             trigger_action = (trigger_start.get('action_start_facts')
                               if isinstance(trigger_start, dict) else None)
@@ -1480,7 +1610,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 raw_gather_hint + direct_parent_hint + craft_hint + bill_craft_hint
                 + place_hint + fuel_hint + utility_lab_hint + power_hint
                 + transfer_hint + input_hint + outpost_kit_hint + pickup_hint
-                + research_trigger_hint
+                + research_trigger_hint + component_hint
             )
             usefulness_contribution_hint = ''
             if power_hint:
@@ -1519,6 +1649,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "This judgment does not authorize execution or waive native checks."
                     + direct_parent_hint.replace(' (level 1)', '')
                     + usefulness_contribution_hint
+                    + component_hint
                 ),
             }
             questions[plan.id + "/benefit"] = {
