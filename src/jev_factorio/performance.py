@@ -98,12 +98,11 @@ def summarize(path: Path) -> dict:
         result['total_ns'] += total
         result['max_ns'] = max(result['max_ns'], maximum)
     opener = gzip.open if path.suffix == '.gz' else open
-    with opener(path, 'rt', encoding='utf-8') as stream:
-        for number, line in enumerate(stream, 1):
-            if not line.strip():
-                continue
+    from .wait_record_codec import iter_stream
+    with opener(path, 'rb') as stream:
+        for number, row in enumerate(iter_stream(stream, 'gameplay', max_records=None,
+                                                  require_final_newline=False, skip_blank=True), 1):
             try:
-                row = json.loads(line)
                 if not isinstance(row, dict):
                     raise ValueError('Invalid record')
                 summary['records'] += 1

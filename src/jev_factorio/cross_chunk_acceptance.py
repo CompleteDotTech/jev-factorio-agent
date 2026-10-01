@@ -147,6 +147,8 @@ def analyze(manifest_path: Path) -> dict:
     seen_receipts: dict[str, dict] = {}
     seen_owner: set[str] = set()
     spans = []
+    from .wait_record_codec import Decoder as WaitRecordDecoder
+    wait_decoder = WaitRecordDecoder('gameplay')
     for chunk in chunks:
         _require(isinstance(chunk, dict) and set(chunk) == CHUNK, 'Invalid chunk evidence')
         _require(chunk['owner_status'] == 'verified' and chunk['owner_result_sha256'] not in seen_owner,
@@ -186,16 +188,23 @@ def analyze(manifest_path: Path) -> dict:
             _require(previous_path is None or previous_end == previous_length,
                      'Uncovered gameplay suffix')
             _require(start == 0, 'Uncovered gameplay prefix')
+        if previous_path is not None and previous_path != chunk['gameplay']:
+            wait_decoder.reset()
         previous_path, previous_end, previous_length = chunk['gameplay'], end, len(raw)
         span = raw[start:end]
         digest = hashlib.sha256(span).hexdigest()
         _require(digest == chunk['span_sha256'], 'Gameplay span digest mismatch')
         spans.append({'sha256': digest, 'bytes': len(span), 'records': len(span.splitlines())})
         first_chunk_tick = last_chunk_tick = None
-        for line in span.splitlines():
+        for raw_line in span.splitlines(keepends=True):
+            _require(raw_line.endswith(b'\n'), 'Incomplete gameplay line')
+            line = raw_line[:-1]
+            if line.endswith(b'\r'):
+                line = line[:-1]
             _require(bool(line) and len(line) <= MAX_JSON, 'Invalid gameplay line')
-            row = load_json(line)
-            _require(isinstance(row, dict), 'Gameplay row must be object')
+            wire = load_json(line)
+            _require(isinstance(wire, dict), 'Gameplay row must be object')
+            row = wait_decoder.decode(wire, len(raw_line), anchor_candidate=True)
             row_hash = hashlib.sha256(line).hexdigest()
             _require(row_hash not in seen_rows, 'Repeated gameplay row')
             seen_rows.add(row_hash)

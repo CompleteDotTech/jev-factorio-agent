@@ -163,20 +163,40 @@ status separately.
 
 ## Persistent-wait legacy log lines
 
-With `--persist-recoverable-blocks`, each wait for changed game evidence issues no model
-request and dispatches nothing, yet the legacy `--log-file` line used to restate the last
-decision, planning diagnostics and every evidence block. On the live campaign such a line was
-about 87 KB and the log reached 125 MB, mostly identical waits. A wait line now keeps the
-observation (`state` and `after_state`, which acceptance readers require), latency and
-pressure profiling (`performance`, `previous_iteration_timing`, `observation_profiles`,
-`host_pressure`, `phases`), the recovery fields and the small operational fields in full.
-Any other top-level block larger than 1,024 bytes is replaced by
-`{"omitted": "persistent_wait_repeat", "bytes": N}`, and the line carries
-`"compact_record": "persistent_wait"`. The same applies to the final `idle_wait_exhausted`
-line. Decision and action lines are never compacted, and the record returned to in-process
-consumers such as the dashboard stays complete. Readers that need the evidence behind a wait
-use the decision line that produced the block, which remains in full. The research event stream
-is unaffected.
+With `--persist-recoverable-blocks`, unchanged waits issue no model request and dispatch no
+action. Their JSONL rows can still be large because they repeat decision and observation facts.
+The legacy gameplay writer and dashboard `decision_recorded` writer now use a shared lossless
+delta format for these wait rows. A delta stores changed values inline and references unchanged
+JSON subtrees in the most recent full anchor using the subtree digest and path. The expanded row
+is checked against its canonical digest before readers use it. Boolean, integer, and floating
+point values retain their JSON types; changed ticks, receipts, evidence, and decisions are never
+silently reused from an older row.
+
+An anchor is scoped to the gameplay session, process, source revision, or dashboard run and
+session. Readers reject missing, mismatched, malformed, or tampered anchors. The writer emits a
+new full anchor at least every 12 rows or 512 KiB of intervening stream data, and whenever the
+current identity changes or a delta would not save enough space. These limits also keep an anchor
+inside the dashboard reader's 2 MiB tail window. If a dashboard reader starts in the middle of a
+delta chain or cannot reconstruct a row, it clears stale decision state and reports a feed gap
+until a new full anchor arrives. Offline evidence readers reconstruct rows before projecting or
+measuring them; raw-file hashes continue to bind the encoded file bytes. Model, action, and
+hash-chained research events remain full records.
+
+Decoder expansion is bounded before copying referenced subtrees: one reconstructed row may use
+at most 16 MiB and one million JSON values, and materializing a JSONL stream is capped at 512 MiB
+of reconstructed rows. Skipped blank lines still count toward an anchor's byte/row retention
+window. The gameplay writer uses LF explicitly so its recorded byte count matches the bytes on
+disk on Windows as well as POSIX systems.
+
+Historical `persistent_wait_repeat` omission-marker rows from the earlier format remain readable
+as opaque legacy rows; their omitted fields cannot be recovered retroactively. The new writer
+does not emit omission markers. The research event stream is unchanged, and this codec alone does
+not establish a live storage reduction or deployment result.
+
+The sanitized baseline in `docs/WAIT_RECORD_CAPTURE_MEASUREMENTS.json` confirms exact readback of
+the captured payload objects. It has no complete legacy gameplay wait pair, and its dashboard wait
+rows lack the source revision needed for safe anchors, so measured compression in that capture is
+zero. A future source-bound run is required to measure actual wire savings.
 
 ## Secrets and publication
 

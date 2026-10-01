@@ -30,6 +30,7 @@ from .skills import Plan, compile_plans
 from .state import GameSnapshot
 from .provenance import gameplay_context
 from .telemetry import DISPATCH_STAGES, error_code, fingerprint, make_attempt, phase, utc_now, validate_phase
+from .wait_record_codec import Encoder as WaitRecordEncoder, encode_line as encode_wait_line
 
 
 def _json_safe(value):
@@ -93,6 +94,7 @@ class HierarchicalLoop(AgentLoop):
         self._persistent_idle_waits = 0
         self._persistent_idle_exhausted = False
         self._compact_next_record = False
+        self._wait_record_encoder = WaitRecordEncoder("gameplay")
         self._persistent_recovery_status = None
         self._persistent_runtime_wait_level = 0
         if resume_controller and (self.checkpoint is None or not self.checkpoint.is_file()):
@@ -1017,14 +1019,19 @@ class HierarchicalLoop(AgentLoop):
         if self.log_file:
             with span("legacy_encode"):
                 logged = _json_safe(record)
-                if compact:
-                    from .blocked_persistence import compact_wait_record
-                    logged = compact_wait_record(logged)
-                encoded = json.dumps(logged, allow_nan=False) + "\n"
+                prepared = self._wait_record_encoder.prepare(
+                    logged, wait=compact, anchor_candidate=True)
+                if prepared.is_delta:
+                    encoded_bytes = encode_wait_line(prepared)
+                    encoded = encoded_bytes.decode("utf-8")
+                else:
+                    encoded = json.dumps(logged, allow_nan=False) + "\n"
+                    encoded_bytes = encoded.encode("utf-8")
             with span("legacy_write"):
                 self.log_file.parent.mkdir(parents=True, exist_ok=True)
-                with self.log_file.open("a", encoding="utf-8") as stream:
+                with self.log_file.open("a", encoding="utf-8", newline="\n") as stream:
                     stream.write(encoded)
+                self._wait_record_encoder.commit(prepared, len(encoded_bytes))
         with span("record_console"):
             print(f"[t={before.tick}] {self.memory.status}: {action} -> {outcome}", flush=True)
         return record

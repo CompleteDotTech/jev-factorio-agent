@@ -154,14 +154,16 @@ def analyze(path: Path, *, max_records: int = MAX_RECORDS,
     timed_iterations = incomplete_iterations = timed_gaps = missing_prior = 0
     previous_iteration_index = None
     opener = gzip.open if path.suffix == '.gz' else open
-    with opener(path, 'rt', encoding='utf-8') as stream:
+    from .wait_record_codec import Decoder as WaitRecordDecoder, parse_json as parse_wait_json
+    wait_decoder = WaitRecordDecoder('gameplay')
+    with opener(path, 'rb') as stream:
         while raw := stream.readline(MAX_LINE + 1):
             records += 1
             try:
-                if (records > max_records or not raw.endswith('\n')
-                        or len(raw.encode('utf-8')) > MAX_LINE):
+                if records > max_records or not raw.endswith(b'\n') or len(raw) > MAX_LINE:
                     raise ValueError('Capture exceeds budget or is incomplete')
-                row = json.loads(raw)
+                wire = parse_wait_json(raw)
+                row = wait_decoder.decode(wire, len(raw), anchor_candidate=True)
                 if not isinstance(row, dict):
                     raise ValueError('Gameplay row must be an object')
                 # Enforce one immutable treatment/epoch without publishing its identifiers.

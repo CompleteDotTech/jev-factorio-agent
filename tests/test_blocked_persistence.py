@@ -897,49 +897,29 @@ def _log_lines(path):
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
-def test_compact_wait_record_keeps_observation_and_profiling_and_marks_repeats():
-    record = {
-        "tick": 5, "state": {"tick": 5, "pad": "s" * 3000},
-        "after_state": {"tick": 5, "pad": "s" * 3000},
-        "performance": {"calls": {"p" * 40: 1}}, "persistent_recovery": {"phase": "x"},
-        "decision": {"plan_id": None, "pad": "d" * 4000},
-        "buffer_evidence": {"pad": "b" * 2000}, "small_extra": {"a": 1},
-        "outcome": "Blocked; waiting for changed game evidence",
-    }
-    before = json.dumps(record, sort_keys=True)
-    compact = persistence.compact_wait_record(record)
-    assert json.dumps(record, sort_keys=True) == before  # input is not mutated
-    assert compact["state"] == record["state"] and compact["after_state"] == record["after_state"]
-    assert compact["performance"] == record["performance"]
-    assert compact["persistent_recovery"] == {"phase": "x"}
-    assert compact["decision"] == {"plan_id": None, "omitted": "persistent_wait_repeat",
-                                   "bytes": len(json.dumps(record["decision"]))}
-    assert compact["buffer_evidence"]["omitted"] == "persistent_wait_repeat"
-    assert compact["buffer_evidence"]["bytes"] > 2000
-    assert compact["small_extra"] == {"a": 1}  # below the size threshold
-    assert compact["outcome"] == record["outcome"] and compact["tick"] == 5
-    assert compact["compact_record"] == "persistent_wait"
-
-
-def test_persistent_wait_log_lines_are_compact_but_decisions_and_returns_stay_full(
+def test_persistent_wait_log_deltas_round_trip_and_returns_stay_full(
         tmp_path, monkeypatch):
+    from jev_factorio.acceptance_io import records
+    from jev_factorio.wait_record_codec import MARKER
+
     log = tmp_path / "gameplay.jsonl"
     loop, _, _, requests, _ = _idle_loop(
         tmp_path, monkeypatch, idle_observations=0, log_file=str(log))
     loop._record_extras = lambda: {"buffer_evidence": {"pad": "e" * 6000}}
     returned = [loop.step() for _ in range(4)]
-    lines = _log_lines(log)
-    assert len(lines) == 4 and requests == [True]
+    wires = _log_lines(log)
+    expanded = records(log.read_bytes())
+    assert len(wires) == len(expanded) == 4 and requests == [True]
 
-    decision_line, *wait_lines = lines
-    assert "compact_record" not in decision_line
+    decision_line, *wait_lines = wires
+    assert MARKER not in decision_line
     assert decision_line["buffer_evidence"] == {"pad": "e" * 6000}
     assert decision_line["model_call"] is True
 
     for line in wait_lines:
-        assert line["compact_record"] == "persistent_wait"
-        assert line["buffer_evidence"]["omitted"] == "persistent_wait_repeat"
-        assert line["buffer_evidence"]["bytes"] >= 6000
+        assert set(line) == {"_jev_lossless_wait_record"}
+    for line in expanded[1:]:
+        assert line["buffer_evidence"] == {"pad": "e" * 6000}
         assert isinstance(line["state"], dict) and isinstance(line["after_state"], dict)
         assert isinstance(line["performance"], dict)
         assert line["outcome"] == \
@@ -950,11 +930,14 @@ def test_persistent_wait_log_lines_are_compact_but_decisions_and_returns_stay_fu
     # The object handed to in-process consumers such as the dashboard stays complete.
     assert returned[-1]["buffer_evidence"] == {"pad": "e" * 6000}
     assert "compact_record" not in returned[-1]
-    assert len(json.dumps(wait_lines[-1])) < len(json.dumps(returned[-1])) - 5000
+    assert expanded == returned
 
 
-def test_idle_exhausted_line_is_compact_and_a_following_decision_is_full_again(
+def test_idle_exhausted_delta_round_trips_and_a_restart_writes_a_full_anchor(
         tmp_path, monkeypatch):
+    from jev_factorio.acceptance_io import records
+    from jev_factorio.wait_record_codec import MARKER
+
     log = tmp_path / "gameplay.jsonl"
     loop, _, _, requests, current = _idle_loop(
         tmp_path, monkeypatch, idle_observations=2, log_file=str(log))
@@ -964,10 +947,9 @@ def test_idle_exhausted_line_is_compact_and_a_following_decision_is_full_again(
         if loop.terminal:
             break
     assert loop.terminal is True
-    last = _log_lines(log)[-1]
+    last = records(log.read_bytes())[-1]
     assert last["persistent_recovery"]["phase"] == "idle_wait_exhausted"
-    assert last["compact_record"] == "persistent_wait"
-    assert last["buffer_evidence"]["omitted"] == "persistent_wait_repeat"
+    assert last["buffer_evidence"] == {"pad": "e" * 6000}
 
     # A fresh decision in a new process is logged in full.
     restarted, _, _, _, changed = _idle_loop(
@@ -976,8 +958,8 @@ def test_idle_exhausted_line_is_compact_and_a_following_decision_is_full_again(
     changed["id"] = "different-plan"
     restarted.step()
     newest = _log_lines(log)[-1]
-    assert "compact_record" not in newest
-    assert newest["buffer_evidence"] == {"pad": "e" * 6000}
+    assert MARKER not in newest
+    assert records(log.read_bytes())[-1]["buffer_evidence"] == {"pad": "e" * 6000}
 
 
 def test_compact_flag_never_leaks_to_a_later_record_without_a_log_file(
@@ -986,23 +968,6 @@ def test_compact_flag_never_leaks_to_a_later_record_without_a_log_file(
     loop.step()
     loop.step()
     assert loop._compact_next_record is False
-
-
-def test_compacted_wait_keeps_identity_fields_and_decision_summary():
-    record = {
-        "code_revision": {"commit": "a" * 40, "pad": "x" * 2000},
-        "campaign_treatment": {"pad": "t" * 1500}, "goal": "g", "process_id": "p",
-        "decision": {"plan_id": "plan-1", "source": "jev", "reason": "",
-                     "model_called": True, "state": {"pad": "d" * 4000}},
-    }
-    compact = persistence.compact_wait_record(record)
-    assert compact["code_revision"] == record["code_revision"]
-    assert compact["campaign_treatment"] == record["campaign_treatment"]
-    decision = compact["decision"]
-    assert decision["plan_id"] == "plan-1" and decision["source"] == "jev"
-    assert decision["model_called"] is True and decision["reason"] == ""
-    assert decision["omitted"] == "persistent_wait_repeat" and decision["bytes"] > 4000
-    assert "state" not in decision
 
 
 def test_compact_flag_is_cleared_when_a_record_wrapper_raises(tmp_path, monkeypatch):
