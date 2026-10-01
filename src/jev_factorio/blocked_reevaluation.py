@@ -14,6 +14,7 @@ _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _CONTRACT_PATHS = (
     "src/jev_factorio/judgments.py",
     "src/jev_factorio/planning/decision_support.py",
+    "src/jev_factorio/planning/mining_outposts.py",
 )
 _BLOCKED_REASONS = {"Candidate evidence insufficient", "low choice confidence"}
 
@@ -51,9 +52,9 @@ def validate_source_revision(blocked_source_revision: str,
                              root: Path | None = None) -> dict:
     """Require clean descendant source with a changed decision contract.
 
-    The replay identity is the content hash of the two decision-contract files,
-    not the Git commit, so unrelated commits cannot re-authorize an identical
-    question contract.
+    The replay identity hashes the judgment, evidence, and candidate-planning
+    source files, not the Git commit, so unrelated commits cannot re-authorize
+    an identical decision contract.
     """
     if type(blocked_source_revision) is not str or not _COMMIT.fullmatch(blocked_source_revision):
         raise ValueError("Blocked source revision must be a full commit SHA")
