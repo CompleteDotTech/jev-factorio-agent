@@ -1617,11 +1617,6 @@ def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float 
                         answers if isinstance(answers, dict) else {}, model_called=True,
                         diagnostics={**diagnostics, "outcome": "invalid_answer"})
     choice = answers["candidate"]
-    if choice["choice"] == "observe" or choice["confidence"] < confidence_floor:
-        outcome = "model_abstention" if choice["choice"] == "observe" else "low_choice_confidence"
-        return Decision(None, "observe", outcome.replace("_", " "),
-                        context, questions, answers, model_called=True,
-                        diagnostics={**diagnostics, "outcome": outcome})
     utilities = {}
     diagnostics["benefit_gate"] = {}
     diagnostics["usefulness_gate"] = {}
@@ -1665,6 +1660,15 @@ def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float 
                               + benefit["score"] / (2 * benefit_maximum)
                               - disruption["score"] / (4 * disruption_maximum)
                               - len(plan.steps) * 0.02)
+    # A global rejection does not imply that candidate-level gates passed.
+    # Report every validated answer's qualification before returning, while
+    # retaining the same choice floor and abstention behavior. These diagnostics
+    # never authorize a plan or cause another provider call.
+    if choice["choice"] == "observe" or choice["confidence"] < confidence_floor:
+        outcome = "model_abstention" if choice["choice"] == "observe" else "low_choice_confidence"
+        return Decision(None, "observe", outcome.replace("_", " "),
+                        context, questions, answers, model_called=True,
+                        diagnostics={**diagnostics, "outcome": outcome})
     selected = max(utilities, key=utilities.get) if utilities else None
     source = "mock" if getattr(client, "is_mock", False) else "jev"
     if not selected and diagnostics["pruned_candidate_ids"]:
