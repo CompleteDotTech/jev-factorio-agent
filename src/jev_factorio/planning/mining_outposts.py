@@ -153,6 +153,12 @@ class MiningOutpostPlanner(InputRoutePlanner):
                         'admission': admission,
                     }
                     prerequisite = replace(prerequisite, materials=materials)
+                    if row['state'] == 'proposed':
+                        # A kit prerequisite chosen for a policy investment is
+                        # equally a lone infrastructure primary (for example a
+                        # handcraft), so it also needs the direct alternative.
+                        self._proposed_outposts[prerequisite.id] = {
+                            'item': item, 'amount': requested_amount, 'path': tuple(path)}
                     return prerequisite
             spec = next(s for s in row['steps'] if s['part'] not in row['parts'])
             plan = self._plan(COMMAND, 'outpost_component', parameters={
@@ -215,7 +221,7 @@ class MiningOutpostPlanner(InputRoutePlanner):
             return plans
         primary = plans[0]
         context = self._proposed_outposts.get(primary.id)
-        if context is None or primary.steps[0].action != COMMAND:
+        if context is None:
             return plans
         worker = self._candidate_worker()
         try:
@@ -228,7 +234,9 @@ class MiningOutpostPlanner(InputRoutePlanner):
                 or not alternative.steps[0].allowed(self.snapshot)
                 or alternative.steps[0].satisfied(self.snapshot)):
             return plans
-        alternative = replace(alternative, materials={
+        prefix = (f"Next production batch: {self.focus[1]} {self.focus[0]}. "
+                  if self.focus else "")
+        alternative = replace(alternative, description=prefix + alternative.description, materials={
             **(alternative.materials or {}),
             'direct_alternative_to_proposed_outpost': {
                 'schema': 1, 'observed_tick': self.snapshot.tick,

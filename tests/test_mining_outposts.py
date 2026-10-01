@@ -1451,3 +1451,30 @@ def test_direct_alternative_survives_the_request_budget_and_both_plans_are_quest
     assert set(questions['candidate']['criteria']) == {plan.id for plan in plans} | {'observe'}
     for plan in plans:
         assert plan.id + '/benefit' in questions
+
+
+def test_incomplete_kit_craft_primary_also_gets_the_direct_alternative():
+    state, data = state_fixture()
+    state.inventory = {'iron-plate': 5, 'coal': 5, 'wooden-chest': 1}
+    planner = MiningOutpostPlanner(data, state, 'rocket_launch')
+    primary = planner._need(RESOURCE, 20)
+    assert primary.steps[0].action == 'factory_craft'
+    assert primary.steps[0].parameters['recipe'] == 'burner-mining-drill'
+    assert planner._proposed_outposts[primary.id]['item'] == RESOURCE
+    planner.plan = lambda: primary
+    planner.focus = ('pipe', 41)
+    plans = planner.candidates()
+    assert len(plans) == 2 and plans[0].id == primary.id
+    alternative = plans[1]
+    assert alternative.id != primary.id
+    assert alternative.steps[0].action in {'factory_gather', 'factory_extract', 'factory_insert'}
+    assert alternative.materials['direct_alternative_to_proposed_outpost']['investment_plan_id'] == primary.id
+
+
+def test_direct_alternative_carries_the_production_batch_prefix():
+    state, data = state_fixture()
+    planner, primary = lone_investment_planner(state, data)
+    alternative = planner.candidates()[1]
+    assert alternative.description.startswith('Next production batch: 41 pipe. ')
+    planner.focus = None
+    assert not planner.candidates()[1].description.startswith('Next production batch')

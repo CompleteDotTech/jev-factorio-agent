@@ -87,10 +87,12 @@ speculative build as no demonstrated contribution left the controller with nothi
 to do. On an idle factory (empty furnaces, no ore or plates in inventory) that
 state never changes, and persistent recovery could only wait.
 
-While an outpost is still `proposed`, a lone investment plan is now accompanied by
+While an outpost is still `proposed`, a lone investment plan (the build itself, or
+the kit-acquisition step such as a handcraft that prepares it) is now accompanied by
 the direct plan the same request yields with the investment policy bypassed, for
-example gathering the missing ore. The alternative carries
-`direct_alternative_to_proposed_outpost` in its plan materials and must have an
+example gathering the missing ore. The alternative carries the usual production-batch description prefix and
+`direct_alternative_to_proposed_outpost` in its plan materials (part of the plan the
+model is shown) and must have an
 allowed, unsatisfied first step that is a gather, insert, extract or craft; a passive
 wait, an identical plan or an unavailable path is not offered. The investment stays
 first, so the deterministic policy is unchanged. A started paid outpost prefix
