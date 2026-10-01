@@ -263,6 +263,64 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
                 'basis': 'current_catalog_shared_material_bill',
             }})
 
+    def _partial_current_target_craft(self) -> Plan | None:
+        """Offer paid direct handcraft progress without requiring the whole bill."""
+        if (self.focus is None or self.speculative or getattr(self, '_buffer_service', False)
+                or self.factory.get('crafting_queue') != 0
+                or self.factory.get('player_connected') is not True
+                or self.factory.get('player_bound') is not True):
+            return None
+        if self.snapshot.world_kind == 'fle' and (
+                getattr(self.snapshot, '_atomic_inventory_verified', None) !=
+                (self.snapshot.session_id, self.snapshot.tick)
+                or getattr(self.snapshot, '_coherent_observation_verified', None) !=
+                (self.snapshot.session_id, self.snapshot.tick)):
+            return None
+        item, target = self.focus
+        have = self.snapshot.inventory.get(item, 0)
+        if type(target) is not int or type(have) is not int or have < 0 or have >= target:
+            return None
+        try:
+            recipe = self.catalog.recipe_for(item)
+        except (KeyError, ValueError):
+            return None
+        ingredients, products = recipe.get('ingredients', []), recipe.get('products', [])
+        if (recipe.get('hidden') or not self.catalog.enabled(recipe, self.researched)
+                or not self.catalog.hand_categories.get(recipe.get('category'))
+                or not ingredients or len(products) != 1
+                or products[0].get('type') != 'item' or products[0].get('name') != item
+                or products[0].get('probability', 1) != 1
+                or type(products[0].get('amount')) is not int or products[0]['amount'] <= 0
+                or any(x.get('type') != 'item' or type(x.get('amount')) is not int
+                       or x['amount'] <= 0 for x in ingredients)):
+            return None
+        per_batch = {}
+        for ingredient in ingredients:
+            name = ingredient['name']
+            per_batch[name] = per_batch.get(name, 0) + ingredient['amount']
+        if any(type(self.snapshot.inventory.get(name, 0)) is not int
+               or self.snapshot.inventory.get(name, 0) < 0 for name in per_batch):
+            return None
+        output = products[0]['amount']
+        full_batches = math.ceil((target-have)/output)
+        affordable = min(self.snapshot.inventory.get(name, 0)//count
+                         for name, count in per_batch.items())
+        batches = min(20, affordable, (target-have)//output)
+        if batches <= 0 or batches >= full_batches:
+            return None  # Existing full-target planner owns complete batches.
+        costs = {name: count*batches for name,count in per_batch.items()}
+        plan = self._plan('factory_craft','inventory',item,have+output*batches,
+            parameters={'recipe':recipe['name'],'batches':batches},costs=costs,
+            timeout=max(1800,math.ceil(recipe['energy']*batches*120)),
+            identity=f"partial:{recipe['name']}:target:{target}:batches:{batches}",
+            description=f"Hand-craft {output*batches} paid {item}; partially advance target {target}")
+        return replace(plan,materials={**(plan.materials or {}),'craft_dependency':{
+            'observed_tick':self.snapshot.tick,'recipe':recipe['name'],
+            'product':item,'planner_item_path':[item]},'partial_current_target_craft':{
+            'observed_tick':self.snapshot.tick,'inventory_now':have,
+            'inventory_target':target,'planned_product_units':output*batches,
+            'target_not_completed':True}})
+
     def candidates(self) -> list[Plan]:
         primary = self.plan()
         if primary is None:
@@ -276,6 +334,9 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
             } or not self.focus or self.factory.get("crafting_queue", 0)):
             return [service_visit(self, primary)]
         candidates = [primary]
+        partial = self._partial_current_target_craft()
+        if partial is not None:
+            candidates.append(partial)
         # Evaluate a bounded frontier, not every item in a rocket-sized tree.
         for item, amount in list(sorted(self.targets.items()))[:32]:
             if self.snapshot.inventory.get(item, 0) >= amount:
