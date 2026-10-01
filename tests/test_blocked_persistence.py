@@ -328,7 +328,7 @@ def test_persistent_controller_skips_same_tick_only_retry_and_retries_changed_in
 
     calls = []
 
-    def reject(_client, _state, plans, *_args):
+    def reject(_client, _state, plans, *_args, **_kwargs):
         calls.append(plans[0].id)
         return Decision(None, "observe", "low choice confidence", model_called=True,
                         diagnostics={"schema": 1, "outcome": "all_candidates_rejected"})
@@ -344,7 +344,7 @@ def test_persistent_controller_skips_same_tick_only_retry_and_retries_changed_in
     # new planned receipt, but no changed game fact. It must not buy a call.
     backend.tick = 100
     waiting = loop.step()
-    assert waiting["persistent_recovery"]["phase"] == "waiting_for_changed_game_evidence"
+    assert waiting["persistent_recovery"]["phase"] == "alternatives_exhausted_waiting"
     assert waiting["model_call"] is False
     assert len(calls) == 1
     assert loop.memory.stalled_decisions == 6
@@ -412,7 +412,7 @@ def test_persistent_controller_waits_on_route_cache_churn_then_allows_one_route_
     loop._work_candidates = candidates
     calls = []
 
-    def reject(_client, _state, plans, *_args):
+    def reject(_client, _state, plans, *_args, **_kwargs):
         calls.append(plans[0].id)
         return Decision(None, "observe", "low choice confidence", model_called=True,
                         diagnostics={"schema": 1, "outcome": "all_candidates_rejected"})
@@ -429,7 +429,7 @@ def test_persistent_controller_waits_on_route_cache_churn_then_allows_one_route_
     route.update(cached=False, survey_tick=100, next_survey_tick=400)
     cache_only = loop.step()
     assert cache_only["persistent_recovery"]["phase"] == \
-        "waiting_for_changed_game_evidence"
+        "alternatives_exhausted_waiting"
     assert cache_only["model_call"] is False
     assert len(calls) == 1
 
@@ -448,13 +448,13 @@ def test_persistent_controller_waits_on_route_cache_churn_then_allows_one_route_
     route.update(cached=True, survey_tick=102, next_survey_tick=402)
     refreshed = loop.step()
     assert refreshed["persistent_recovery"]["phase"] == \
-        "waiting_for_changed_game_evidence"
+        "alternatives_exhausted_waiting"
     assert refreshed["model_call"] is False
     assert len(calls) == 2
     assert len(loop.memory.blocked_recovery["attempts"]) == 3
 
 
-def test_running_decision_that_reaches_blocked_threshold_is_seeded_before_wait(
+def test_running_selection_exhaustion_is_durably_blocked_before_wait(
         tmp_path, monkeypatch):
     import jev_factorio.controller as controller
 
@@ -480,7 +480,7 @@ def test_running_decision_that_reaches_blocked_threshold_is_seeded_before_wait(
         }),))], "")
     calls = []
 
-    def reject(_client, _state, plans, *_args):
+    def reject(_client, _state, plans, *_args, **_kwargs):
         calls.append(plans[0].id)
         return Decision(None, "observe", "low choice confidence", model_called=True,
                         diagnostics={"schema": 1, "outcome": "all_candidates_rejected"})
@@ -488,7 +488,7 @@ def test_running_decision_that_reaches_blocked_threshold_is_seeded_before_wait(
     monkeypatch.setattr(controller, "select_plan", reject)
     first = loop.step()
     assert first["status"] == "blocked" and first["model_call"] is True
-    assert first["persistent_recovery"]["phase"] == "waiting_for_changed_game_evidence"
+    assert first["persistent_recovery"]["phase"] == "alternatives_exhausted_waiting"
     assert loop.memory.stalled_decisions == 4
     assert len(loop.memory.blocked_recovery["attempts"]) == 1
     assert loop.memory.failures == {"old-plan": 2}
@@ -497,7 +497,7 @@ def test_running_decision_that_reaches_blocked_threshold_is_seeded_before_wait(
     # Its exact rejected input is still saved before the next observation cycle.
     backend.tick = 100
     waiting = loop.step()
-    assert waiting["persistent_recovery"]["phase"] == "waiting_for_changed_game_evidence"
+    assert waiting["persistent_recovery"]["phase"] == "alternatives_exhausted_waiting"
     assert waiting["model_call"] is False
     assert len(calls) == 1
     saved = CampaignMemory.load(checkpoint, backend.session_id, "bootstrap_mining")
@@ -505,7 +505,7 @@ def test_running_decision_that_reaches_blocked_threshold_is_seeded_before_wait(
     assert saved.status == "blocked" and saved.stalled_decisions == 4
 
 
-def test_running_threshold_request_is_write_ahead_and_never_replayed_after_crash(
+def test_first_running_request_is_write_ahead_and_never_replayed_after_crash(
         tmp_path, monkeypatch):
     import jev_factorio.controller as controller
 
@@ -515,7 +515,7 @@ def test_running_threshold_request_is_write_ahead_and_never_replayed_after_crash
     memory = CampaignMemory(backend.session_id, "bootstrap_mining",
                             active_goal="bootstrap_mining", last_tick=0,
                             status="running", reason="prior running reason",
-                            stalled_decisions=3,
+                            stalled_decisions=0,
                             history=[{"kind": "preserved", "marker": "pre-crash"}])
     memory.save(checkpoint)
 
@@ -537,11 +537,11 @@ def test_running_threshold_request_is_write_ahead_and_never_replayed_after_crash
     loop = make_loop()
     calls = []
 
-    def crash_after_write_ahead(_client, _state, _plans, *_args):
+    def crash_after_write_ahead(_client, _state, _plans, *_args, **_kwargs):
         calls.append("first")
         saved = CampaignMemory.load(checkpoint, backend.session_id, "bootstrap_mining")
         assert saved.status == "running" and saved.reason == "prior running reason"
-        assert saved.stalled_decisions == 3
+        assert saved.stalled_decisions == 0
         assert saved.blocked_recovery["attempts"][-1]["outcome"] == "pending"
         raise RuntimeError("simulated process interruption after request start")
 
@@ -553,7 +553,7 @@ def test_running_threshold_request_is_write_ahead_and_never_replayed_after_crash
     # but does not repeat a provider call whose answer may have been lost.
     resumed = make_loop()
 
-    def forbidden_replay(*_args):
+    def forbidden_replay(*_args, **_kwargs):
         calls.append("replayed")
         raise AssertionError("same-input provider request was replayed")
 
@@ -565,7 +565,7 @@ def test_running_threshold_request_is_write_ahead_and_never_replayed_after_crash
     assert record["outcome"] == "Decision outcome unresolved; observing for changed evidence"
     assert record["persistent_recovery"]["phase"] == "evaluation_outcome_unknown_waiting"
     assert record["persistent_recovery"]["model_call"] is False
-    assert resumed.memory.stalled_decisions == 3
+    assert resumed.memory.stalled_decisions == 0
     assert resumed.memory.history[0] == {"kind": "preserved", "marker": "pre-crash"}
 
     # A genuinely changed native fact makes a new request eligible even though
@@ -573,7 +573,7 @@ def test_running_threshold_request_is_write_ahead_and_never_replayed_after_crash
     backend.tick = 101
     backend.inv["iron-ore"] = backend.inv.get("iron-ore", 0) + 1
 
-    def reject_changed_input(_client, _state, _plans, *_args):
+    def reject_changed_input(_client, _state, _plans, *_args, **_kwargs):
         calls.append("changed")
         return Decision(None, "observe", "low choice confidence", model_called=True,
                         diagnostics={"schema": 1, "outcome": "all_candidates_rejected"})
@@ -611,7 +611,7 @@ def test_running_threshold_checkpoint_failure_stops_before_model_call(tmp_path, 
         }),))], "")
     calls = []
 
-    def forbidden_call(*_args):
+    def forbidden_call(*_args, **_kwargs):
         calls.append(True)
         raise AssertionError("selection must follow the durable write-ahead save")
 
@@ -629,7 +629,7 @@ def test_running_threshold_checkpoint_failure_stops_before_model_call(tmp_path, 
     assert loop.memory.status == "running"
     assert loop.memory.reason == "prior running reason"
     assert loop.memory.stalled_decisions == 3
-    assert loop.memory.blocked_recovery is None
+    assert loop.memory.blocked_recovery["attempts"] == []
 
 
 def test_until_complete_waits_for_changed_evidence_and_stops_on_interrupt(tmp_path, monkeypatch):
@@ -656,7 +656,7 @@ def test_until_complete_waits_for_changed_evidence_and_stops_on_interrupt(tmp_pa
         (Step("walk_to_iron", "near", "iron-ore"),))], "")
     requests = []
 
-    def reject(*_args):
+    def reject(*_args, **_kwargs):
         requests.append(True)
         return Decision(None, "observe", "Candidate evidence insufficient",
                         model_called=True,
@@ -706,7 +706,7 @@ def test_persistent_selection_enters_normal_verified_execution_without_reset_sho
     loop._work_candidates = lambda _snapshot: ([plan], "")
     selections = []
 
-    def choose(_client, _state, plans, *_args):
+    def choose(_client, _state, plans, *_args, **_kwargs):
         selections.append(plans[0].id)
         return Decision(plans[0].id, "jev", model_called=True,
                         diagnostics={"schema": 1, "outcome": "selected"})
@@ -733,7 +733,7 @@ def test_persistent_mode_needs_a_continuous_live_resume_configuration():
     valid = RunConfiguration(
         backend="fle", controller="hierarchical", policy="jev", target="rocket_launch",
         resume=True, resume_controller=True, checkpoint_enabled=True, until_complete=True,
-        persist_recoverable_blocks=True)
+        persist_recoverable_blocks=True, persistent_idle_observations=6)
     _configuration(asdict(valid))
     with pytest.raises(ValueError, match="Persistent blocked recovery"):
         _configuration(asdict(replace(valid, until_complete=False)))
@@ -767,7 +767,7 @@ def _idle_loop(tmp_path, monkeypatch, *, idle_observations, backend=None, log_fi
         (Step("walk_to_iron", "near", "iron-ore"),))], "")
     requests = []
 
-    def reject(*_args):
+    def reject(*_args, **_kwargs):
         requests.append(True)
         return Decision(None, "observe", "Candidate evidence insufficient",
                         model_called=True,
@@ -779,13 +779,19 @@ def _idle_loop(tmp_path, monkeypatch, *, idle_observations, backend=None, log_fi
 
 def test_idle_wait_bound_ends_the_invocation_and_preserves_the_blocked_checkpoint(
         tmp_path, monkeypatch):
-    import jev_factorio.loop as loop_module
-
     loop, backend, checkpoint, requests, _ = _idle_loop(
         tmp_path, monkeypatch, idle_observations=3)
     waits = []
-    monkeypatch.setattr(loop_module, "_interruptible_sleep", waits.append)
-    loop.run(until_complete=True)
+    # Drive a bounded number of observations directly. If the persistent idle
+    # counter ever stops advancing, this regression fails instead of spinning
+    # and repeatedly writing the checkpoint forever.
+    for _ in range(16):
+        loop.step()
+        if loop.terminal:
+            break
+        waits.append(loop.persistent_recovery_wait_seconds())
+    else:
+        pytest.fail("persistent idle bound did not terminate within 16 observations")
 
     assert loop.terminal is True
     assert requests == [True] and backend.actions == []
@@ -808,12 +814,14 @@ def test_idle_wait_bound_ends_the_invocation_and_preserves_the_blocked_checkpoin
 
 
 def test_idle_bound_is_process_local_so_a_restart_waits_again(tmp_path, monkeypatch):
-    import jev_factorio.loop as loop_module
-
     loop, backend, checkpoint, requests, _ = _idle_loop(
         tmp_path, monkeypatch, idle_observations=2)
-    monkeypatch.setattr(loop_module, "_interruptible_sleep", lambda delay: None)
-    loop.run(until_complete=True)
+    for _ in range(16):
+        loop.step()
+        if loop.terminal:
+            break
+    else:
+        pytest.fail("persistent idle bound did not terminate within 16 observations")
     assert loop.terminal is True
 
     restarted, _, _, more_requests, _ = _idle_loop(
@@ -934,8 +942,9 @@ def test_persistent_wait_log_lines_are_compact_but_decisions_and_returns_stay_fu
         assert line["buffer_evidence"]["bytes"] >= 6000
         assert isinstance(line["state"], dict) and isinstance(line["after_state"], dict)
         assert isinstance(line["performance"], dict)
-        assert line["outcome"] == "Blocked; waiting for changed game evidence"
-        assert line["persistent_recovery"]["phase"] == "waiting_for_changed_game_evidence"
+        assert line["outcome"] == \
+            "Blocked; all currently feasible alternatives were already evaluated"
+        assert line["persistent_recovery"]["phase"] == "alternatives_exhausted_waiting"
         assert line["model_call"] is False
 
     # The object handed to in-process consumers such as the dashboard stays complete.
@@ -1007,3 +1016,344 @@ def test_compact_flag_is_cleared_when_a_record_wrapper_raises(tmp_path, monkeypa
     with pytest.raises(RuntimeError):
         loop.step()
     assert loop._compact_next_record is False
+
+
+def _alternative_loop(tmp_path, monkeypatch, count, *, backend=None, jev=None):
+    import jev_factorio.controller as controller
+    import jev_factorio.judgments as judgments
+
+    monkeypatch.setattr(controller, "gameplay_context", lambda: {"code_revision": SOURCE})
+    backend = backend or LiveMockBackend()
+    checkpoint = tmp_path / "alternative-checkpoint.json"
+    memory = CampaignMemory(
+        backend.session_id, "bootstrap_mining", active_goal="bootstrap_mining",
+        last_tick=0, status="blocked", reason="low choice confidence",
+        stalled_decisions=5, history=[{"kind": "retained", "marker": "before batches"}],
+    )
+    persistence.record_attempt(memory, SOURCE, "a" * 64, memory.reason, 0)
+    memory.save(checkpoint)
+    loop = HierarchicalLoop(
+        backend, jev=jev or LiveClient(), policy="jev", target="bootstrap_mining",
+        checkpoint=str(checkpoint), resume_controller=True, tick_seconds=0,
+        persist_recoverable_blocks=True)
+    if loop._safety is not None:
+        loop._safety.admission = lambda *_args: None
+    plans = [Plan(
+        f"candidate-{index}", "bootstrap_mining", f"Candidate {index}",
+        (Step("walk_to_iron", "near", "iron-ore"),),
+    ) for index in range(count)]
+    loop._work_candidates = lambda _snapshot: (plans, "")
+    original_batch = judgments.question_batch
+
+    def one_candidate(state, candidates, max_bytes=32000, max_candidates=16):
+        return original_batch(state, candidates[:1], max_bytes=max_bytes, max_candidates=1)
+
+    monkeypatch.setattr(judgments, "question_batch", one_candidate)
+    return loop, backend, checkpoint, plans
+
+
+@pytest.mark.parametrize(("provider_phase", "attempts"), [
+    ("cooldown", 2), ("exhausted", 8),
+])
+def test_persistent_provider_block_is_durable_operator_handoff_and_not_replayed(
+        tmp_path, monkeypatch, provider_phase, attempts):
+    import jev_factorio.controller as controller
+    from jev_factorio.provider_health import ProviderCircuit
+
+    class NeverCalledClient:
+        model = "test-provider-model"
+        url = "https://provider.invalid/test"
+        uses_http_provider = False
+        last_usage = None
+        last_model = None
+
+        def __init__(self):
+            self.calls = 0
+
+        def evaluate(self, *_args, **_kwargs):
+            self.calls += 1
+            raise AssertionError("cooldown/exhausted provider must not be probed")
+
+    client = NeverCalledClient()
+    provider_path = tmp_path / "provider.json"
+    circuit = ProviderCircuit(client, provider_path, clock=lambda: 10.0)
+    circuit.state.update(
+        phase=provider_phase, category="rate_limit", attempts=attempts,
+        next_probe_at=100.0, incident_id="test-incident",
+        first_failure_at=1.0, budget_category="rate_limit", budget_limit=8)
+    circuit._save()
+    provider_bytes = provider_path.read_bytes()
+
+    loop, backend, checkpoint, _plans = _alternative_loop(
+        tmp_path, monkeypatch, 2, jev=circuit)
+    memory = CampaignMemory.load(checkpoint, backend.session_id, "bootstrap_mining")
+    memory.status = "running"
+    memory.reason = "low choice confidence"
+    memory.stalled_decisions = 4
+    memory.failures = {"retained-plan": 2}
+    memory.save(checkpoint)
+
+    first = loop.step()
+    assert first["status"] == "blocked"
+    assert first["model_call"] is False
+    assert first["persistent_recovery"]["phase"] == "provider_blocked"
+    assert first["persistent_recovery"]["provider_category"] == "rate_limit"
+    assert first["persistent_recovery"]["provider_phase"] == provider_phase
+    assert "operator recovery" in first["reason"]
+    assert loop.memory.stalled_decisions == 4
+    assert loop.memory.failures == {"retained-plan": 2}
+    assert loop.memory.blocked_recovery["attempts"][-1]["outcome"] == "provider_blocked"
+    handoff = [event for event in loop.memory.history
+               if event.get("kind") == "provider_circuit_operator_recovery_required"]
+    assert len(handoff) == 1 and handoff[0]["model_called"] is False
+    assert client.calls == 0 and backend.actions == []
+    assert provider_path.read_bytes() == provider_bytes
+
+    invalid_memory = deepcopy(loop.memory)
+    invalid_memory.history = [event for event in invalid_memory.history
+                              if event.get("kind") !=
+                              "provider_circuit_operator_recovery_required"]
+    with pytest.raises(ValueError, match="does not admit this blocked reason"):
+        persistence.validate_memory_state(invalid_memory, SOURCE)
+    invalid_checkpoint = json.loads(checkpoint.read_text(encoding="utf-8"))
+    invalid_checkpoint["history"] = invalid_memory.history
+    with pytest.raises(ValueError, match="does not admit this blocked reason"):
+        persistence.validate_checkpoint_metadata(invalid_checkpoint, SOURCE)
+
+    resumed = HierarchicalLoop(
+        backend, jev=circuit, policy="jev", target="bootstrap_mining",
+        checkpoint=str(checkpoint), resume_controller=True, tick_seconds=0,
+        persist_recoverable_blocks=True)
+    monkeypatch.setattr(controller, "select_plan",
+                        lambda *_args, **_kwargs: pytest.fail("provider selection retried"))
+    second = resumed.step()
+    assert second["status"] == "blocked" and second["model_call"] is False
+    assert resumed.terminal is True
+    assert resumed.memory.stalled_decisions == 4
+    assert resumed.memory.failures == {"retained-plan": 2}
+    assert client.calls == 0 and backend.actions == []
+    assert provider_path.read_bytes() == provider_bytes
+
+
+def test_persistent_called_provider_failure_hands_off_after_wal_and_never_replays(
+        tmp_path, monkeypatch):
+    import requests
+    import jev_factorio.controller as controller
+    from jev_factorio.provider_health import ProviderCircuit
+
+    backend = LiveMockBackend()
+    checkpoint = tmp_path / "called-provider-checkpoint.json"
+    provider_path = tmp_path / "called-provider.json"
+
+    class RateLimitedClient:
+        model = "test-provider-model"
+        url = "https://provider.invalid/test"
+        uses_http_provider = False
+        last_usage = None
+        last_model = None
+
+        def __init__(self):
+            self.calls = 0
+            self.wal_seen_before_call = False
+
+        def evaluate(self, *_args, **_kwargs):
+            self.calls += 1
+            saved = CampaignMemory.load(
+                checkpoint, backend.session_id, "bootstrap_mining")
+            pending = saved.blocked_recovery["attempts"][-1]
+            provider = json.loads(provider_path.read_text(encoding="utf-8"))
+            assert pending["outcome"] == "pending"
+            assert "selection_batch" in pending
+            assert provider["in_flight"] is not None
+            self.wal_seen_before_call = True
+            response = requests.Response()
+            response.status_code = 429
+            raise requests.HTTPError("bounded test rate limit", response=response)
+
+    client = RateLimitedClient()
+    circuit = ProviderCircuit(client, provider_path, clock=lambda: 10.0)
+    loop, backend, checkpoint, _plans = _alternative_loop(
+        tmp_path, monkeypatch, 2, backend=backend, jev=circuit)
+    memory = CampaignMemory.load(checkpoint, backend.session_id, "bootstrap_mining")
+    memory.status = "running"
+    memory.reason = "low choice confidence"
+    memory.stalled_decisions = 4
+    memory.failures = {"retained-plan": 2}
+    memory.save(checkpoint)
+
+    first = loop.step()
+    assert client.wal_seen_before_call is True and client.calls == 1
+    assert first["status"] == "blocked" and first["model_call"] is True
+    assert first["decision"]["model_called"] is True
+    assert first["persistent_recovery"]["phase"] == "provider_blocked"
+    assert first["persistent_recovery"]["provider_category"] == "rate_limit"
+    assert loop.memory.blocked_recovery["attempts"][-1]["outcome"] == "provider_blocked"
+    assert loop.memory.stalled_decisions == 4
+    assert loop.memory.failures == {"retained-plan": 2}
+    assert backend.actions == []
+
+    provider_bytes = provider_path.read_bytes()
+    provider_state = json.loads(provider_bytes)
+    assert provider_state["phase"] == "cooldown"
+    assert provider_state["category"] == "rate_limit"
+    assert provider_state["in_flight"] is None
+
+    resumed = HierarchicalLoop(
+        backend, jev=ProviderCircuit(client, provider_path, clock=lambda: 10.0),
+        policy="jev", target="bootstrap_mining", checkpoint=str(checkpoint),
+        resume_controller=True, tick_seconds=0, persist_recoverable_blocks=True)
+    monkeypatch.setattr(controller, "select_plan",
+                        lambda *_args, **_kwargs: pytest.fail("provider selection retried"))
+    second = resumed.step()
+    assert second["status"] == "blocked" and second["model_call"] is False
+    assert resumed.terminal is True
+    assert client.calls == 1 and backend.actions == []
+    assert resumed.memory.stalled_decisions == 4
+    assert resumed.memory.failures == {"retained-plan": 2}
+    assert provider_path.read_bytes() == provider_bytes
+
+
+def test_bounded_alternatives_are_writeahead_distinct_and_exhaust_once(tmp_path, monkeypatch):
+    import jev_factorio.controller as controller
+
+    loop, backend, checkpoint, _plans = _alternative_loop(tmp_path, monkeypatch, 3)
+    offered_calls = []
+
+    def reject(_client, _state, remaining, *_args, prepared_batch=None, **_kwargs):
+        context, questions, offered = prepared_batch
+        ids = [plan.id for plan in offered]
+        assert len(ids) == 1 and ids[0] in {plan.id for plan in remaining}
+        saved = CampaignMemory.load(checkpoint, backend.session_id, "bootstrap_mining")
+        row = saved.blocked_recovery["attempts"][-1]
+        assert row["outcome"] == "pending"
+        assert [item["plan_id"] for item in row["selection_batch"]["offered"]] == ids
+        assert set(context["candidate_plans"]) == set(ids)
+        assert set(questions) >= {"candidate"}
+        offered_calls.append(ids[0])
+        return Decision(None, "observe", "Candidate evidence insufficient",
+                        model_called=True,
+                        diagnostics={"schema": 1, "outcome": "all_candidates_rejected"})
+
+    monkeypatch.setattr(controller, "select_plan", reject)
+    first = loop.step()
+    assert offered_calls == ["candidate-0", "candidate-1", "candidate-2"]
+    assert first["persistent_recovery"]["phase"] == "alternatives_exhausted_waiting"
+    assert first["persistent_recovery"]["evaluated_batches"] == 3
+    assert first["persistent_recovery"]["unseen_candidates"] == 0
+    assert loop.memory.reason == "low choice confidence"
+    assert loop.memory.stalled_decisions == 6
+    attempts = loop.memory.blocked_recovery["attempts"]
+    batches = [row for row in attempts if "selection_batch" in row]
+    assert len(batches) == 3
+    assert len({row["decision_input_sha256"] for row in batches}) == 3
+    assert all(row["outcome"] == "rejected" for row in batches)
+    assert len({row["selection_batch"]["state_sha256"] for row in batches}) == 1
+    assert len({row["selection_batch"]["request_sha256"] for row in batches}) == 3
+    assert sum(event.get("kind") == "blocked_recovery_alternatives_exhausted"
+               for event in loop.memory.history) == 1
+    assert backend.actions == []
+
+    # Restarted unchanged state observes the durable exhausted frontier and
+    # neither reoffers candidates nor duplicates the diagnostic event.
+    restarted = HierarchicalLoop(
+        backend, jev=LiveClient(), policy="jev", target="bootstrap_mining",
+        checkpoint=str(checkpoint), resume_controller=True, tick_seconds=0,
+        persist_recoverable_blocks=True)
+    if restarted._safety is not None:
+        restarted._safety.admission = lambda *_args: None
+    restarted._work_candidates = lambda _snapshot: (_plans, "")
+    second = restarted.step()
+    assert offered_calls == ["candidate-0", "candidate-1", "candidate-2"]
+    assert second["persistent_recovery"]["phase"] == "alternatives_exhausted_waiting"
+    assert sum(event.get("kind") == "blocked_recovery_alternatives_exhausted"
+               for event in restarted.memory.history) == 1
+
+
+def test_alternative_batch_limit_is_not_reported_as_exhaustion(tmp_path, monkeypatch):
+    import jev_factorio.controller as controller
+
+    loop, backend, checkpoint, _plans = _alternative_loop(tmp_path, monkeypatch, 4)
+    memory = CampaignMemory.load(checkpoint, backend.session_id, "bootstrap_mining")
+    memory.status = "running"
+    memory.reason = ""
+    memory.stalled_decisions = 0
+    memory.save(checkpoint)
+    loop.memory = memory
+    calls = []
+
+    def reject(_client, _state, _remaining, *_args, prepared_batch=None, **_kwargs):
+        calls.append(prepared_batch[2][0].id)
+        return Decision(None, "observe", "low choice confidence", model_called=True,
+                        diagnostics={"schema": 1, "outcome": "low_choice_confidence"})
+
+    monkeypatch.setattr(controller, "select_plan", reject)
+    record = loop.step()
+    assert calls == ["candidate-0", "candidate-1", "candidate-2"]
+    assert record["persistent_recovery"]["phase"] == "alternative_batch_limit_waiting"
+    assert record["persistent_recovery"]["evaluated_batches"] == 3
+    assert record["persistent_recovery"]["unseen_candidates"] == 1
+    assert loop.memory.status == "blocked"
+    assert loop.memory.reason == "low choice confidence"
+    assert loop.memory.stalled_decisions == 1
+    assert not any(event.get("kind") == "blocked_recovery_alternatives_exhausted"
+                   for event in loop.memory.history)
+    assert sum(event.get("kind") == "blocked_recovery_alternative_batch_limit"
+               for event in loop.memory.history) == 1
+
+
+def test_pending_alternative_batch_stops_before_unseen_candidates_after_restart(
+        tmp_path, monkeypatch):
+    import jev_factorio.controller as controller
+
+    loop, backend, checkpoint, plans = _alternative_loop(tmp_path, monkeypatch, 3)
+    calls = []
+
+    def crash_after_wal(_client, _state, _remaining, *_args, prepared_batch=None, **_kwargs):
+        calls.append(prepared_batch[2][0].id)
+        saved = CampaignMemory.load(checkpoint, backend.session_id, "bootstrap_mining")
+        assert saved.blocked_recovery["attempts"][-1]["outcome"] == "pending"
+        raise RuntimeError("simulated lost response")
+
+    monkeypatch.setattr(controller, "select_plan", crash_after_wal)
+    with pytest.raises(RuntimeError, match="simulated lost response"):
+        loop.step()
+
+    resumed = HierarchicalLoop(
+        backend, jev=LiveClient(), policy="jev", target="bootstrap_mining",
+        checkpoint=str(checkpoint), resume_controller=True, tick_seconds=0,
+        persist_recoverable_blocks=True)
+    if resumed._safety is not None:
+        resumed._safety.admission = lambda *_args: None
+    resumed._work_candidates = lambda _snapshot: (plans, "")
+    monkeypatch.setattr(controller, "select_plan",
+                        lambda *_args, **_kwargs: pytest.fail("pending batch was replayed"))
+    record = resumed.step()
+    assert calls == ["candidate-0"]
+    assert record["persistent_recovery"]["phase"] == "evaluation_outcome_unknown_waiting"
+    assert resumed.memory.blocked_recovery["attempts"][-1]["outcome"] == "pending"
+
+
+def test_selection_batch_hash_normalizes_planned_craft_job_uuid_and_order():
+    import jev_factorio.judgments as judgments
+    from types import SimpleNamespace
+    from jev_factorio.background import BackgroundWorkLoop
+    from test_factory import recipe
+
+    owner = SimpleNamespace(catalog=SimpleNamespace(recipes={
+        "pipe": recipe("pipe", {"iron-plate": 1}),
+    }))
+    source_plan = Plan("craft-pipe", "steam_power", "Craft pipe", (
+        Step("factory_craft", "inventory", "pipe", 1, costs={"iron-plate": 1},
+             parameters={"recipe": "pipe", "batches": 1}),
+    ))
+    first = BackgroundWorkLoop._tracked_plan(owner, source_plan, None)
+    second = BackgroundWorkLoop._tracked_plan(owner, source_plan, None)
+    state = {"facts": {"tick": 50}, "active_goal": {"goal": "steam_power"}, "history": []}
+    context_a, questions_a, offered_a = judgments.question_batch(state, [first], max_candidates=1)
+    context_b, questions_b, offered_b = judgments.question_batch(state, [second], max_candidates=1)
+    assert first.to_dict() != second.to_dict()
+    common = dict(state_sha256="1" * 64, frontier_sha256="2" * 64, current_tick=50)
+    batch_a = persistence.selection_batch_metadata(context_a, questions_a, offered_a, **common)
+    batch_b = persistence.selection_batch_metadata(context_b, questions_b, offered_b, **common)
+    assert batch_a["request_sha256"] == batch_b["request_sha256"]
+    assert batch_a["offered"] == batch_b["offered"]

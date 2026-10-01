@@ -198,18 +198,24 @@ def test_solid_composed_changed_source_resume_keeps_archive_and_wal_before_model
 
     model_calls = []
 
-    def reject_after_wal(*_args):
+    def reject_after_wal(*_args, prepared_batch=None, **_kwargs):
+        assert prepared_batch is not None
+        assert len(prepared_batch[2]) == 1
         model_calls.append(True)
         saved = json.loads(path.read_text())
         assert saved["blocked_recovery_archive"] == pointer
         assert saved["blocked_recovery"]["source_revision"] == NEW_SOURCE
-        assert saved["blocked_recovery"]["attempts"][-1] == {
+        attempt = saved["blocked_recovery"]["attempts"][-1]
+        assert {key: attempt[key] for key in (
+            "source_revision", "decision_input_sha256", "reason", "tick", "outcome")} == {
             "source_revision": NEW_SOURCE,
             "decision_input_sha256": NEW_INPUT,
             "reason": "low choice confidence",
             "tick": 2000,
             "outcome": "pending",
         }
+        assert attempt["selection_batch"]["offered"]
+        assert len(attempt["selection_batch"]["request_sha256"]) == 64
         assert saved["blocked_reevaluations"][-1]["state"] == "consumed"
         assert saved["stalled_decisions"] == 1026
         assert saved["failures"] == {}

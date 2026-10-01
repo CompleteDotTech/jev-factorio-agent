@@ -71,10 +71,11 @@ def cli() -> None:
                    help="Serialized decision-request byte budget (not provider tokens); "
                         "candidates that do not fit are pruned and reported")
     p.add_argument("--persistent-idle-observations", type=int,
-                   default=DEFAULT_IDLE_OBSERVATIONS,
+                   default=None,
                    help="With --persist-recoverable-blocks, stop the invocation after this many "
                         "consecutive maximum-delay waits with unchanged decision evidence "
-                        "(0 disables the bound); the blocked checkpoint is preserved")
+                        f"(default {DEFAULT_IDLE_OBSERVATIONS}; 0 disables the bound); "
+                        "the blocked checkpoint is preserved")
     p.add_argument("--log-file", default=os.environ.get("JEV_LOG_FILE"))
     p.add_argument("--run-dir", default=os.environ.get("JEV_RUN_DIR"),
                    help="Create a new, exclusive research evidence directory (never append/resume)")
@@ -132,6 +133,17 @@ def cli() -> None:
     p.add_argument("--adopt-session", action="store_true",
                    help="Explicitly identify an older live FLE session without resetting it")
     args = p.parse_args()
+    if (args.persistent_idle_observations is not None
+            and not args.persist_recoverable_blocks):
+        p.error("--persistent-idle-observations requires --persist-recoverable-blocks")
+    if (args.persistent_idle_observations is not None
+            and not 0 <= args.persistent_idle_observations <= MAX_IDLE_OBSERVATIONS):
+        p.error(f"--persistent-idle-observations must be in [0, {MAX_IDLE_OBSERVATIONS}]")
+    persistent_idle_observations = (
+        (DEFAULT_IDLE_OBSERVATIONS if args.persistent_idle_observations is None
+         else args.persistent_idle_observations)
+        if args.persist_recoverable_blocks else None
+    )
     if args.profile_latency and (args.controller != 'hierarchical' or not args.run_dir):
         p.error("--profile-latency requires hierarchical control and --run-dir")
     if args.consolidated_observations:
@@ -261,8 +273,6 @@ def cli() -> None:
         p.error("--confidence-floor must be finite and in [0, 1]")
     if not MIN_MAX_REQUEST_BYTES <= args.max_request_bytes <= MAX_MAX_REQUEST_BYTES:
         p.error(f"--max-request-bytes must be in [{MIN_MAX_REQUEST_BYTES}, {MAX_MAX_REQUEST_BYTES}]")
-    if not 0 <= args.persistent_idle_observations <= MAX_IDLE_OBSERVATIONS:
-        p.error(f"--persistent-idle-observations must be in [0, {MAX_IDLE_OBSERVATIONS}]")
     if args.backend not in {"mock", "play_api", "fle"}:
         p.error(f"unknown backend: {args.backend}")
     if args.dashboard_events and args.controller != "hierarchical":
@@ -395,6 +405,7 @@ def cli() -> None:
             until_complete=args.until_complete, reconcile_only=args.reconcile_only,
             reevaluate_blocked_once=args.reevaluate_blocked_once,
             persist_recoverable_blocks=args.persist_recoverable_blocks,
+            persistent_idle_observations=persistent_idle_observations,
             exact_checkpoint_sha256=args.exact_checkpoint_sha256,
             blocked_source_revision=args.blocked_source_revision,
             tick_seconds=args.tick_seconds, confidence_floor=args.confidence_floor,
@@ -469,7 +480,7 @@ def cli() -> None:
                 )
             if args.persist_recoverable_blocks:
                 options["persist_recoverable_blocks"] = True
-                options["persistent_idle_observations"] = args.persistent_idle_observations
+                options["persistent_idle_observations"] = persistent_idle_observations
             loop_type = HierarchicalLoop
             if args.background_work:
                 from .background import BackgroundWorkLoop

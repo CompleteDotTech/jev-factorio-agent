@@ -47,26 +47,54 @@ an estimate nor elapsed time can verify a step or release an ambiguous mutation.
 
 ## Auditable failure causes
 
+With persistent recoverable blocks enabled, each Jev selection request is
+prepared before its write-ahead checkpoint entry. The entry binds the semantic
+native state, source contract, prepared request's semantic content and candidates
+actually offered. The provider receives that prepared payload; complete plan/evidence and
+question validation prevents it from judging a different executable plan.
+
+Completed recoverable rejections can open a batch of previously unoffered
+feasible candidates. At most three batches are evaluated for the same semantic
+state across observations and restarts. Exhausting all alternatives and reaching
+the batch limit with unseen candidates are distinct diagnostics. A pending,
+unknown, invalid or provider-blocked outcome stops advancement. An unresolved
+request is never blindly replayed. Tick-only changes, planned receipt clocks and
+generated craft identifiers do not create fresh eligibility; meaningful native
+evidence changes or an authorized source-contract change can reopen selection.
+Provider-blocked outcomes end the invocation with a durable, precise operational
+block, including a circuit refusal that made no HTTP call. They do not consume
+gameplay failure budgets. Recovery belongs to the existing provider/supervisor
+owner; unchanged-state restart is not permission to bypass its incident budget
+or replay an unresolved request.
+
+Coverage includes the active attempt tail and authenticated archived rows.
+Historical rows without batch metadata remain valid historical evidence, but do
+not authorize guessing which candidates were offered. Archive bytes, hashes,
+pending actions, receipt verification and the existing ownership gates remain
+authoritative. The idle bound limits observation waits per invocation; a
+supervisor must not blindly restart an unchanged exhausted frontier.
+
 Decision records and canonical decision events distinguish model abstention,
 low choice confidence, missing start evidence, low benefit/disruption confidence,
 malformed answers, invalid provider payloads, transient provider failures, request
 rejection before dispatch, and byte/count-pruned candidate IDs. Confidence floors
 and answer-distribution validation are unchanged.
 
-The benefit floor is applied to the validated answer distribution rather than
-to the model's reported level confidence. Rubric level 0 is "no demonstrated
-contribution" and every higher level is a positive contribution of some
-degree, so `benefit_gate` computes `support = 1 - P(level 0)` and rejects the
-candidate as `low_benefit_confidence` when support is below the floor or when
-level 0 is at least as probable as the strongest positive level. A distribution
-split between two positive levels (for example 0.42 / 0.57 with reported
-confidence 0.32) is sign-certain and passes; a distribution whose most probable
-level is 0 fails however confident the report. Each decision records
-`diagnostics.benefit_gate[plan_id]` with the support, level-0 mass, reported
-confidence and floor so the gate can be audited. The choice-confidence,
-disruption-confidence and `needs_observation` gates are unchanged, and passing
-the gate still grants no execution: native precondition, payment, receipt,
-capacity and postcondition checks decide whether the step counts.
+Decision contract schema 2 adds a separate `useful_progress` choice for each
+candidate. It asks whether current action-specific evidence supports any useful
+progress toward the local objective, independently of the ordinal benefit
+magnitude. The existing confidence floor applies to that explicit choice:
+`unsupported` and low usefulness confidence reject the plan. Missing answers,
+missing start evidence, low choice/disruption confidence and contradictory
+negative benefit evidence also reject it. Uncertainty between two positive
+benefit levels affects ranking rather than eligibility. Positive probability
+mass or expected benefit alone cannot admit a plan. `diagnostics.usefulness_gate`
+records the choice, confidence, floor and result. The legacy `benefit_gate`
+diagnostic remains descriptive with `eligibility_authority=false`; it no longer
+supplies admission authority. Native preconditions, payment, capacity, exact
+receipts and fresh postconditions remain authoritative at dispatch/verification.
+The explicit contract version participates in the source-bound decision input;
+old provider payloads lacking the new judgment fail closed.
 
 The request is bounded by serialized bytes, not provider tokens. The default
 budget is 48,000 bytes and `--max-request-bytes` (or `JEV_MAX_REQUEST_BYTES`)

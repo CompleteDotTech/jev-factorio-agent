@@ -322,6 +322,178 @@ def _local_target_gather_completion_evidence(snapshot, plan, gather_start):
     }
 
 
+def _local_fuel_recipe_dependency(snapshot, catalog, plan, fuel_transfer_start):
+    """Prove that a paid furnace-fuel step feeds the current local recipe goal.
+
+    This is a direct item-ingredient edge from the selected local recipe to the
+    item produced by an owned, currently observed furnace role. It does not
+    infer fuel for a boiler, power generation, or completion of the local goal.
+    """
+    if (len(plan.steps) != 1 or plan.steps[0].action != 'factory_insert'
+            or not isinstance(fuel_transfer_start, dict)):
+        return None
+    step = plan.steps[0]
+    parameters = step.parameters or {}
+    tick, session = snapshot.tick, snapshot.session_id
+    identity = (session, tick)
+    factory = snapshot.factory
+    inventory = snapshot.inventory
+    runtime = factory.get('acceptance_runtime')
+    receipts = factory.get('receipts')
+    if (snapshot.world_kind != 'fle' or type(tick) is not int or tick < 0
+            or not isinstance(session, str) or not session
+            or getattr(snapshot, '_coherent_observation_verified', None) != identity
+            or getattr(snapshot, '_atomic_inventory_verified', None) != identity
+            or factory.get('observation_snapshot_schema') != 2
+            or type(factory.get('observation_snapshot_schema')) is not int
+            or type(factory.get('tick')) is not int or factory.get('tick') != tick
+            or not isinstance(runtime, dict) or runtime.get('schema') != 1
+            or type(runtime.get('schema')) is not int or runtime.get('session_id') != session
+            or type(runtime.get('actor_unit')) is not int or runtime['actor_unit'] < 1
+            or type(runtime.get('surface_index')) is not int or runtime['surface_index'] < 1
+            or type(runtime.get('force_index')) is not int or runtime['force_index'] < 1
+            or type(runtime.get('speed')) not in {int, float} or runtime.get('speed') != 1
+            or runtime.get('tick_paused') is not False
+            or not isinstance(runtime.get('mods'), dict)
+            or set(runtime['mods']) - {'base', 'core'}
+            or runtime['mods'].get('base') != catalog.version
+            or snapshot.game_version != catalog.version
+            or factory.get('player_connected') is not True
+            or factory.get('player_bound') is not True
+            or not isinstance(inventory, dict)
+            or not isinstance(receipts, dict)
+            or not isinstance(factory.get('entities'), dict)
+            or parameters.get('item') != 'coal'
+            or parameters.get('role') != fuel_transfer_start.get('burner_role')
+            or parameters.get('quantity') != fuel_transfer_start.get('coal_to_transfer')
+            or parameters.get('receipt') != fuel_transfer_start.get('native_receipt')
+            or fuel_transfer_start.get('observed_tick') != tick
+            or fuel_transfer_start.get('basis') !=
+                'current_planner_need_owned_burner_and_paid_inventory'
+            or fuel_transfer_start.get('burner_unit') is None
+            or type(parameters.get('quantity')) is not int or parameters['quantity'] < 1
+            or step.effect != 'transfer'
+            or step.costs != {'coal': parameters.get('quantity')}
+            or parameters.get('receipt') !=
+                f'{tick}:factory_insert:{parameters.get("role")}:coal'
+            or parameters['receipt'] in receipts):
+        return None
+
+    local = (plan.materials or {}).get('local_objective')
+    if not isinstance(local, dict):
+        return None
+    local_item, local_target = local.get('item'), local.get('inventory_target')
+    current_local = inventory.get(local_item) if isinstance(local_item, str) else None
+    if (not isinstance(local_item, str) or not local_item
+            or type(local_target) is not int or local_target < 1
+            or local.get('ultimate_goal') != plan.goal
+            or type(current_local) is not int or current_local < 0
+            or current_local >= local_target):
+        return None
+
+    role = parameters.get('role')
+    if not isinstance(role, str) or not role.startswith('recipe:'):
+        return None
+    producer_item = role.removeprefix('recipe:')
+    if not producer_item:
+        return None
+    entity = snapshot.factory.get('entities', {}).get(role)
+    unit = fuel_transfer_start.get('burner_unit')
+    if (not isinstance(entity, dict) or entity.get('name') not in {'stone-furnace', 'steel-furnace'}
+            or type(entity.get('unit_number')) is not int or entity['unit_number'] != unit
+            or type(unit) is not int or unit < 1
+            or entity.get('recipe') not in ('', producer_item)):
+        return None
+    fuel_bag = entity.get('fuel')
+    current_fuel = fuel_bag.get('coal', 0) if isinstance(fuel_bag, dict) else None
+    current_coal = inventory.get('coal')
+    quantity = parameters['quantity']
+    try:
+        if (type(current_fuel) is not int or current_fuel < 0
+                or current_fuel != fuel_transfer_start.get('fuel_now')
+                or type(current_coal) is not int or current_coal < quantity
+                or fuel_transfer_start.get('coal_in_inventory_now') != current_coal
+                or not step.allowed(snapshot) or step.satisfied(snapshot)):
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    try:
+        sites = snapshot.factory.get('production_sites')
+        owned = production_site_sources(snapshot).get(role)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+    if (not isinstance(sites, dict) or sites.get('protocol') != 1
+            or sites.get('session_id') != session or sites.get('tick') != tick
+            or not isinstance(owned, dict) or owned.get('state') != 'owned'
+            or owned.get('source_unit') != unit):
+        return None
+
+    researched = snapshot.researched
+    if not isinstance(researched, list):
+        return None
+    local_recipe = catalog.recipes.get(local_item)
+    producer_recipe = catalog.recipes.get(producer_item)
+    prototype = catalog.machines.get(entity.get('name'))
+    if (not isinstance(local_recipe, dict) or local_recipe.get('name') != local_item
+            or type(local_recipe.get('hidden')) is not bool or local_recipe['hidden']
+            or type(local_recipe.get('enabled')) is not bool
+            or not isinstance(producer_recipe, dict)
+            or producer_recipe.get('name') != producer_item
+            or type(producer_recipe.get('hidden')) is not bool or producer_recipe['hidden']
+            or type(producer_recipe.get('enabled')) is not bool
+            or not isinstance(prototype, dict) or prototype.get('burner') is not True
+            or prototype.get('categories', {}).get(producer_recipe.get('category')) is not True):
+        return None
+    try:
+        if (not catalog.enabled(local_recipe, researched)
+                or not catalog.enabled(producer_recipe, researched)):
+            return None
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+    def has_item_product(recipe, item):
+        products = recipe.get('products')
+        return (isinstance(products, list) and any(
+            isinstance(product, dict) and product.get('type') == 'item'
+            and product.get('name') == item and _finite(product.get('amount'))
+            and product['amount'] > 0 for product in products))
+
+    ingredients = local_recipe.get('ingredients')
+    matching_ingredients = ([entry for entry in ingredients if isinstance(entry, dict)
+                             and entry.get('type') == 'item'
+                             and entry.get('name') == producer_item
+                             and _finite(entry.get('amount')) and entry['amount'] > 0]
+                            if isinstance(ingredients, list) else [])
+    if (not has_item_product(local_recipe, local_item)
+            or not has_item_product(producer_recipe, producer_item)
+            or not matching_ingredients):
+        return None
+
+    path = [local_item, producer_item]
+    return {
+        'observed_tick': tick,
+        'session_id': session,
+        'basis': 'same_tick_enabled_local_recipe_ingredient_and_owned_furnace',
+        'planner_item_path': path,
+        'local_target_item': local_item,
+        'local_target_inventory_now': current_local,
+        'local_target_inventory_target': local_target,
+        'local_target_shortfall_now': local_target - current_local,
+        'local_recipe': local_item,
+        'local_recipe_enabled_now': True,
+        'ingredient_item': producer_item,
+        'ingredient_amount_per_batch': min(entry['amount'] for entry in matching_ingredients),
+        'producer_role': role,
+        'producer_unit': unit,
+        'producer_recipe': producer_item,
+        'producer_recipe_enabled_now': True,
+        'producer_machine': entity['name'],
+        'producer_machine_recipe_now': entity.get('recipe'),
+        'producer_owned_source_identity_current': True,
+        'does_not_establish_furnace_output_or_goal_completion': True,
+    }
+
+
 def _placement_start_evidence(snapshot, plan):
     if len(plan.steps) != 1 or plan.steps[0].action != 'factory_place':
         return None
@@ -732,6 +904,7 @@ def _utility_power_prerequisite_start_evidence(
     planned_receipt = None
     gather_evidence = None
     child_evidence = None
+    local_recipe_dependency = None
 
     def child_start(kind, fields):
         witnesses = {name: deepcopy(value) for name, value in fields.items()}
@@ -757,7 +930,8 @@ def _utility_power_prerequisite_start_evidence(
             'observed_tick': tick,
             'kind': kind,
             'action': step.action,
-            'item': step.item,
+            'item': (child_parameters.get('item') if step.action == 'factory_insert'
+                     else step.item),
             'role': role_value or child_parameters.get('resource'),
             'quantity': child_parameters.get('quantity'),
             'planner_item_path': list(path_value),
@@ -766,6 +940,10 @@ def _utility_power_prerequisite_start_evidence(
             'witnesses': witnesses,
             'completion_requires_fresh_native_receipt_or_inventory': True,
         }
+
+    if isinstance(fuel_transfer_start, dict):
+        local_recipe_dependency = _local_fuel_recipe_dependency(
+            snapshot, catalog, plan, fuel_transfer_start)
 
     if step.action == 'factory_connect':
         expected = None
@@ -814,6 +992,11 @@ def _utility_power_prerequisite_start_evidence(
                 and fuel_transfer_start.get('burner_role') == parameters.get('role')
                 and fuel_transfer_start.get('coal_to_transfer') == parameters.get('quantity')
                 and fuel_transfer_start.get('native_receipt') == parameters.get('receipt')
+                and isinstance(local_recipe_dependency, dict)
+                and fuel_transfer_start.get('local_recipe_dependency') ==
+                    local_recipe_dependency
+                and fuel_transfer_start.get('planner_item_path') ==
+                    local_recipe_dependency.get('planner_item_path')
                 and parameters.get('item') == 'coal'
                 and step.costs == {'coal': parameters.get('quantity')}):
             action_kind = 'utility_chain_furnace_fuel_transfer_start'
@@ -1019,6 +1202,28 @@ def _utility_power_prerequisite_start_evidence(
     except (KeyError, TypeError, ValueError):
         return None
 
+    planned_receipt_absent = None
+    paid_inventory_sufficient = None
+    action_coal_now = None
+    if step.action == 'factory_insert':
+        item = parameters.get('item')
+        quantity = parameters.get('quantity')
+        receipt = parameters.get('receipt')
+        planned_receipt = receipt
+        planned_receipt_absent = (isinstance(receipt, str) and bool(receipt)
+                                  and receipt not in factory.get('receipts', {}))
+        carried_item = snapshot.inventory.get(item) if isinstance(item, str) else None
+        paid_inventory_sufficient = (
+            isinstance(item, str) and type(quantity) is int and quantity > 0
+            and type(carried_item) is int and carried_item >= quantity
+            and step.costs == {item: quantity}
+            and getattr(snapshot, '_atomic_inventory_verified', None) == identity
+            and planned_receipt_absent is True)
+        if item == 'coal':
+            action_coal_now = carried_item
+    elif step.action == 'factory_gather' and parameters.get('resource') == 'coal':
+        action_coal_now = coal_carried
+
     return {
         'observed_tick': tick,
         'session_id': session,
@@ -1038,18 +1243,17 @@ def _utility_power_prerequisite_start_evidence(
             'boiler_to_engine_steam': steam_connected,
             'engine_to_consumer_electricity': electric_connected,
         },
+        'local_recipe_dependency': local_recipe_dependency,
         'next_action_kind': action_kind,
         'next_action': step.action,
         'boiler_coal_now': boiler_coal,
         'boiler_coal_deficit_to_five': coal_deficit,
-        'actor_coal_now': coal_carried if type(coal_carried) is int else None,
+        'actor_coal_now': action_coal_now if type(action_coal_now) is int else None,
         'planned_native_receipt': planned_receipt,
-        'planned_receipt_absent_now': planned_receipt is not None,
+        'planned_receipt_absent_now': planned_receipt_absent,
         'child_start_evidence': child_evidence,
         'transfer_receipt_observed_now': False if step.action == 'factory_insert' else None,
-        'paid_inventory_sufficient_now': (
-            type(coal_carried) is int and coal_deficit is not None
-            and coal_carried >= coal_deficit if step.action == 'factory_insert' else None),
+        'paid_inventory_sufficient_now': paid_inventory_sufficient,
         'gather_start_evidence': gather_evidence,
         'placement_or_connection_rechecks_native_preconditions': True,
         'native_transfer_rechecks_reach_capacity_receipt_and_postcondition': (
@@ -2277,6 +2481,15 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                     'basis': 'current_planner_fuel_need_and_owned_native_burner',
                     'later_fuel_transfer_and_output_require_fresh_native_preconditions': True,
                 }
+        if isinstance(fuel_transfer_start, dict):
+            local_dependency = _local_fuel_recipe_dependency(
+                snapshot, catalog, plan, fuel_transfer_start)
+            existing_path = fuel_transfer_start.get('planner_item_path')
+            if (isinstance(local_dependency, dict)
+                    and existing_path in (None, local_dependency['planner_item_path'])):
+                fuel_transfer_start['planner_item_path'] = list(
+                    local_dependency['planner_item_path'])
+                fuel_transfer_start['local_recipe_dependency'] = local_dependency
         utility_power_start = _utility_power_prerequisite_start_evidence(
             snapshot, catalog, plan, gather_start, local_target_completion,
             craft_start=craft_start,

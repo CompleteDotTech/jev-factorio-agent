@@ -229,7 +229,9 @@ class HierarchicalLoop(AgentLoop):
                 + len(self.memory.blocked_recovery["attempts"]))
 
     def _persistent_wait(self, snapshot: GameSnapshot, input_sha256: str, *,
-                         source_authorized: bool = False) -> dict:
+                         source_authorized: bool = False,
+                         status_phase: str | None = None,
+                         status_details: dict | None = None) -> dict:
         """Persist one observation-only wait while retaining the blocked state."""
         from .blocked_persistence import find_attempt, record_wait
         source = self.provenance["code_revision"]
@@ -278,32 +280,317 @@ class HierarchicalLoop(AgentLoop):
                 self._compact_next_record = False
         self._persistent_recovery_status = {
             "phase": ("evaluation_outcome_unknown_waiting" if unresolved
-                      else "waiting_for_changed_game_evidence"),
+                      else status_phase or "waiting_for_changed_game_evidence"),
             "reason": self.memory.reason,
             "next_observation_seconds": delay,
             "model_call": False,
             "decision_input_sha256": input_sha256,
             "recorded_attempts": self._blocked_recovery_attempt_count(),
         }
+        if status_details is not None:
+            self._persistent_recovery_status.update(deepcopy(status_details))
         outcome = ("Decision outcome unresolved; observing for changed evidence" if unresolved
                    else "Blocked; waiting for changed game evidence")
+        if not unresolved and status_phase == "alternatives_exhausted_waiting":
+            outcome = "Blocked; all currently feasible alternatives were already evaluated"
+        elif not unresolved and status_phase == "alternative_batch_limit_waiting":
+            outcome = "Blocked; bounded alternative evaluation limit reached"
         self._compact_next_record = True
         try:
             return self._record(snapshot, "observe", outcome)
         finally:
             self._compact_next_record = False
 
+    def _record_alternative_frontier_status(self, snapshot: GameSnapshot, *,
+                                            input_sha256: str, state_sha256: str,
+                                            frontier_sha256: str, phase_name: str,
+                                            seen_count: int, unseen_count: int,
+                                            reason: str) -> dict:
+        """Durably report exhaustion/cap without changing the recoverable reason."""
+        from .blocked_persistence import MAX_SELECTION_BATCHES_PER_STATE, RECOVERABLE_REASONS
+        if reason not in RECOVERABLE_REASONS:
+            raise ValueError("Alternative frontier can finish only a recoverable rejection")
+        expected_kind = ("blocked_recovery_alternatives_exhausted"
+                         if phase_name == "alternatives_exhausted_waiting"
+                         else "blocked_recovery_alternative_batch_limit")
+        already_recorded = any(
+                event.get("kind") == expected_kind
+                and event.get("state_sha256") == state_sha256
+                and event.get("frontier_sha256") == frontier_sha256
+                for event in self.memory.history)
+        if not already_recorded:
+            # The state transition and its diagnostic are one checkpoint save.
+            # This closes the crash window between the final rejected WAL row
+            # and the ordinary stalled-decision bookkeeping in step().
+            if self.memory.status != "blocked":
+                self.memory.reason = reason
+            self.memory.stalled_decisions += 1
+            # The persistent evaluator has reached its declared bound for
+            # this unchanged semantic frontier. Mark that state explicitly
+            # blocked now; the threshold remains the rule for ordinary
+            # non-persistent failures, not for an exhausted one-use frontier.
+            self.memory.status = "blocked"
+            self.memory.event(
+                expected_kind, state_sha256=state_sha256,
+                frontier_sha256=frontier_sha256, tick=snapshot.tick,
+                evaluated_batches=seen_count, unseen_candidates=unseen_count,
+                max_batches=MAX_SELECTION_BATCHES_PER_STATE, reason=reason)
+            details = {"selection_state_sha256": state_sha256,
+                       "selection_frontier_sha256": frontier_sha256,
+                       "evaluated_batches": seen_count,
+                       "unseen_candidates": unseen_count,
+                       "max_batches": MAX_SELECTION_BATCHES_PER_STATE}
+            self._persistent_recovery_status = {
+                "phase": phase_name,
+                "reason": self.memory.reason,
+                "next_observation_seconds": self.persistent_recovery_wait_seconds(),
+                "model_call": bool(self._decision and self._decision.model_called),
+                "decision_input_sha256": input_sha256,
+                "recorded_attempts": self._blocked_recovery_attempt_count(),
+                **details,
+            }
+            outcome = ("Blocked; all currently feasible alternatives were already evaluated"
+                       if phase_name == "alternatives_exhausted_waiting"
+                       else "Blocked; bounded alternative evaluation limit reached")
+            # Keep this first terminal evaluation as a full decision record.
+            # Later unchanged observations use the compact persistent-wait path.
+            self._compact_next_record = False
+            return self._record(snapshot, "observe", outcome)
+        return self._persistent_wait(
+            snapshot, input_sha256, status_phase=phase_name,
+            status_details={"selection_state_sha256": state_sha256,
+                            "selection_frontier_sha256": frontier_sha256,
+                            "evaluated_batches": seen_count,
+                            "unseen_candidates": unseen_count,
+                            "max_batches": MAX_SELECTION_BATCHES_PER_STATE})
+
+    def _persistent_selection_with_alternatives(
+            self, snapshot: GameSnapshot, state: dict, plans: list[Plan], *,
+            source_authorized: bool = False,
+            authorization_reason: str | None = None) -> dict:
+        """Evaluate at most three durable, non-overlapping prepared batches.
+
+        A batch is committed to the existing persistent attempt ledger before
+        the provider call. Only completed recoverable rejections permit trying
+        an unseen candidate batch. Pending, provider, validation, and unknown
+        outcomes remain one-use and stop this pass.
+        """
+        from . import judgments
+        from .blocked_persistence import (
+            MAX_SELECTION_BATCHES_PER_STATE, RECOVERABLE_REASONS,
+            _candidate_semantic_sha256, decision_input_sha256, find_attempt,
+            selection_attempts_for_state, selection_batch_metadata,
+            selection_frontier_sha256, selection_state_sha256, was_attempted,
+        )
+
+        question_batch = getattr(judgments, "question_batch", None)
+        if not callable(question_batch):
+            raise RuntimeError("Prepared decision batches are unavailable in this source revision")
+        source = self.provenance["code_revision"]
+        plan_rows = [plan.to_dict() for plan in plans]
+        state_sha256 = selection_state_sha256(
+            state, plan_rows, session_id=snapshot.session_id, source_revision=source,
+            target=self.target, policy=self.policy, confidence_floor=self.confidence_floor,
+            current_tick=snapshot.tick)
+        frontier_sha256 = selection_frontier_sha256(
+            state, plan_rows, session_id=snapshot.session_id, source_revision=source,
+            target=self.target, policy=self.policy, confidence_floor=self.confidence_floor,
+            current_tick=snapshot.tick)
+        rows = selection_attempts_for_state(
+            self.memory, source, state_sha256,
+            archive_index=self._blocked_recovery_archive_index)
+
+        # Old implementations keyed one request by the entire unprepared
+        # frontier. It cannot tell us which candidates the provider actually
+        # saw, so preserve it as an ambiguity instead of guessing and replaying.
+        legacy_input = decision_input_sha256(
+            state, plan_rows, session_id=snapshot.session_id, source_revision=source,
+            target=self.target, policy=self.policy, confidence_floor=self.confidence_floor,
+            current_tick=snapshot.tick)
+        legacy_row = find_attempt(
+            self.memory, source, legacy_input,
+            archive_index=self._blocked_recovery_archive_index)
+        if legacy_row is not None and "selection_batch" not in legacy_row:
+            return {"record": self._persistent_wait(snapshot, legacy_input)}
+
+        seen_candidates = {
+            offered["candidate_sha256"]
+            for row in rows
+            for offered in row["selection_batch"]["offered"]
+        }
+        for row in rows:
+            if row.get("outcome") != "rejected" or row.get("reason") not in RECOVERABLE_REASONS:
+                return {"record": self._persistent_wait(
+                    snapshot, row["decision_input_sha256"])}
+
+        evidence = state.get("candidate_evidence", {})
+        if not isinstance(evidence, dict):
+            raise ValueError("Invalid persistent candidate evidence map")
+        candidate_digests = {
+            plan.id: _candidate_semantic_sha256(
+                plan.to_dict(), evidence.get(plan.id), current_tick=snapshot.tick)
+            for plan in plans
+        }
+        if len(set(candidate_digests.values())) != len(candidate_digests):
+            # Identical semantic candidates cannot safely be distinguished by
+            # an ID-only prompt; fail closed rather than re-offer one.
+            raise ValueError("Persistent candidate frontier contains semantic duplicates")
+
+        def unseen_plans():
+            return [plan for plan in plans if candidate_digests[plan.id] not in seen_candidates]
+
+        legacy_reason = self.memory.reason
+        if len(rows) >= MAX_SELECTION_BATCHES_PER_STATE:
+            unseen_count = len(unseen_plans())
+            input_sha = rows[-1]["decision_input_sha256"] if rows else legacy_input
+            prior_reason = (rows[-1]["reason"] if rows else self.memory.reason)
+            return {"record": self._record_alternative_frontier_status(
+                snapshot, input_sha256=input_sha, state_sha256=state_sha256,
+                frontier_sha256=frontier_sha256,
+                phase_name=("alternatives_exhausted_waiting" if unseen_count == 0
+                            else "alternative_batch_limit_waiting"),
+                seen_count=len(rows), unseen_count=unseen_count,
+                reason=prior_reason)}
+
+        source_auth_pending = source_authorized
+        # Keep waiting on the last exact prepared request. Falling back to the
+        # legacy whole-frontier fingerprint on an exhausted repeat resets the
+        # durable backoff after every poll and prevents the idle bound from
+        # ever accumulating.
+        last_input_sha256 = (rows[-1]["decision_input_sha256"] if rows else legacy_input)
+        for _batch_number in range(len(rows), MAX_SELECTION_BATCHES_PER_STATE):
+            remaining = unseen_plans()
+            if not remaining:
+                return {"record": self._record_alternative_frontier_status(
+                    snapshot, input_sha256=last_input_sha256,
+                    state_sha256=state_sha256, frontier_sha256=frontier_sha256,
+                    phase_name="alternatives_exhausted_waiting",
+                    seen_count=len(rows), unseen_count=0,
+                    reason=rows[-1]["reason"])}
+
+            # question_batch performs the same bounded lossless compaction used
+            # by selection. A preparation failure is local, so it gets no WAL
+            # row and cannot be mistaken for a provider evaluation.
+            context, questions, offered = question_batch(
+                state, remaining, max_bytes=self.max_request_bytes)
+            if not offered:
+                raise ValueError("Prepared selection batch has no offered candidates")
+            metadata = selection_batch_metadata(
+                context, questions, offered, state_sha256=state_sha256,
+                frontier_sha256=frontier_sha256, current_tick=snapshot.tick)
+            input_sha256 = decision_input_sha256(
+                context, [plan.to_dict() for plan in offered],
+                session_id=snapshot.session_id, source_revision=source,
+                target=self.target, policy=self.policy,
+                confidence_floor=self.confidence_floor, current_tick=snapshot.tick,
+                questions=questions, selection_batch=metadata)
+            last_input_sha256 = input_sha256
+            if was_attempted(
+                    self.memory, source, input_sha256,
+                    allow_source_change=source_auth_pending,
+                    archive_index=self._blocked_recovery_archive_index):
+                return {"record": self._persistent_wait(
+                    snapshot, input_sha256, source_authorized=source_auth_pending)}
+
+            self._record_persistent_attempt(
+                snapshot, input_sha256, source_authorized=source_auth_pending,
+                authorization_reason=authorization_reason,
+                selection_batch=metadata)
+            source_auth_pending = False
+            self._persistent_runtime_wait_level = 0
+            self._persistent_idle_waits = 0
+            self._persistent_recovery_status = {
+                "phase": "evaluating_changed_game_evidence",
+                "reason": legacy_reason,
+                "model_call": True,
+                "decision_input_sha256": input_sha256,
+                "selection_state_sha256": state_sha256,
+                "selection_frontier_sha256": frontier_sha256,
+                "offered_candidate_count": len(offered),
+                "recorded_attempts": self._blocked_recovery_attempt_count(),
+            }
+            try:
+                with phase("selection", self._diagnostic_trace):
+                    self._decision = select_plan(
+                        self._trace.client(self.jev), state, remaining,
+                        self.confidence_floor, self.max_request_bytes,
+                        prepared_batch=(context, questions, offered))
+            except ValueError as error:
+                self._decision = Decision(
+                    None, "observe", str(error), state=context,
+                    diagnostics={"schema": 1, "outcome": "request_rejected"})
+
+            pruned = self._decision.diagnostics.get("pruned_candidate_ids")
+            if pruned:
+                print(f"[t={snapshot.tick}] request budget pruned {len(pruned)} of "
+                      f"{self._decision.diagnostics.get('input_candidates')} candidates "
+                      f"({self._decision.diagnostics.get('request_bytes')}/"
+                      f"{self.max_request_bytes} bytes): {', '.join(pruned)}", flush=True)
+            chosen = next((plan for plan in offered
+                           if plan.id == self._decision.plan_id), None)
+            if chosen is not None:
+                return {"decision": self._decision, "chosen": chosen,
+                        "input_sha256": input_sha256, "finalized": False,
+                        "trace_done": False}
+
+            outcome = self._decision.diagnostics.get("outcome")
+            reason = self._decision.reason
+            if outcome == "provider_blocked":
+                return {"decision": self._decision, "chosen": None,
+                        "input_sha256": input_sha256, "finalized": False,
+                        "trace_done": False}
+            if (reason not in RECOVERABLE_REASONS
+                    or outcome not in {"all_candidates_rejected", "low_choice_confidence"}):
+                return {"decision": self._decision, "chosen": None,
+                        "input_sha256": input_sha256, "finalized": False,
+                        "trace_done": False}
+
+            # Persist a completed rejection before opening another provider
+            # request. A crash after this save resumes from the next unseen set.
+            self._trace_decision()
+            from .blocked_persistence import finish_attempt
+            finish_attempt(self.memory, source, input_sha256, "rejected", reason,
+                           archive_index=self._blocked_recovery_archive_index)
+            self._save()
+            seen_candidates.update(
+                item["candidate_sha256"] for item in metadata["offered"])
+            rows.append({"decision_input_sha256": input_sha256,
+                         "outcome": "rejected", "reason": reason,
+                         "selection_batch": metadata})
+            if not unseen_plans():
+                return {"decision": self._decision, "chosen": None,
+                        "input_sha256": input_sha256, "finalized": True,
+                        "trace_done": True,
+                        "wait_phase": "alternatives_exhausted_waiting",
+                        "state_sha256": state_sha256,
+                        "frontier_sha256": frontier_sha256,
+                        "reason": reason,
+                        "seen_count": len(rows), "unseen_count": 0}
+            if len(rows) >= MAX_SELECTION_BATCHES_PER_STATE:
+                return {"decision": self._decision, "chosen": None,
+                        "input_sha256": input_sha256, "finalized": True,
+                        "trace_done": True,
+                        "wait_phase": "alternative_batch_limit_waiting",
+                        "state_sha256": state_sha256,
+                        "frontier_sha256": frontier_sha256,
+                        "reason": reason,
+                        "seen_count": len(rows),
+                        "unseen_count": len(unseen_plans())}
+
+        raise AssertionError("Persistent selection batch loop exited unexpectedly")
+
     def _record_persistent_attempt(self, snapshot: GameSnapshot, input_sha256: str, *,
                                    source_authorized: bool = False,
                                    authorization_reason: str | None = None,
-                                   outcome: str = "pending") -> None:
+                                   outcome: str = "pending",
+                                   selection_batch: dict | None = None) -> None:
         """Write-ahead one decision fingerprint before model selection."""
         if source_authorized:
             # The changed-contract source authorization and its first concrete
             # fingerprint share the same durable checkpoint commit.
             self._consume_blocked_reevaluation(
                 snapshot, input_sha256, authorization_reason=authorization_reason,
-                persistent_outcome=outcome)
+                persistent_outcome=outcome, selection_batch=selection_batch)
             return
         from .blocked_persistence import RECOVERABLE_REASONS, finish_attempt, record_attempt
         self._archive_full_recovery_tail()
@@ -313,7 +600,8 @@ class HierarchicalLoop(AgentLoop):
             reason = self.memory.reason if self.memory.reason in RECOVERABLE_REASONS else None
             record_attempt(self.memory, self.provenance["code_revision"], input_sha256,
                            reason, snapshot.tick,
-                           archive_index=self._blocked_recovery_archive_index)
+                           archive_index=self._blocked_recovery_archive_index,
+                           selection_batch=selection_batch)
             if outcome != "pending":
                 finish_attempt(self.memory, self.provenance["code_revision"], input_sha256,
                                outcome, reason,
@@ -486,7 +774,8 @@ class HierarchicalLoop(AgentLoop):
     def _consume_blocked_reevaluation(self, snapshot: GameSnapshot,
                                       persistent_input: str | None = None, *,
                                       authorization_reason: str | None = None,
-                                      persistent_outcome: str = "pending") -> None:
+                                      persistent_outcome: str = "pending",
+                                      selection_batch: dict | None = None) -> None:
         """Durably consume the one-use authorization before any model request."""
         from .blocked_reevaluation import validate_blocked_memory
 
@@ -530,7 +819,8 @@ class HierarchicalLoop(AgentLoop):
                 from .blocked_persistence import finish_attempt, record_attempt
                 record_attempt(self.memory, self.provenance["code_revision"], persistent_input,
                                self.memory.reason, snapshot.tick, allow_source_change=True,
-                               archive_index=self._blocked_recovery_archive_index)
+                               archive_index=self._blocked_recovery_archive_index,
+                               selection_batch=selection_batch)
                 if persistent_outcome != "pending":
                     finish_attempt(self.memory, self.provenance["code_revision"], persistent_input,
                                    persistent_outcome, self.memory.reason,
@@ -1458,6 +1748,10 @@ class HierarchicalLoop(AgentLoop):
             singleton = bool(self._selection_support and len(plans) == 1
                              and self.policy == "hybrid" and provider_ready)
             persistent_input_sha256 = None
+            persistent_attempt_finalized = False
+            persistent_trace_done = False
+            alternative_wait = None
+            alternative_status = None
             if self.policy == "deterministic" or singleton:
                 with phase("selection", self._diagnostic_trace):
                     chosen = self._fallback_plan(plans)
@@ -1482,95 +1776,129 @@ class HierarchicalLoop(AgentLoop):
                         "guidance": "Prefer useful work while machines run; avoid tiny pickups and idle waits",
                         "ultimate_goal": self.memory.active_goal,
                     }
-                if persistent_blocked and self._persistent_block_active():
-                    from .blocked_persistence import decision_input_sha256, was_attempted
-                    persistent_input_sha256 = decision_input_sha256(
-                        state, [plan.to_dict() for plan in plans],
-                        session_id=snapshot.session_id,
-                        source_revision=self.provenance["code_revision"], target=self.target,
-                        policy=self.policy, confidence_floor=self.confidence_floor,
-                        current_tick=snapshot.tick)
-                    if was_attempted(
-                            self.memory, self.provenance["code_revision"],
-                            persistent_input_sha256,
-                            allow_source_change=blocked_reevaluation,
-                            archive_index=self._blocked_recovery_archive_index):
-                        return self._persistent_wait(snapshot, persistent_input_sha256)
-                    if blocked_reevaluation:
-                        # Consume both gates and record this exact input in one
-                        # durable save before the first changed-source request.
-                        self._record_persistent_attempt(
-                            snapshot, persistent_input_sha256, source_authorized=True,
-                            authorization_reason=blocked_reevaluation_reason)
-                    else:
-                        self._record_persistent_attempt(snapshot, persistent_input_sha256)
-                    self._persistent_runtime_wait_level = 0
-                    self._persistent_idle_waits = 0
-                    self._persistent_recovery_status = {
-                        "phase": "evaluating_changed_game_evidence",
-                        "reason": self.memory.reason,
-                        "model_call": True,
-                        "decision_input_sha256": persistent_input_sha256,
-                        "recorded_attempts": self._blocked_recovery_attempt_count(),
-                    }
-                elif (self.persist_recoverable_blocks and self.memory.status == "running"
-                      and self.memory.stalled_decisions + 1 >= self.max_stalled_decisions):
-                    # A normal running decision can itself reach the blocked
-                    # threshold. Write its exact input before the provider call
-                    # so a crash cannot make a resumed process buy it again.
-                    from .blocked_persistence import decision_input_sha256, find_attempt
-                    persistent_input_sha256 = decision_input_sha256(
-                        state, [plan.to_dict() for plan in plans],
-                        session_id=snapshot.session_id,
-                        source_revision=self.provenance["code_revision"], target=self.target,
-                        policy=self.policy, confidence_floor=self.confidence_floor,
-                        current_tick=snapshot.tick)
-                    if find_attempt(self.memory, self.provenance["code_revision"],
-                                    persistent_input_sha256,
-                                    archive_index=self._blocked_recovery_archive_index) is not None:
-                        return self._persistent_wait(snapshot, persistent_input_sha256)
-                    self._record_persistent_attempt(
-                        snapshot, persistent_input_sha256)
-                try:
-                    with phase("selection", self._diagnostic_trace):
-                        self._decision = select_plan(self._trace.client(self.jev), state, plans, self.confidence_floor,
-                                                     self.max_request_bytes)
-                except ValueError as error:
-                    self._decision = Decision(None, "observe", str(error), state=state,
-                                              diagnostics={"schema": 1, "outcome": "request_rejected"})
-                pruned = self._decision.diagnostics.get("pruned_candidate_ids")
-                if pruned:
-                    print(f"[t={snapshot.tick}] request budget pruned {len(pruned)} of "
-                          f"{self._decision.diagnostics.get('input_candidates')} candidates "
-                          f"({self._decision.diagnostics.get('request_bytes')}/"
-                          f"{self.max_request_bytes} bytes): {', '.join(pruned)}", flush=True)
+                # Every resumable Jev selection is write-ahead persisted. Do
+                # not wait for the legacy stalled-decision threshold: a lost
+                # response on the first running request is already ambiguous.
+                persistent_selection_mode = bool(
+                    self.persist_recoverable_blocks and self.policy == "jev")
+                if persistent_selection_mode:
+                    result = self._persistent_selection_with_alternatives(
+                        snapshot, state, plans, source_authorized=blocked_reevaluation,
+                        authorization_reason=blocked_reevaluation_reason)
+                    if "record" in result:
+                        return result["record"]
+                    self._decision = result["decision"]
+                    chosen = result["chosen"]
+                    persistent_input_sha256 = result["input_sha256"]
+                    persistent_attempt_finalized = result["finalized"]
+                    persistent_trace_done = result["trace_done"]
+                    alternative_wait = result.get("wait_phase")
+                    if alternative_wait is not None:
+                        alternative_status = result
+                else:
+                    try:
+                        with phase("selection", self._diagnostic_trace):
+                            self._decision = select_plan(
+                                self._trace.client(self.jev), state, plans,
+                                self.confidence_floor, self.max_request_bytes)
+                    except ValueError as error:
+                        self._decision = Decision(
+                            None, "observe", str(error), state=state,
+                            diagnostics={"schema": 1, "outcome": "request_rejected"})
+                    pruned = self._decision.diagnostics.get("pruned_candidate_ids")
+                    if pruned:
+                        print(f"[t={snapshot.tick}] request budget pruned {len(pruned)} of "
+                              f"{self._decision.diagnostics.get('input_candidates')} candidates "
+                              f"({self._decision.diagnostics.get('request_bytes')}/"
+                              f"{self.max_request_bytes} bytes): {', '.join(pruned)}", flush=True)
                 if self._decision.diagnostics.get("outcome") == "provider_blocked":
                     # Operational denial is neither model abstention nor planning
                     # failure. No hybrid fallback and no consumed gameplay budget.
-                    if persistent_input_sha256 is not None:
+                    if persistent_input_sha256 is not None and not persistent_attempt_finalized:
                         from .blocked_persistence import finish_attempt
                         finish_attempt(self.memory, self.provenance["code_revision"],
                                        persistent_input_sha256, "provider_blocked",
                                        archive_index=self._blocked_recovery_archive_index)
-                        self._persistent_recovery_status = {
-                            "phase": "provider_blocked", "reason": self._decision.reason,
-                            "model_call": self._decision.model_called,
-                            "decision_input_sha256": persistent_input_sha256,
-                        }
-                    self._trace_decision()
+                        if self.persist_recoverable_blocks:
+                            provider = self._decision.diagnostics.get("provider", {})
+                            if not isinstance(provider, dict):
+                                provider = {}
+                            category = provider.get("category")
+                            if category not in {
+                                    "application_schema", "service_network",
+                                    "authentication_authorization", "account_quota",
+                                    "rate_limit", "unknown_outcome"}:
+                                category = "unknown"
+                            provider_phase = provider.get("phase")
+                            if provider_phase not in {"cooldown", "exhausted"}:
+                                provider_phase = "blocked"
+                            attempts = provider.get("attempts")
+                            if type(attempts) is not int or attempts < 0:
+                                attempts = None
+                            budget_limit = provider.get("budget_limit")
+                            if type(budget_limit) is not int or budget_limit < 1:
+                                budget_limit = None
+                            attempts_text = "unknown" if attempts is None else str(attempts)
+                            budget_text = ("unknown" if budget_limit is None
+                                           else str(budget_limit))
+                            provider_reason = (
+                                "Provider circuit requires operator recovery: "
+                                f"{category} ({provider_phase}, probes "
+                                f"{attempts_text}/{budget_text})")
+                            model_called = bool(self._decision.model_called)
+                            self.memory.status = "blocked"
+                            self.memory.reason = provider_reason
+                            self.memory.event(
+                                "provider_circuit_operator_recovery_required",
+                                decision_input_sha256=persistent_input_sha256,
+                                tick=snapshot.tick, reason=provider_reason,
+                                category=category,
+                                provider_phase=provider_phase, attempts=attempts,
+                                budget_limit=budget_limit, model_called=model_called)
+                            self._persistent_recovery_status = {
+                                "phase": "provider_blocked",
+                                "reason": provider_reason,
+                                "model_call": model_called,
+                                "decision_input_sha256": persistent_input_sha256,
+                                "recorded_attempts": self._blocked_recovery_attempt_count(),
+                                "provider_category": category,
+                                "provider_phase": provider_phase,
+                                "provider_attempts": attempts,
+                                "provider_budget_limit": budget_limit,
+                            }
+                        else:
+                            self._persistent_recovery_status = {
+                                "phase": "provider_blocked", "reason": self._decision.reason,
+                                "model_call": self._decision.model_called,
+                                "decision_input_sha256": persistent_input_sha256,
+                            }
+                    if not persistent_trace_done:
+                        self._trace_decision()
                     return self._record(snapshot, "observe", self._decision.reason)
-                chosen = next((p for p in plans if p.id == self._decision.plan_id), None)
-                if chosen is None and self.policy == "hybrid":
-                    chosen = self._fallback_plan(plans)
-                    self._decision.plan_id = chosen.id
-                    self._decision.source = "deterministic-fallback"
-                self._trace_decision()
+                if not persistent_selection_mode:
+                    chosen = next((p for p in plans if p.id == self._decision.plan_id), None)
+                    if chosen is None and self.policy == "hybrid":
+                        chosen = self._fallback_plan(plans)
+                        self._decision.plan_id = chosen.id
+                        self._decision.source = "deterministic-fallback"
+                if not persistent_trace_done:
+                    self._trace_decision()
                 if chosen is None:
+                    if alternative_wait is not None:
+                        return self._record_alternative_frontier_status(
+                            snapshot, input_sha256=persistent_input_sha256,
+                            state_sha256=alternative_status["state_sha256"],
+                            frontier_sha256=alternative_status["frontier_sha256"],
+                            phase_name=alternative_wait,
+                            seen_count=alternative_status["seen_count"],
+                            unseen_count=alternative_status["unseen_count"],
+                            reason=alternative_status["reason"])
                     self.memory.stalled_decisions += 1
-                    self.memory.reason = self._decision.reason
+                    if not persistent_blocked:
+                        self.memory.reason = self._decision.reason
                     if self.memory.stalled_decisions >= self.max_stalled_decisions:
                         self.memory.status = "blocked"
-                    if persistent_input_sha256 is not None:
+                    if persistent_input_sha256 is not None and not persistent_attempt_finalized:
                         from .blocked_persistence import RECOVERABLE_REASONS, finish_attempt
                         if self._decision.reason in RECOVERABLE_REASONS:
                             finish_attempt(self.memory, self.provenance["code_revision"],

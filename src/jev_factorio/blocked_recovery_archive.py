@@ -237,6 +237,40 @@ class VerifiedAttemptArchive:
         result.setdefault("outcome", "pending")
         return result
 
+    def selection_attempts(self, source_revision: dict, state_sha256: str, *, memory) -> list[dict]:
+        """Return authenticated selection-batch rows for one source/state pair."""
+        if (memory.session_id != self._session_id or memory.target != self._target
+                or memory.blocked_recovery_archive != self._archive_pointer):
+            raise ValueError("Blocked-recovery archive index belongs to a different checkpoint")
+        from .blocked_persistence import MAX_SELECTION_BATCHES_PER_STATE, _source
+        source = _source(source_revision)
+        if type(state_sha256) is not str or not _DIGEST.fullmatch(state_sha256):
+            raise ValueError("Invalid persistent selection state fingerprint")
+        self.validate_files()
+        cursor = self._connection.execute(
+            "SELECT payload FROM attempts WHERE source_commit=? AND source_sha256=?",
+            (source["commit"], source["source_sha256"]))
+        try:
+            rows = []
+            for (payload,) in cursor:
+                row = json.loads(payload)
+                batch = row.get("selection_batch")
+                if isinstance(batch, dict) and batch.get("state_sha256") == state_sha256:
+                    rows.append(row)
+                    if len(rows) > MAX_SELECTION_BATCHES_PER_STATE:
+                        raise ValueError("Persistent selection batch limit is exceeded for one state")
+        finally:
+            cursor.close()
+        seen_candidates = set()
+        for row in rows:
+            batch = row["selection_batch"]
+            for offered in batch["offered"]:
+                candidate_sha256 = offered["candidate_sha256"]
+                if candidate_sha256 in seen_candidates:
+                    raise ValueError("Persistent selection candidate was already offered for this state")
+                seen_candidates.add(candidate_sha256)
+        return rows
+
     def close(self) -> None:
         try:
             self._connection.close()
