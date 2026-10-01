@@ -4,10 +4,66 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
-from ..output_buffers import COMMAND, PARTS, flow_complete, potential, sources
+from ..output_buffers import COMMAND, PARTS, current, flow_complete, potential, sources, validate_commitments
 from ..skills import Plan
 from .ready_work import ReadyWorkPlanner
 from .service_visits import service_visit
+
+
+def construction_pickup_bill(snapshot, catalog, row, part, item):
+    """Current paid construction demand, stopping expansion at the pickup item.
+
+    This is one missing component's bill, not forecast demand or proof of a
+    completed kit. Carried intermediate stock is consumed by the same native
+    material calculator used elsewhere in the planner.
+    """
+    if (not isinstance(row, dict) or not isinstance(item, str) or not item
+            or not current(row, snapshot) or row.get('state') != 'building'
+            or part not in PARTS or part in row.get('parts', {})
+            or next((p for p in PARTS if p not in row.get('parts', {})), None) != part
+            or not row.get('parts')):
+        return None
+    try:
+        if (sources(snapshot).get(row['source']) != row
+                or row.get('item') != row['source'].removeprefix('recipe:')
+                or snapshot.game_version != catalog.version):
+            return None
+        validate_commitments({role: {
+            'source_unit': entry['source_unit'], 'layout': entry['layout'],
+            'parts': entry['parts'],
+        } for role, entry in sources(snapshot).items()},
+            successors='successors' in snapshot.factory)
+        for built_part, paid in row['parts'].items():
+            entity = snapshot.factory['entities'][paid['role']]
+            if (entity['unit_number'] != paid['unit_number']
+                    or entity.get('name') != PARTS[built_part]):
+                return None
+        carried = snapshot.inventory.get(item, 0)
+        if type(carried) is not int or not 0 <= carried < 1000000:
+            return None
+        stock = dict(snapshot.inventory)
+        stock[item] = 1000000
+        bill = catalog.material_plan(PARTS[part], 1, stock, snapshot.researched or [])
+        required = 1000000 - bill.remaining.get(item, 0)
+        if not math.isfinite(required) or required != math.ceil(required) or not carried < required <= 200:
+            return None
+        recipes = {name: catalog.recipes[name] for name in sorted(bill.batches)}
+        return {
+            'observed_tick': snapshot.tick, 'native_catalog_version': catalog.version,
+            'source_role': row['source'],
+            'source_unit': row['source_unit'], 'layout': row['layout'],
+            'paid_parts': row['parts'], 'next_part': part,
+            'component_item': PARTS[part], 'component_quantity': 1,
+            'pickup_item': item, 'actor_item_now': carried,
+            'component_input_required': int(required),
+            'component_input_deficit': int(required) - carried,
+            'native_recipe_batches': bill.batches, 'native_recipes': recipes,
+            'actor_inventory_now': dict(snapshot.inventory),
+            'basis': 'current_paid_output_buffer_missing_component_bill',
+            'component_craft_build_and_flow_require_native_verification': True,
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 class OutputBufferPlanner(ReadyWorkPlanner):
@@ -33,6 +89,26 @@ class OutputBufferPlanner(ReadyWorkPlanner):
                 for material, count in ((name, 1), ("coal", 5)):
                     prerequisite = self._prerequisite(material, count, path)
                     if prerequisite:
+                        step = prerequisite.steps[0]
+                        if material == name and step.action in {'factory_extract', 'factory_craft'}:
+                            item = step.parameters.get('item') if step.action == 'factory_extract' else step.item
+                            bill = construction_pickup_bill(self.snapshot, self.catalog, row, part, item)
+                            if bill is not None:
+                                prerequisite = replace(prerequisite, materials={
+                                    **(prerequisite.materials or {}),
+                                    'buffer_component_prerequisite': bill})
+                            if bill is not None and step.action == 'factory_extract':
+                                role = step.parameters['role']
+                                available = self.entities[role].get('output', {}).get(item, 0)
+                                if type(available) is int and available > 0:
+                                    quantity = min(self.collection_batch, available,
+                                                   bill['component_input_deficit'])
+                                    provenance = (prerequisite.materials or {}).get('output_pickup')
+                                    if isinstance(provenance, dict):
+                                        prerequisite = replace(prerequisite, steps=(replace(
+                                            step, parameters={**step.parameters, 'quantity': quantity}),),
+                                            description=f"Collect {quantity} {item} for current {name} output-buffer component",
+                                            materials=prerequisite.materials)
                         return prerequisite
                 receipt = f"buffer:{self.snapshot.tick}:{row['source_unit']}:{part}"
                 return self._plan(

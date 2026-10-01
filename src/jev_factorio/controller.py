@@ -1792,7 +1792,9 @@ class HierarchicalLoop(AgentLoop):
                 if self.factory_scheduling == "ready-work":
                     state["production_scheduling"] = {
                         "objective": "Advance the next production batch identified in plan descriptions",
-                        "guidance": "Prefer useful work while machines run; avoid tiny pickups and idle waits",
+                        "guidance": ("Prefer useful work while machines run; batch pickups to evidenced "
+                                     "current demand and ready stock. A small current prerequisite "
+                                     "does not justify waiting for speculative output."),
                         "ultimate_goal": self.memory.active_goal,
                     }
                 # Every resumable Jev selection is write-ahead persisted. Do
