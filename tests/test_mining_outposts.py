@@ -1361,10 +1361,23 @@ def lone_investment_planner(state, data, amount=20):
     return planner, primary
 
 
-def native_direct_parent_demand_plans():
+def native_direct_parent_demand_plans(*, late_annotations=False):
     """Build the direct alternative from a current atomic-decoder fixture."""
     state, data = state_fixture()
     data.recipes['pipe'] = recipe('pipe', {'iron-plate': 1})
+    if late_annotations:
+        # Reproduce the planner ordering where the outpost is remembered
+        # before outer mixins attach current utility/economics annotations.
+        data.technologies['automation'] = {
+            'enabled': True, 'effects': [], 'prerequisites': [],
+            'trigger': None, 'count': 10, 'energy_ticks': 60,
+            'ingredients': [{'name': 'automation-science-pack', 'amount': 1}],
+        }
+        state.researched = []
+        state.factory['researched'] = []
+        state.factory['research'] = ''
+        state.factory['entities']['utility:lab'] = machine(
+            name='lab', unit_number=2548, energy=0)
     state.world_kind = 'fle'
     state.inventory = {'wooden-chest': 1, 'burner-mining-drill': 1, 'coal': 50}
     furnace = state.factory['entities']['recipe:iron-plate']
@@ -1395,6 +1408,22 @@ def native_direct_parent_demand_plans():
     primary = planner._need(
         'iron-ore', 20, ('item:pipe', 'item:iron-plate'))
     assert primary.steps[0].action == outposts.COMMAND
+    if late_annotations:
+        remembered = planner._proposed_outposts[primary.id]['parent_purpose']
+        assert 'utility_power_prerequisite' not in remembered
+        assert 'economics' not in remembered
+        from jev_factorio.planning.factory import FactoryPlanner
+        utility_plan = FactoryPlanner(data, state, 'rocket_launch')._powered(
+            'utility:lab', ('technology:automation',))
+        assert utility_plan is not None
+        economic_plan = planner._economic_evidence(
+            primary, objective='unlock_basic_assembly',
+            technology='automation', observed_tick=state.tick)
+        materials = dict(primary.materials or {})
+        materials['utility_power_prerequisite'] = deepcopy(
+            utility_plan.materials['utility_power_prerequisite'])
+        materials['economics'] = deepcopy(economic_plan.materials['economics'])
+        primary = replace(primary, materials=materials)
     planner.plan = lambda: primary
     return state, data, primary, planner.candidates()
 
@@ -1436,6 +1465,60 @@ def test_native_direct_alternative_retains_current_parent_demand_without_payoff_
         {'context': context, 'questions': questions}, ensure_ascii=False,
         allow_nan=False, separators=(',', ':')).encode('utf-8')
     assert len(encoded) <= 32000
+
+
+def test_late_parent_utility_and_economics_annotations_rebind_from_final_plan():
+    state, data, primary, plans = native_direct_parent_demand_plans(
+        late_annotations=True)
+    parent, direct = plans
+    marker = direct.materials['direct_alternative_to_proposed_outpost']
+
+    assert marker['parent_purpose']['utility_power_prerequisite'] == (
+        parent.materials['utility_power_prerequisite'])
+    assert marker['parent_purpose']['economics'] == parent.materials['economics']
+    row = candidate_evidence(state, data, plans)[direct.id]
+    evidence = row['direct_alternative_parent_demand_start_evidence']
+    assert evidence is not None
+    assert row['work_scope'] == 'immediate'
+    assert evidence['parent_local_target_item'] == 'pipe'
+    assert evidence['does_not_establish_outpost_payback_or_completion'] is True
+
+
+def test_late_parent_purpose_still_requires_exact_economics_annotation():
+    state, data, _, plans = native_direct_parent_demand_plans(
+        late_annotations=True)
+    _, direct = plans
+    direct_materials = deepcopy(direct.materials)
+    direct_materials['direct_alternative_to_proposed_outpost'][
+        'parent_purpose']['economics']['technology'] = 'study'
+    direct = replace(direct, materials=direct_materials)
+
+    row = candidate_evidence(state, data, [plans[0], direct])[direct.id]
+    assert row['direct_alternative_parent_demand_start_evidence'] is None
+    assert row['work_scope'] == 'lookahead'
+
+
+@pytest.mark.parametrize('invalid_field, invalid_value', [
+    ('consumer_unit', 999),
+    ('observed_tick', 299),
+])
+def test_late_parent_purpose_rebinding_keeps_current_utility_demand_gate(
+        invalid_field, invalid_value):
+    state, data, _, plans = native_direct_parent_demand_plans(
+        late_annotations=True)
+    parent, direct = plans
+    parent_materials = deepcopy(parent.materials)
+    direct_materials = deepcopy(direct.materials)
+    annotation = parent_materials['utility_power_prerequisite']
+    annotation[invalid_field] = invalid_value
+    direct_materials['direct_alternative_to_proposed_outpost'][
+        'parent_purpose']['utility_power_prerequisite'] = deepcopy(annotation)
+
+    parent = replace(parent, materials=parent_materials)
+    direct = replace(direct, materials=direct_materials)
+    row = candidate_evidence(state, data, [parent, direct])[direct.id]
+    assert row['direct_alternative_parent_demand_start_evidence'] is None
+    assert row['work_scope'] == 'lookahead'
 
 
 @pytest.mark.parametrize('tamper', [

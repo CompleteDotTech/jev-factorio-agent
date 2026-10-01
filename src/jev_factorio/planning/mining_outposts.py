@@ -297,11 +297,35 @@ class MiningOutpostPlanner(InputRoutePlanner):
             'investment_plan_id': primary.id,
             'basis': 'planner_policy_investment_has_no_native_payback_evidence',
         }
-        proposal_request = (primary.materials or {}).get('proposed_outpost_request')
+        parent_materials = primary.materials or {}
+        proposal_request = parent_materials.get('proposed_outpost_request')
         if isinstance(proposal_request, dict):
             direct_marker['proposed_outpost_request'] = deepcopy(proposal_request)
-        if context.get('parent_purpose') is not None:
-            direct_marker['parent_purpose'] = deepcopy(context['parent_purpose'])
+        remembered_purpose = context.get('parent_purpose')
+        if isinstance(remembered_purpose, dict):
+            # The outpost builder can run before outer planner mixins attach
+            # current utility/economics context. Rebind the marker from the
+            # final offered parent, while requiring its original local-demand
+            # identity to remain unchanged. Decision support still checks
+            # exact equality against this parent and rederives native demand.
+            purpose_fields = (
+                'local_objective', 'work_intent', 'proposed_outpost_request',
+            )
+            if (remembered_purpose.get('schema') == 1
+                    and type(remembered_purpose.get('schema')) is int
+                    and remembered_purpose.get('observed_tick') == self.snapshot.tick
+                    and type(remembered_purpose.get('observed_tick')) is int
+                    and all(remembered_purpose.get(key) == parent_materials.get(key)
+                            for key in purpose_fields)):
+                parent_purpose = {
+                    'schema': 1,
+                    'observed_tick': self.snapshot.tick,
+                }
+                for key in (*purpose_fields,
+                            'utility_power_prerequisite', 'economics'):
+                    if key in parent_materials:
+                        parent_purpose[key] = deepcopy(parent_materials[key])
+                direct_marker['parent_purpose'] = parent_purpose
         step = alternative.steps[0]
         if step.action == 'factory_gather':
             parameters = step.parameters or {}
