@@ -733,7 +733,7 @@ def test_persistent_mode_needs_a_continuous_live_resume_configuration():
     valid = RunConfiguration(
         backend="fle", controller="hierarchical", policy="jev", target="rocket_launch",
         resume=True, resume_controller=True, checkpoint_enabled=True, until_complete=True,
-        persist_recoverable_blocks=True)
+        persist_recoverable_blocks=True, persistent_idle_observations=6)
     _configuration(asdict(valid))
     with pytest.raises(ValueError, match="Persistent blocked recovery"):
         _configuration(asdict(replace(valid, until_complete=False)))

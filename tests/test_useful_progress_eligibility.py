@@ -143,7 +143,7 @@ def test_distinct_material_proofs_are_never_factored_together():
     assert context["candidate_plans"] == {plan.id: plan.to_dict() for plan in plans}
 
 
-def test_prepared_batch_is_the_exact_provider_payload(monkeypatch):
+def test_prepared_batch_is_the_exact_provider_payload():
     snapshot = MockBackend().observe()
     plans, _ = compile_plans("stockpile_fuel", snapshot)
     state = {"facts": snapshot.for_jev(), "active_goal": "stockpile_fuel"}
@@ -154,8 +154,47 @@ def test_prepared_batch_is_the_exact_provider_payload(monkeypatch):
             assert context is prepared[0] and questions is prepared[1]
             return super().evaluate(context, questions)
 
-    monkeypatch.setattr("jev_factorio.judgments.question_batch",
-                        lambda *a, **kw: pytest.fail("prepared request was regenerated"))
     assert select_plan(CapturedPayload(), state, plans, prepared_batch=prepared).plan_id
     with pytest.raises(ValueError, match="oversized"):
         select_plan(CapturedPayload(), state, plans, max_bytes=1, prepared_batch=prepared)
+
+
+@pytest.mark.parametrize("tamper", ["description", "shared", "question", "state"])
+def test_prepared_batch_tampering_fails_before_provider_call(tamper):
+    from copy import deepcopy
+    snapshot = MockBackend().observe()
+    plans = [Plan(id=f"p{index}", goal="stockpile_fuel", description="candidate",
+                  steps=(Step("mine_coal", "inventory", "coal", 5),),
+                  materials={"large_proof": {"description": "x" * 1000}})
+             for index in range(2)]
+    state = {"facts": snapshot.for_jev(), "active_goal": "stockpile_fuel"}
+    context, questions, offered = question_batch(state, plans)
+    context, questions = deepcopy(context), deepcopy(questions)
+    if tamper == "description":
+        context["candidate_plans"][offered[0].id]["description"] = "different plan"
+    elif tamper == "shared":
+        context["shared_plan_materials"]["large_proof"]["description"] = "different proof"
+    elif tamper == "question":
+        questions["candidate"]["description"] = "different criterion"
+    else:
+        context["active_goal"] = "different goal"
+
+    class NoCall:
+        def evaluate(self, *_args):
+            pytest.fail("tampered request reached provider")
+
+    with pytest.raises(ValueError, match="differs"):
+        select_plan(NoCall(), state, plans, prepared_batch=(context, questions, offered))
+
+
+@pytest.mark.parametrize("left,right", [(True, 1), (1, 1.0)])
+def test_compaction_keeps_json_distinct_material_values(left, right):
+    from jev_factorio.judgments import _compact_plan_documents
+    plans = [Plan(id=f"p{index}", goal="stockpile_fuel", description="candidate",
+                  steps=(Step("mine_coal", "inventory", "coal", 5),),
+                  materials={"proof": {"value": value, "text": "x" * 1000}})
+             for index, value in enumerate((left, right))]
+    documents, shared = _compact_plan_documents(plans)
+    assert shared == {}
+    assert type(documents["p0"]["materials"]["proof"]["value"]) is type(left)
+    assert type(documents["p1"]["materials"]["proof"]["value"]) is type(right)

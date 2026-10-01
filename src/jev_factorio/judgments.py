@@ -358,6 +358,11 @@ def _qualified_utility_power_dependency(plan, row, tick):
     return False
 
 
+def _json_identity(value):
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False,
+                      separators=(",", ":"))
+
+
 def _compact_plan_documents(plans):
     """Factor identical large material records without deleting any evidence."""
     documents = {plan.id: plan.to_dict() for plan in plans}
@@ -368,7 +373,8 @@ def _compact_plan_documents(plans):
     for key, value in materials[0].items():
         if (isinstance(value, (dict, list))
                 and len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")) > 256
-                and all(key in row and row[key] == value for row in materials[1:])):
+                and all(key in row and _json_identity(row[key]) == _json_identity(value)
+                        for row in materials[1:])):
             shared[key] = value
     if shared:
         for document in documents.values():
@@ -1563,6 +1569,14 @@ def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float 
                 or len(json.dumps({"state": context, "questions": questions},
                                   ensure_ascii=False, allow_nan=False).encode("utf-8")) > max_bytes):
             raise ValueError("Invalid or oversized prepared decision batch")
+        # Validate the complete source-bound request without replacing the durable
+        # objects that will actually be sent. JSON identity is type-sensitive.
+        expected_context, expected_questions, expected_offered = question_batch(
+            state, offered, max_bytes=max_bytes, max_candidates=len(offered))
+        if (len(expected_offered) != len(offered)
+                or _json_identity(context) != _json_identity(expected_context)
+                or _json_identity(questions) != _json_identity(expected_questions)):
+            raise ValueError("Prepared decision batch differs from current plans or evidence")
     request_bytes = len(json.dumps({"state": context, "questions": questions},
                                    ensure_ascii=False, allow_nan=False).encode("utf-8"))
     diagnostics = {"schema": 1, "input_candidates": len(plans),

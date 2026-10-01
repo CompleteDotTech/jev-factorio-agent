@@ -244,11 +244,11 @@ def test_boiler_gather_without_same_tick_actor_headroom_is_not_qualified():
     assert evidence(catalog, snapshot, plan) is None
 
 
-def _owned_iron_furnace(snapshot, *, fuel=5, output=0):
+def _owned_iron_furnace(snapshot, *, fuel=5, output=0, recipe='iron-plate'):
     role = 'recipe:iron-plate'
     position = {'x': 5, 'y': 0}
     source = native_machine('stone-furnace', unit_number=44, position=position,
-                            recipe='iron-plate', fuel={'coal': fuel},
+                            recipe=recipe, fuel={'coal': fuel},
                             input={}, output={'iron-plate': output}, crafting=False)
     snapshot.factory['entities'][role] = source
     snapshot.factory['production_sites'] = {
@@ -303,6 +303,33 @@ def _engine_bill_child(kind):
     return catalog, snapshot, plan, row
 
 
+def _captured_0146_furnace_fuel_candidate():
+    """Sanitized reconstruction of the private 0146 request/observation fields.
+
+    The fixture keeps the observed five paid coal, an idle owned iron furnace,
+    and the steam-engine -> iron-plate catalog edge. Session, coordinates,
+    event IDs, and other private campaign state are deliberately synthetic.
+    """
+    catalog, snapshot, _ = fixture(goal='rocket_launch', fuel=1, coal=5)
+    catalog.recipes['steam-engine'] = native_recipe('steam-engine', {'iron-plate': 10})
+    catalog.technologies['automation'] = {
+        'enabled': True, 'effects': [], 'prerequisites': [], 'trigger': None,
+        'count': 10, 'energy_ticks': 60,
+        'ingredients': [{'name': 'automation-science-pack', 'amount': 1}],
+    }
+    snapshot.researched = []
+    snapshot.factory['research'] = ''
+    snapshot.factory['entities'].pop('utility:engine', None)
+    snapshot.inventory.update({'steam-engine': 0, 'iron-plate': 0})
+    _owned_iron_furnace(snapshot, fuel=0, recipe='')
+    planner = ReadyWorkPlanner(catalog, snapshot, 'rocket_launch')
+    planner._set_focus('steam-engine', 1)
+    plan = planner._powered('utility:lab', ('technology:automation',))
+    assert plan is not None and plan.steps[0].action == 'factory_insert'
+    row = candidate_evidence(snapshot, catalog, [plan])[plan.id]
+    return catalog, snapshot, plan, row
+
+
 @pytest.mark.parametrize(('fixture_kind', 'witness_kind'), [
     ('raw_gather', 'utility_chain_raw_gather_start'),
     ('handcraft', 'utility_chain_handcraft_start'),
@@ -329,7 +356,96 @@ def test_exact_engine_bill_child_uses_current_native_start_evidence(
         assert witness['child_start_evidence']['witnesses'][
             'fuel_transfer_start_evidence']['service_basis'] == (
                 'current_primary_fuel_service_consumer')
-    assert _qualified_utility_power_dependency(plan, row, snapshot.tick)
+    elif plan.steps[0].action != 'factory_insert':
+        assert _qualified_utility_power_dependency(plan, row, snapshot.tick)
+
+
+def test_captured_0146_furnace_child_reports_paid_action_and_local_recipe_edge():
+    catalog, snapshot, plan, row = _captured_0146_furnace_fuel_candidate()
+    evidence = row['utility_power_prerequisite_start_evidence']
+    child = evidence['child_start_evidence']
+    fuel = row['fuel_transfer_start_evidence']
+    dependency = evidence['local_recipe_dependency']
+    receipt = plan.steps[0].parameters['receipt']
+
+    assert plan.materials['local_objective'] == {
+        'item': 'steam-engine', 'inventory_target': 1,
+        'ultimate_goal': 'rocket_launch',
+    }
+    assert plan.steps[0].parameters == {
+        'role': 'recipe:iron-plate', 'item': 'coal', 'quantity': 5,
+        'receipt': receipt,
+    }
+    assert child['item'] == 'coal'
+    assert child['role'] == 'recipe:iron-plate'
+    assert child['quantity'] == 5
+    assert child['planner_item_path'] == ['steam-engine', 'iron-plate']
+    assert fuel['planner_item_path'] == child['planner_item_path']
+    assert fuel['local_recipe_dependency'] == dependency
+    assert dependency == {
+        'observed_tick': snapshot.tick,
+        'session_id': snapshot.session_id,
+        'basis': 'same_tick_enabled_local_recipe_ingredient_and_owned_furnace',
+        'planner_item_path': ['steam-engine', 'iron-plate'],
+        'local_target_item': 'steam-engine',
+        'local_target_inventory_now': 0,
+        'local_target_inventory_target': 1,
+        'local_target_shortfall_now': 1,
+        'local_recipe': 'steam-engine',
+        'local_recipe_enabled_now': True,
+        'ingredient_item': 'iron-plate',
+        'ingredient_amount_per_batch': 10,
+        'producer_role': 'recipe:iron-plate',
+        'producer_unit': 44,
+        'producer_recipe': 'iron-plate',
+        'producer_recipe_enabled_now': True,
+        'producer_machine': 'stone-furnace',
+        'producer_machine_recipe_now': '',
+        'producer_owned_source_identity_current': True,
+        'does_not_establish_furnace_output_or_goal_completion': True,
+    }
+    assert fuel['coal_in_inventory_now'] == snapshot.inventory['coal'] == 5
+    assert fuel['coal_to_transfer'] == 5
+    assert fuel['native_receipt'] == receipt
+    assert evidence['actor_coal_now'] == 5
+    assert evidence['paid_inventory_sufficient_now'] is True
+    assert evidence['planned_native_receipt'] == receipt
+    assert evidence['planned_receipt_absent_now'] is True
+    assert evidence['transfer_receipt_observed_now'] is False
+    # The furnace child is separate from the outer boiler/power-chain facts.
+    assert evidence['boiler_coal_now'] is None
+    assert evidence['boiler_coal_deficit_to_five'] is None
+    assert evidence['connections_current'] == {
+        'water_to_boiler': True,
+        'boiler_to_engine_steam': False,
+        'engine_to_consumer_electricity': False,
+    }
+    assert evidence['utility_units_current']['steam_engine'] is None
+    assert evidence['does_not_establish_electricity_or_research_completion'] is True
+
+
+@pytest.mark.parametrize('mutate', [
+    lambda catalog, snapshot, plan: catalog.recipes['steam-engine'].update(enabled=False),
+    lambda catalog, snapshot, plan: catalog.recipes['steam-engine'].update(
+        ingredients=[{'name': 'iron-gear-wheel', 'amount': 8, 'type': 'item'}]),
+    lambda catalog, snapshot, plan: snapshot.factory['entities']['recipe:iron-plate'].update(
+        recipe='copper-plate'),
+    lambda catalog, snapshot, plan: snapshot.factory['production_sites'].update(
+        tick=snapshot.tick - 1),
+    lambda catalog, snapshot, plan: snapshot.factory['production_sites']['sources'][
+        'recipe:iron-plate'].update(source_unit=999),
+    lambda catalog, snapshot, plan: snapshot.factory['receipts'].__setitem__(
+        plan.steps[0].parameters['receipt'], {'role': 'recipe:iron-plate'}),
+    lambda catalog, snapshot, plan: setattr(snapshot, '_atomic_inventory_verified',
+                                              ('other-session', snapshot.tick)),
+])
+def test_furnace_local_dependency_requires_current_recipe_source_and_paid_receipt(
+        mutate):
+    catalog, snapshot, plan, _ = _captured_0146_furnace_fuel_candidate()
+    mutate(catalog, snapshot, plan)
+    row = candidate_evidence(snapshot, catalog, [plan])[plan.id]
+
+    assert row['utility_power_prerequisite_start_evidence'] is None
 
 
 def test_receipt_tracked_ready_work_craft_is_a_valid_recompiled_power_child():

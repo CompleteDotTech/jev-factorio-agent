@@ -88,7 +88,69 @@ def test_original_v1_configuration_without_treatment_fields_remains_valid(make_l
         del manifest["configuration"][key]
     manifest["configuration"].pop("until_complete", None)
     manifest["configuration"].pop("reconcile_only", None)
+    manifest["configuration"].pop("persistent_idle_observations", None)
     rl.validate_manifest(manifest)
+
+
+def test_legacy_persistent_manifest_without_idle_bound_remains_unknown_and_valid(make_log):
+    from dataclasses import asdict
+
+    config = rl.RunConfiguration(
+        backend="fle", controller="hierarchical", policy="jev", target="rocket_launch",
+        steps=None, resume=True, resume_controller=True, checkpoint_enabled=True,
+        until_complete=True, persist_recoverable_blocks=True,
+        persistent_idle_observations=6)
+    manifest = {
+        "schema": rl.MANIFEST_SCHEMA, "schema_version": 1,
+        "run_id": "9d28f127-6c53-4518-a8e3-a0b2d97cde15",
+        "created_utc": "2026-09-30T00:00:00.000000Z",
+        "configuration": asdict(config),
+        "provenance": {
+            "git": {"commit": "a" * 40, "dirty": False},
+            "runtime": {"python": "3.12", "system": "Linux", "machine": "x86_64",
+                        "packages": {name: None for name in rl._PACKAGES}},
+            "provider_configuration": {
+                "typesafe": False, "cloudflare": False, "factorio_rcon": False},
+        },
+        "durability": "file-and-directory-fsync",
+    }
+    manifest["configuration"].pop("persistent_idle_observations")
+
+    rl.validate_manifest(manifest)
+    assert rl.RunConfiguration(**manifest["configuration"]).persistent_idle_observations is None
+
+
+@pytest.mark.parametrize("value", [True, -1, 1001, 6.0, "6", None])
+def test_persistent_idle_bound_manifest_requires_a_valid_recorded_integer(value):
+    from dataclasses import asdict
+
+    config = rl.RunConfiguration(
+        backend="fle", controller="hierarchical", policy="jev", target="rocket_launch",
+        resume=True, resume_controller=True, checkpoint_enabled=True, until_complete=True,
+        persist_recoverable_blocks=True, persistent_idle_observations=value)
+    with pytest.raises(ValueError, match="Invalid persistent idle observation bound"):
+        rl._configuration(asdict(config))
+
+
+@pytest.mark.parametrize("value", [0, 1, 6, 1000])
+def test_persistent_idle_bound_manifest_accepts_configured_range(value):
+    from dataclasses import asdict
+
+    config = rl.RunConfiguration(
+        backend="fle", controller="hierarchical", policy="jev", target="rocket_launch",
+        resume=True, resume_controller=True, checkpoint_enabled=True, until_complete=True,
+        persist_recoverable_blocks=True, persistent_idle_observations=value)
+    rl._configuration(asdict(config))
+
+
+def test_idle_bound_cannot_be_recorded_as_active_when_persistence_is_disabled():
+    from dataclasses import asdict
+
+    config = rl.RunConfiguration(
+        backend="mock", controller="hierarchical", policy="jev", mock_model=True,
+        persistent_idle_observations=6)
+    with pytest.raises(ValueError, match="requires persistent blocked recovery"):
+        rl._configuration(asdict(config))
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf"),

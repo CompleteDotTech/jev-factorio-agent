@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Protocol
+from .blocked_persistence import MAX_IDLE_OBSERVATIONS
 from .iteration_timing import measured, span
 from .timing_attribution import elapsed_clocks, sample_clocks
 
@@ -48,7 +49,7 @@ _TREATMENT_FIELDS = {"factory_scheduling", "background_work",
 _OPTIONAL_CONFIGURATION_FIELDS = _TREATMENT_FIELDS | {
     "treatment_sha256", "until_complete", "reconcile_only",
     "reevaluate_blocked_once", "exact_checkpoint_sha256", "blocked_source_revision",
-    "profile_latency", "persist_recoverable_blocks",
+    "profile_latency", "persist_recoverable_blocks", "persistent_idle_observations",
 }
 
 
@@ -124,6 +125,8 @@ class RunConfiguration:
     exact_checkpoint_sha256: str | None = None
     blocked_source_revision: str | None = None
     persist_recoverable_blocks: bool = False
+    # None means this setting was inapplicable or absent in a historical run.
+    persistent_idle_observations: int | None = None
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -418,6 +421,14 @@ def _configuration(configuration: dict) -> None:
     reconcile_only = configuration.get("reconcile_only", False)
     reevaluate_blocked_once = configuration.get("reevaluate_blocked_once", False)
     persist_recoverable_blocks = configuration.get("persist_recoverable_blocks", False)
+    if "persistent_idle_observations" in configuration:
+        idle_observations = configuration["persistent_idle_observations"]
+        if persist_recoverable_blocks:
+            if (type(idle_observations) is not int
+                    or not 0 <= idle_observations <= MAX_IDLE_OBSERVATIONS):
+                raise ValueError("Invalid persistent idle observation bound")
+        elif idle_observations is not None:
+            raise ValueError("Idle observation bound requires persistent blocked recovery")
     if until_complete and reconcile_only:
         raise ValueError("Run configuration has conflicting execution modes")
     if (until_complete or reconcile_only) and (

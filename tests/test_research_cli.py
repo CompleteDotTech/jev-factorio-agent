@@ -98,6 +98,7 @@ def test_new_run_directory_and_optional_legacy_file(tmp_path, monkeypatch, with_
     manifest = json.loads((run / "manifest.json").read_bytes())
     assert manifest["configuration"]["legacy_log_enabled"] is with_legacy
     assert manifest["configuration"]["steps"] == 2
+    assert manifest["configuration"]["persistent_idle_observations"] is None
     assert str(tmp_path) not in json.dumps(manifest)
 
 
@@ -283,6 +284,62 @@ def test_until_complete_cli_records_unbounded_hierarchical_mode(tmp_path, monkey
     assert configuration["until_complete"] is True
     assert configuration["reconcile_only"] is False
     assert configuration["steps"] is None and configuration["duration_seconds"] is None
+
+
+@pytest.mark.parametrize(("limit_args", "expected"), [
+    ([], 6),
+    (["--persistent-idle-observations", "3"], 3),
+    (["--persistent-idle-observations", "0"], 0),
+])
+def test_persistent_idle_bound_effective_value_is_forwarded_and_recorded(
+        tmp_path, monkeypatch, limit_args, expected):
+    from jev_factorio import operational_safety, provenance
+    from jev_factorio.jev_client import MockJevClient
+
+    checkpoint = tmp_path / "checkpoint.json"
+    checkpoint.write_text(json.dumps({
+        "session_id": "fle:idle-bound-config-test", "status": "running",
+        "reason": None,
+    }), encoding="utf-8")
+    monkeypatch.setattr(provenance, "gameplay_context", lambda: {
+        "code_revision": {"commit": "a" * 40, "source_sha256": "b" * 64}})
+    monkeypatch.setattr(operational_safety, "storage_ready", lambda _roots: True)
+    monkeypatch.setattr(main, "make_backend", lambda *_args, **_kwargs: MockBackend())
+    monkeypatch.setattr("jev_factorio.jev_client.make_client",
+                        lambda **_kwargs: MockJevClient())
+    captured = {}
+
+    class Loop:
+        def __init__(self, _backend, **options):
+            captured["controller_idle_limit"] = options.get("persistent_idle_observations")
+            self.jev = options.get("jev")
+
+        def run(self, **limits):
+            captured["run"] = limits
+
+    monkeypatch.setattr("jev_factorio.controller.HierarchicalLoop", Loop)
+    run_dir = tmp_path / "run"
+    invoke(monkeypatch, "--backend", "fle", "--controller", "hierarchical",
+           "--policy", "jev", "--resume", "--resume-controller",
+           "--checkpoint", checkpoint, "--tick-seconds", "1", "--until-complete",
+           "--persist-recoverable-blocks", "--run-dir", run_dir, *limit_args)
+
+    assert captured["run"] == {"until_complete": True}
+    assert captured["controller_idle_limit"] == expected
+    manifest = json.loads((run_dir / "manifest.json").read_bytes())
+    assert manifest["configuration"]["persist_recoverable_blocks"] is True
+    assert manifest["configuration"]["persistent_idle_observations"] == expected
+    assert rl.verify_run(run_dir)["complete"] is True
+
+
+def test_idle_bound_cli_option_requires_persistent_mode_before_backend(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "make_backend", lambda *args, **kwargs: pytest.fail("backend started"))
+    run_dir = tmp_path / "run"
+    with pytest.raises(SystemExit) as error:
+        invoke(monkeypatch, "--backend", "mock", "--steps", "0", "--run-dir", run_dir,
+               "--persistent-idle-observations", "0")
+    assert error.value.code == 2
+    assert not run_dir.exists()
 
 
 def test_blocked_re_evaluation_cli_continues_in_requested_until_complete_mode(
