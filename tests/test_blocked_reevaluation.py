@@ -147,7 +147,8 @@ def _checkpoint(path: Path, backend: FLEMockBackend, *, stalled=4,
 
 
 def _make_loop(tmp_path, monkeypatch, *, selection, max_stalled_decisions=4,
-               blocked_reason="Candidate evidence insufficient", persistent=False):
+               blocked_reason="Candidate evidence insufficient", persistent=False,
+               stalled=4, prior_ledger_source=None):
     from jev_factorio import blocked_reevaluation
     import jev_factorio.controller as controller
 
@@ -157,7 +158,15 @@ def _make_loop(tmp_path, monkeypatch, *, selection, max_stalled_decisions=4,
                         (lambda: {"code_revision": revision}) if persistent else (lambda: {}))
     backend = FLEMockBackend()
     checkpoint = tmp_path / "checkpoint.json"
-    checkpoint_sha, original = _checkpoint(checkpoint, backend, reason=blocked_reason)
+    checkpoint_sha, original = _checkpoint(checkpoint, backend, reason=blocked_reason,
+                                           stalled=stalled)
+    if prior_ledger_source is not None:
+        from jev_factorio import blocked_persistence as persistence
+        memory = CampaignMemory.load(checkpoint, backend.session_id, "bootstrap_mining")
+        persistence.record_attempt(memory, prior_ledger_source, "e" * 64, memory.reason, 0)
+        persistence.finish_attempt(memory, prior_ledger_source, "e" * 64, "rejected", memory.reason)
+        memory.save(checkpoint)
+        checkpoint_sha = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
     loop = HierarchicalLoop(
         backend, jev=LiveSelectionClient(), policy="jev", target="bootstrap_mining",
         checkpoint=str(checkpoint), resume_controller=True, tick_seconds=0,
@@ -416,6 +425,34 @@ def test_quiescent_gate_rejects_pending_and_checkpoint_hash_mismatch(tmp_path):
     assert hashlib.sha256(captured).hexdigest() == sha
 
 
+def test_persistent_block_below_the_threshold_and_a_tracked_job_are_eligible(tmp_path):
+    backend = FLEMockBackend()
+    path = tmp_path / "state.json"
+    _sha, memory = _checkpoint(path, backend, stalled=1)
+    # Ordinary (non-persistent) blocks still need the stalled-decision threshold.
+    with pytest.raises(ValueError, match="quiescent eligible blocked decision"):
+        validate_blocked_memory(memory, 4)
+    memory.blocked_recovery = {"schema": 1, "attempts": [{"outcome": "rejected"}]}
+    validate_blocked_memory(memory, 4)  # persistent ledger: terminal at the first frontier
+    memory.stalled_decisions = 0  # verified native work reset the counter
+    validate_blocked_memory(memory, 4)
+    memory.blocked_recovery = {"schema": 1, "attempts": []}
+    with pytest.raises(ValueError, match="quiescent eligible blocked decision"):
+        validate_blocked_memory(memory, 4)
+
+    memory.blocked_recovery = {"schema": 1, "attempts": [{"outcome": "rejected"}]}
+    memory.background_job, memory.background_attempt = {"receipt": "r"}, {"id": "a"}
+    validate_blocked_memory(memory, 4)  # consistent tracked craft job
+    for job, attempt in (({"receipt": "r"}, None), (None, {"id": "a"})):
+        memory.background_job, memory.background_attempt = job, attempt
+        with pytest.raises(ValueError, match="quiescent eligible blocked decision"):
+            validate_blocked_memory(memory, 4)
+    memory.background_job = memory.background_attempt = None
+    memory.pending = {"action": "mine_iron"}
+    with pytest.raises(ValueError, match="quiescent eligible blocked decision"):
+        validate_blocked_memory(memory, 4)
+
+
 @pytest.mark.parametrize("reason", ["model abstention", "provider circuit unavailable",
                                      "low benefit confidence"])
 def test_re_evaluation_rejects_other_terminal_reasons(reason, tmp_path):
@@ -477,3 +514,28 @@ def test_authorized_reevaluation_is_consumed_by_a_model_free_passive_wait(
             reevaluate_blocked_once=True,
             exact_checkpoint_sha256=hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
             blocked_source_revision=OLD_SOURCE)
+
+
+def test_persistent_block_below_threshold_is_reevaluated_and_commits_a_passive_wait(
+        tmp_path, monkeypatch):
+    """The live post-0173 shape: persistent ledger, one stalled decision, lone craft wait."""
+    from jev_factorio import controller, judgments
+
+    wait = Plan("background-wait:1:factory_craft_job:pipe", "bootstrap_mining",
+                "Observe the tracked native crafting queue",
+                (Step("factory_wait", "crafting_idle", timeout_ticks=60),))
+    prior = {"commit": "1" * 40, "source_sha256": "b" * 64}
+    backend, checkpoint, _sha, _original, loop = _make_loop(
+        tmp_path, monkeypatch, selection=lambda _snapshot: [wait], persistent=True,
+        stalled=1, prior_ledger_source=prior)
+    monkeypatch.setattr(controller, "select_plan", judgments.select_plan)
+
+    loop.step()
+
+    assert loop._decision.model_called is False and loop._decision.plan_id == wait.id
+    assert loop.memory.status == "running" and loop._reevaluate_blocked_once is False
+    saved = CampaignMemory.load(checkpoint, backend.session_id, "bootstrap_mining")
+    assert [e["state"] for e in saved.blocked_reevaluations] == ["consumed"]
+    assert saved.blocked_recovery["source_revision"]["commit"] == "2" * 40
+    assert saved.blocked_recovery["attempts"][-1]["outcome"] == "selected"
+

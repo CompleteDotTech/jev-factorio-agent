@@ -182,8 +182,13 @@ revision is an explicit checkpoint-owner pin; a legacy checkpoint does not
 contain enough metadata to infer it. The pinned source must be an ancestor of
 the clean current checkout, whose decision-contract content must have changed.
 This authorization is consumed durably before model selection and cannot be
-replayed for the same contract. The existing stalled-decision counter, block
-history, and failure history are preserved. If a plan is selected, the
+replayed for the same contract. The checkpoint must be quiescent: no pending
+work and no half-written background record. A tracked background craft job with
+its attempt record is allowed (the controller verifies it on every
+observation), and a persistent-recovery block, identified by its durable
+recovery ledger, is eligible below the stalled-decision threshold because it is
+written at the first exhausted decision frontier. The existing stalled-decision
+counter, block history, and failure history are preserved. If a plan is selected, the
 requested run mode continues normally, including `--until-complete`; a rejected
 decision remains blocked and increments the existing streak. It does not clear
 the block, reset counters, or authorize a second controller. Do not combine it

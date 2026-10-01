@@ -155,14 +155,27 @@ def validate_checkpoint_digest(raw: bytes, expected_sha256: str) -> None:
 
 
 def validate_blocked_memory(memory, max_stalled_decisions: int) -> None:
-    """Reject anything except the exact quiescent terminal decision state."""
+    """Reject anything except the exact quiescent terminal decision state.
+
+    Two states are terminal although the ordinary threshold rule does not show
+    it. Persistent recovery marks a block at the first exhausted decision
+    frontier, before the stalled-decision threshold, and verified native work
+    since then (a craft finishing) resets the counter; the durable recovery
+    ledger it wrote is the evidence of the block. And a tracked background
+    craft job with its attempt record is verifiable work, not an ambiguous
+    native request: the controller polls it on every observation. Half of that
+    pair is still refused.
+    """
+    ledger = memory.blocked_recovery
+    persistent_block = isinstance(ledger, dict) and bool(ledger.get("attempts"))
+    job = getattr(memory, "background_job", None)
+    attempt = getattr(memory, "background_attempt", None)
     if (memory.status != "blocked" or not isinstance(memory.reason, str)
             or memory.reason not in _BLOCKED_REASONS
             or type(memory.stalled_decisions) is not int
-            or memory.stalled_decisions < max_stalled_decisions
+            or (memory.stalled_decisions < max_stalled_decisions and not persistent_block)
             or memory.pending is not None or memory.attempt is not None
             or memory.active_plan is not None or memory.step_index != 0
             or memory.reservations or memory.transfer_recovery is not None
-            or getattr(memory, "background_job", None) is not None
-            or getattr(memory, "background_attempt", None) is not None):
+            or (job is None) != (attempt is None)):
         raise ValueError("Checkpoint is not a quiescent eligible blocked decision")
