@@ -41,6 +41,49 @@ _SYSTEM_HISTORY_EVENTS = frozenset({
 })
 
 
+# Top-level legacy-record fields a persistent wait keeps in full: the observation
+# (both states are required by acceptance readers), latency/pressure profiling, and
+# the small operational and recovery fields. Everything else larger than
+# COMPACT_MIN_BYTES repeats a previous record or decision and is replaced by a marker.
+WAIT_RECORD_KEEP = frozenset({
+    "state", "after_state", "performance", "previous_iteration_timing",
+    "observation_profiles", "host_pressure", "phases", "persistent_recovery",
+    "attempt", "pending", "history", "attempt_outcomes", "failure_budgets",
+    "completed_goals", "fair_action_metrics", "acceptance_configuration",
+    # Identity and provenance fields that readers compare across rows.
+    "code_revision", "campaign_treatment", "goal", "usage", "process_id",
+    "requested_model", "resolved_model", "session_id", "target", "status", "reason",
+})
+# Fields of a compacted decision that stay readable (legacy dashboard and capture projections).
+DECISION_SUMMARY_KEYS = ("plan_id", "source", "reason", "model_called")
+COMPACT_MIN_BYTES = 1024
+
+
+def compact_wait_record(record: dict) -> dict:
+    """Return the log form of a persistent wait record without repeated evidence.
+
+    The wait issued no model request and dispatched nothing, so its decision,
+    planning and evidence blocks only restate earlier records. Omitted blocks are
+    marked with their original size; the returned object is a new dict.
+    """
+    compact = {}
+    for key, value in record.items():
+        if key in WAIT_RECORD_KEEP:
+            compact[key] = value
+            continue
+        size = len(json.dumps(value, allow_nan=False, default=str).encode("utf-8"))
+        if size <= COMPACT_MIN_BYTES:
+            compact[key] = value
+            continue
+        marker = {"omitted": "persistent_wait_repeat", "bytes": size}
+        if key == "decision" and isinstance(value, dict):
+            marker = {**{name: value[name] for name in DECISION_SUMMARY_KEYS if name in value},
+                      **marker}
+        compact[key] = marker
+    compact["compact_record"] = "persistent_wait"
+    return compact
+
+
 def _source(value: object) -> dict:
     if (not isinstance(value, dict) or set(value) != {"commit", "source_sha256"}
             or type(value.get("commit")) is not str or not _COMMIT.fullmatch(value["commit"])

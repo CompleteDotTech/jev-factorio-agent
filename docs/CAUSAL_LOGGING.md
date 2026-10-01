@@ -161,6 +161,23 @@ whole chain cannot be authenticated without an independently trusted head. A
 `complete` verifier result means sealed trace closure only; inspect its outcome and controller
 status separately.
 
+## Persistent-wait legacy log lines
+
+With `--persist-recoverable-blocks`, each wait for changed game evidence issues no model
+request and dispatches nothing, yet the legacy `--log-file` line used to restate the last
+decision, planning diagnostics and every evidence block. On the live campaign such a line was
+about 87 KB and the log reached 125 MB, mostly identical waits. A wait line now keeps the
+observation (`state` and `after_state`, which acceptance readers require), latency and
+pressure profiling (`performance`, `previous_iteration_timing`, `observation_profiles`,
+`host_pressure`, `phases`), the recovery fields and the small operational fields in full.
+Any other top-level block larger than 1,024 bytes is replaced by
+`{"omitted": "persistent_wait_repeat", "bytes": N}`, and the line carries
+`"compact_record": "persistent_wait"`. The same applies to the final `idle_wait_exhausted`
+line. Decision and action lines are never compacted, and the record returned to in-process
+consumers such as the dashboard stays complete. Readers that need the evidence behind a wait
+use the decision line that produced the block, which remains in full. The research event stream
+is unaffected.
+
 ## Secrets and publication
 
 No raw argv, environment dump, headers, URLs, client object, or exception body is
