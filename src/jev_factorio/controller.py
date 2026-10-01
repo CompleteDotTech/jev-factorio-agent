@@ -193,6 +193,19 @@ class HierarchicalLoop(AgentLoop):
             return False
         return self.memory.status in {"completed", "blocked", "uncertain"}
 
+    @staticmethod
+    def _background_identity_inconsistent(memory) -> bool:
+        """A tracked background craft job is verifiable; half of one is not.
+
+        The job and its attempt record are written together and polled on every
+        observation, so waiting through a consistent pair only keeps verifying
+        it (an invalid record turns the status ``uncertain``, which stays
+        terminal). Exactly one of the two present is an ambiguous native
+        request and must not be waited out as a recoverable block.
+        """
+        return ((getattr(memory, "background_job", None) is None)
+                != (getattr(memory, "background_attempt", None) is None))
+
     def _persistent_block_active(self) -> bool:
         from .blocked_persistence import RECOVERABLE_REASONS
         memory = self.memory
@@ -200,8 +213,7 @@ class HierarchicalLoop(AgentLoop):
                 or memory.status != "blocked" or memory.reason not in RECOVERABLE_REASONS
                 or memory.pending is not None or memory.attempt is not None
                 or memory.active_plan is not None or memory.transfer_recovery is not None
-                or getattr(memory, "background_job", None) is not None
-                or getattr(memory, "background_attempt", None) is not None
+                or self._background_identity_inconsistent(memory)
                 or self._persistence_failed or self._capital_fault
                 or self._persistent_idle_exhausted):
             return False
