@@ -35,7 +35,7 @@ def _git(root: Path, *args: str) -> str:
                           text=True).stdout.strip()
 
 
-def _source_repo(root: Path) -> tuple[str, Path, Path]:
+def _source_repo(root: Path) -> tuple[str, Path, Path, Path]:
     _git(root, "init", "--quiet", "-b", "main")
     _git(root, "config", "user.name", "Blocked re-evaluation tests")
     _git(root, "config", "user.email", "tests@example.invalid")
@@ -43,19 +43,22 @@ def _source_repo(root: Path) -> tuple[str, Path, Path]:
     (root / ".gitattributes").write_text("*.py text eol=crlf\n", encoding="ascii")
     judgments = root / "src" / "jev_factorio" / "judgments.py"
     support = root / "src" / "jev_factorio" / "planning" / "decision_support.py"
+    planner = root / "src" / "jev_factorio" / "planning" / "mining_outposts.py"
     judgments.parent.mkdir(parents=True)
     support.parent.mkdir(parents=True)
+    planner.parent.mkdir(parents=True, exist_ok=True)
     judgments.write_bytes(b"def decision():\n    return 'old'\n")
     support.write_bytes(b"def support():\n    return 'old'\n")
+    planner.write_bytes(b"def candidates():\n    return ['old']\n")
     _git(root, "add", ".")
     _git(root, "commit", "--quiet", "-m", "initial")
-    return _git(root, "rev-parse", "HEAD"), judgments, support
+    return _git(root, "rev-parse", "HEAD"), judgments, support, planner
 
 
 def test_source_contract_is_blob_bound_and_cosmetic_commits_do_not_reauthorize(tmp_path):
     root = tmp_path / "checkout with spaces"
     root.mkdir()
-    old, judgments, support = _source_repo(root)
+    old, judgments, support, _planner = _source_repo(root)
     # Exercise the supported CRLF working-tree form even when Git's local
     # checkout configuration leaves the initial commit's files untouched.
     judgments.write_bytes(judgments.read_bytes().replace(b"\n", b"\r\n"))
@@ -82,7 +85,7 @@ def test_source_contract_is_blob_bound_and_cosmetic_commits_do_not_reauthorize(t
 def test_source_contract_detects_assume_unchanged_working_file(tmp_path):
     root = tmp_path / "checkout"
     root.mkdir()
-    old, judgments, _ = _source_repo(root)
+    old, judgments, _, _planner = _source_repo(root)
     (root / "README.md").write_text("source change\n", encoding="ascii")
     _git(root, "add", "README.md")
     _git(root, "commit", "--quiet", "-m", "source change")
@@ -91,6 +94,21 @@ def test_source_contract_detects_assume_unchanged_working_file(tmp_path):
     assert _git(root, "status", "--porcelain") == ""
     with pytest.raises(ValueError, match="working file differs"):
         validate_source_revision(old, root)
+
+
+def test_candidate_planner_change_is_part_of_decision_contract(tmp_path):
+    root = tmp_path / "planner-checkout"
+    root.mkdir()
+    old, _judgments, _support, planner = _source_repo(root)
+    planner.write_bytes(b"def candidates():\n    return ['new decision-relevant candidate']\n")
+    _git(root, "add", str(planner.relative_to(root)))
+    _git(root, "commit", "--quiet", "-m", "change candidate planning contract")
+
+    result = validate_source_revision(old, root)
+
+    assert result["blocked_source_revision"] == old
+    assert result["source_head"] == _git(root, "rev-parse", "HEAD")
+    assert result["decision_contract_sha256"] != result["previous_contract_sha256"]
 
 
 class FLEMockBackend(MockBackend):
