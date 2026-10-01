@@ -1714,10 +1714,18 @@ def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float 
         gate = benefit_gate(benefit, confidence_floor)
         gate["eligibility_authority"] = False
         diagnostics["benefit_gate"][plan.id] = gate
+        # Eligibility is judged from the validated answer distribution, not from
+        # the model's separately reported confidence. For this two-label question
+        # the reported number is not tied to the probabilities (a live answer put
+        # 0.60 on `useful` while reporting 0.20), so using it as a veto rejected a
+        # plan the model clearly favored. The same principle governs benefit_gate.
+        # The reported confidence stays in the diagnostics for audit only.
+        useful_probability = float(usefulness["probabilities"]["useful"])
         useful = (usefulness["choice"] == "useful"
-                  and usefulness["confidence"] >= confidence_floor)
+                  and useful_probability >= confidence_floor)
         diagnostics["usefulness_gate"][plan.id] = {
             "choice": usefulness["choice"],
+            "probability": useful_probability,
             "confidence": usefulness["confidence"],
             "floor": confidence_floor,
             "passed": useful,
@@ -1727,7 +1735,7 @@ def select_plan(client, state: dict, plans: list[Plan], confidence_floor: float 
             rejected.append("missing_start_evidence")
         if usefulness["choice"] != "useful":
             rejected.append("no_demonstrated_progress")
-        elif usefulness["confidence"] < confidence_floor:
+        elif useful_probability < confidence_floor:
             rejected.append("low_usefulness_confidence")
         # A negative ordinal judgment contradicts eligibility; never ignore it.
         # Positive-level ambiguity and its reported confidence only affect rank.

@@ -8,10 +8,11 @@ from jev_factorio.skills import Plan, Step, compile_plans
 
 
 class SplitBenefitModel(MockJevClient):
-    def __init__(self, choice="useful", confidence=0.91, omit=False):
+    def __init__(self, choice="useful", confidence=0.91, omit=False, p_useful=None):
         self.useful_choice = choice
         self.useful_confidence = confidence
         self.omit = omit
+        self.p_useful = p_useful
 
     def evaluate(self, state, questions):
         assert state["judgment_contract"]["schema"] == 2
@@ -24,6 +25,12 @@ class SplitBenefitModel(MockJevClient):
             elif key.endswith("/useful_progress"):
                 if self.omit:
                     del answers[key]
+                elif self.p_useful is not None:
+                    answers[key].update(
+                        choice="useful" if self.p_useful >= 0.5 else "unsupported",
+                        confidence=self.useful_confidence,
+                        probabilities={"useful": self.p_useful,
+                                       "unsupported": 1.0 - self.p_useful})
                 else:
                     answers[key].update(
                         choice=self.useful_choice,
@@ -45,14 +52,14 @@ def test_positive_magnitude_split_requires_independent_usefulness():
     selected = decision(SplitBenefitModel())
     assert selected.plan_id is not None
     gate = selected.diagnostics["usefulness_gate"][selected.plan_id]
-    assert gate == {"choice": "useful", "confidence": 0.91,
+    assert gate == {"choice": "useful", "probability": 1.0, "confidence": 0.91,
                     "floor": 0.45, "passed": True}
     assert selected.answers[selected.plan_id + "/benefit"]["confidence"] == 0.36
 
 
 @pytest.mark.parametrize(("choice", "confidence", "reason"), [
     ("unsupported", 0.99, "no_demonstrated_progress"),
-    ("useful", 0.44, "low_usefulness_confidence"),
+    ("unsupported", 0.10, "no_demonstrated_progress"),
 ])
 def test_positive_benefit_support_cannot_authorize_missing_usefulness(choice, confidence, reason):
     rejected = decision(SplitBenefitModel(choice, confidence))
@@ -90,12 +97,34 @@ def test_malformed_usefulness_answer_cannot_admit_a_plan(fault):
     assert rejected.diagnostics["outcome"] == "invalid_answer"
 
 
-def test_higher_floor_applies_to_explicit_usefulness():
-    assert decision(SplitBenefitModel(confidence=0.7)).plan_id is not None
-    rejected = decision(SplitBenefitModel(confidence=0.7), floor=0.75)
+def test_higher_floor_applies_to_the_usefulness_probability():
+    weak = SplitBenefitModel(confidence=0.9, p_useful=0.6)
+    assert decision(weak).plan_id is not None
+    rejected = decision(SplitBenefitModel(confidence=0.9, p_useful=0.6), floor=0.75)
     assert rejected.plan_id is None
     assert all("low_usefulness_confidence" in reasons for reasons in
                rejected.diagnostics["candidate_rejections"].values())
+    strong = decision(SplitBenefitModel(confidence=0.3, p_useful=0.9), floor=0.75)
+    assert strong.plan_id is not None
+
+
+@pytest.mark.parametrize("reported", [0.0, 0.2, 0.26, 0.44])
+def test_low_reported_confidence_does_not_veto_a_favored_useful_answer(reported):
+    selected = decision(SplitBenefitModel(confidence=reported, p_useful=0.6))
+    assert selected.plan_id is not None
+    gate = selected.diagnostics["usefulness_gate"][selected.plan_id]
+    assert gate["passed"] is True and gate["probability"] == pytest.approx(0.6)
+    assert gate["confidence"] == pytest.approx(reported)  # kept for audit only
+
+
+@pytest.mark.parametrize("p_useful", [0.0, 0.2, 0.44, 0.49])
+def test_unsupported_plurality_is_rejected_whatever_the_reported_confidence(p_useful):
+    for reported in (0.1, 0.99):
+        rejected = decision(SplitBenefitModel(confidence=reported, p_useful=p_useful))
+        assert rejected.plan_id is None
+        assert rejected.diagnostics["outcome"] == "all_candidates_rejected"
+        assert all("no_demonstrated_progress" in reasons for reasons in
+                   rejected.diagnostics["candidate_rejections"].values())
 
 
 def test_native_start_uncertainty_still_rejects_useful_positive_plan():
