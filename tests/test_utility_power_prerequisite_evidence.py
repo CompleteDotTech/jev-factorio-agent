@@ -504,6 +504,28 @@ def test_ready_work_rocket_launch_plan_qualifies_its_current_utility_child():
     assert _qualified_utility_power_dependency(plan, row, snapshot.tick)
 
 
+def test_utility_output_pickup_child_binds_native_transfer_item():
+    catalog, snapshot, plan, row = _engine_bill_child('output_pickup')
+    step = plan.steps[0]
+    assert step.action == 'factory_extract' and step.item == ''
+    assert step.parameters['item'] == 'iron-plate'
+    child = row['utility_power_prerequisite_start_evidence']['child_start_evidence']
+    pickup = child['witnesses']['output_pickup_start_evidence']
+    assert child['item'] == pickup['ready_output_item'] == 'iron-plate'
+    assert child['quantity'] == pickup['planned_pickup_quantity']
+    assert child['planner_item_path'][-1] == child['item']
+
+
+def test_utility_output_pickup_rejects_native_item_provenance_mismatch():
+    catalog, snapshot, plan, _ = _engine_bill_child('output_pickup')
+    # The machine and planner provenance still identify ready iron output.
+    # An unrelated extraction parameter cannot borrow that native witness.
+    plan.steps[0].parameters['item'] = 'copper-plate'
+    row = candidate_evidence(snapshot, catalog, [plan])[plan.id]
+    assert row.get('output_pickup_start_evidence') is None
+    assert row.get('utility_power_prerequisite_start_evidence') is None
+
+
 def test_engine_bill_gather_without_current_native_headroom_does_not_qualify():
     _, snapshot, _, row = _engine_bill_child('raw_gather')
     snapshot.factory['inventory_insertable']['stone'] = 0
