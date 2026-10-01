@@ -892,6 +892,31 @@ def test_large_tick_seconds_does_not_make_early_waits_count_as_idle(tmp_path, mo
     assert loop._persistent_idle_waits == 0
 
 
+@pytest.mark.parametrize(("job", "attempt", "waits"), [
+    (None, None, True),
+    ({"receipt": "r"}, {"id": "a"}, True),    # tracked, verifiable craft job
+    ({"receipt": "r"}, None, False),          # half a record is ambiguous
+    (None, {"id": "a"}, False),
+])
+def test_blocked_wait_survives_a_tracked_background_job_but_not_half_a_record(
+        tmp_path, monkeypatch, job, attempt, waits):
+    loop, _, _, requests, _ = _idle_loop(tmp_path, monkeypatch, idle_observations=0)
+    loop.step()
+    assert loop.memory.status == "blocked" and requests == [True]
+    loop.memory.background_job, loop.memory.background_attempt = job, attempt
+    assert loop._persistent_block_active() is waits
+    assert loop.terminal is (not waits)
+
+
+def test_pending_attempt_or_plan_still_ends_the_wait_with_a_tracked_job(tmp_path, monkeypatch):
+    loop, _, _, _, _ = _idle_loop(tmp_path, monkeypatch, idle_observations=0)
+    loop.step()
+    loop.memory.background_job, loop.memory.background_attempt = {"r": 1}, {"id": "a"}
+    assert loop._persistent_block_active() is True
+    loop.memory.attempt = {"id": "in-flight"}
+    assert loop._persistent_block_active() is False
+
+
 def _log_lines(path):
     import json
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
