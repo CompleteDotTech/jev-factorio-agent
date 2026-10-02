@@ -195,3 +195,14 @@ the proof nor its factual judgment guidance replaces the independent model gates
 - Vercel AI Gateway, Jev model: https://vercel.com/ai-gateway/models/jev
 - Vercel guide, Jev + AI SDK: https://vercel.com/kb/guide/typesafe-jev-and-ai-sdk
 - Cloudflare Workers AI, Jev: https://developers.cloudflare.com/ai/models/typesafe/jev/
+
+
+Paid same-cell service visits retain individually verified native transfers. A
+current owned-furnace ingredient insert followed by carried coal can expose a
+separate first-step start witness after exact service-policy recompilation. Its
+private snapshot-local admission records the planner's actual carried ledger;
+a serialized marker cannot create that admission. Current supply limits, native
+recipe edges, ownership and unused receipts still qualify the witness. This
+states a bounded recipe-input contribution, not fuel-starvation removal, later
+output or science completion. Receiver capacity, current reservations and each
+step's native preconditions and postconditions remain execution checks.

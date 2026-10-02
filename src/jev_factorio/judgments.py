@@ -65,6 +65,138 @@ def _qualified_supplied_research(plan, facts, row):
             'technology_completion_not_established')))
 
 
+
+def _qualified_paid_service_input(plan, facts, row):
+    """Independently bind the first paid insert, without certifying later service."""
+    import hashlib
+    try:
+        proof = row['paid_service_input_start_evidence']
+        marker = plan.materials['service_visit']
+        factory, tick = facts['factory'], facts['tick']
+        first, second = plan.steps
+        p, tail = first.parameters, second.parameters
+        role, item = p['role'], p['item']
+        machine = factory['entities'][role]
+        source = factory['production_sites']['sources'][role]
+        start = proof['first_recipe_input']
+        local = plan.materials['local_objective']
+        annotation = plan.materials['recipe_input_transfer']
+        recipe = proof['native_recipe']
+        ingredients = recipe['ingredients']
+        matches = [entry for entry in ingredients if entry.get('type') == 'item'
+                   and entry.get('name') == item]
+        stock, costs = marker['paid_stock_now'], {}
+        identity = [{k: v for k, v in step.parameters.items() if k != 'receipt'}
+                    | {'action': step.action} for step in plan.steps]
+        digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:16]
+        if (facts.get('world_kind') != 'fle' or type(tick) is not int or type(factory.get('tick')) is not int
+                or factory['tick'] != tick or type(proof.get('observed_tick')) is not int
+                or proof['observed_tick'] != tick or proof['session_id'] != facts['session_id']
+                or proof['native_catalog_version'] != facts['game_version']
+                or not facts['game_version'].startswith('2.0.')
+                or proof['basis'] != 'current_recompiled_paid_service_first_recipe_input'
+                or proof['service_visit'] != marker or plan.id != f'service:{role}:{digest}'
+                or type(marker['schema']) is not int or marker['schema'] != 1
+                or type(marker['observed_tick']) is not int or marker['observed_tick'] != tick
+                or marker['scope'] != 'same_cell_paid_service' or marker['first_role'] != role
+                or type(marker['steps']) is not int or marker['steps'] != 2
+                or marker['collections_are_spendable'] is not False
+                or marker['unit_numbers'] != [machine['unit_number']] * 2
+                or any(type(unit) is not int for unit in marker['unit_numbers'])
+                or marker['max_extra_ticks'] != 900 or marker['max_leg_tiles'] != 8
+                or type(marker['extra_ticks_estimate']) is not int
+                or not 0 < marker['extra_ticks_estimate'] <= 900
+                or marker['research_deadline_tick'] is not None
+                or marker['estimate_basis'] != 'Manhattan_distance_and_declared_policy_not_native_timing'
+                or row.get('work_scope') != 'immediate' or row.get('unknowns') != []
+                or row.get('requires_investment') is not False
+                or row.get('reasons') != [f'observed_low_fuel:{role}']
+                or type(row.get('urgency')) is not int or row['urgency'] != 3
+                or factory.get('craft_job', {}).get('status') not in {None, 'completed'}
+                or row.get('local_target') != local
+                or local.get('ultimate_goal') != plan.goal
+                or factory.get('player_connected') is not True
+                or factory.get('player_bound') is not True
+                or type(factory.get('crafting_queue')) is not int or factory['crafting_queue'] != 0
+                or machine['name'] not in {'stone-furnace', 'steel-furnace'}
+                or type(machine['unit_number']) is not int or machine['unit_number'] <= 0
+                or source['state'] != 'owned' or source['source_unit'] != machine['unit_number']
+                or type(source['source_unit']) is not int
+                or role != 'recipe:' + recipe['name'] or recipe['hidden']
+                or recipe['category'] != 'smelting' or recipe.get('enabled') is not True
+                or item == 'coal' or tail.get('role') != role or tail.get('item') != 'coal'
+                or type(machine.get('crafting')) is not bool
+                or type(machine['input'].get(item, 0)) is not int
+                or type(machine['fuel'].get('coal', 0)) is not int
+                or not 0 < machine['fuel']['coal'] < 5 or len(matches) != 1
+                or type(matches[0]['amount']) not in {int, float}
+                or not math.isfinite(matches[0]['amount']) or matches[0]['amount'] <= 0
+                or type(annotation['planned_batches']) is not int or annotation['planned_batches'] < 1
+                or type(annotation['observed_tick']) is not int or annotation['observed_tick'] != tick
+                or annotation['source_role'] != role or annotation['source_unit'] != machine['unit_number']
+                or type(annotation['source_unit']) is not int
+                or annotation['observed_input'] != machine['input'].get(item, 0)
+                or type(annotation['observed_input']) is not int
+                or annotation['observed_crafting'] is not machine['crafting']
+                or annotation['recipe'] != recipe['name'] or annotation['ingredient'] != item):
+            return False
+        path = annotation['planner_item_path']
+        if (not isinstance(path, list) or not 2 <= len(path) <= 32
+                or any(not isinstance(part, str) or not part for part in path)
+                or path[0] != local['item'] or path[-2:] != [recipe['name'], item]):
+            return False
+        native_path = proof['native_parent_recipes']
+        if set(native_path) != set(path[:-1]) or native_path[recipe['name']] != recipe:
+            return False
+        for product, ingredient in zip(path, path[1:]):
+            native = native_path[product]
+            if (native.get('name') != product or native.get('hidden')
+                    or native.get('enabled') is not True
+                    or not any(entry.get('type') == 'item' and entry.get('name') == product
+                               for entry in native.get('products', []))
+                    or not any(entry.get('type') == 'item' and entry.get('name') == ingredient
+                               for entry in native.get('ingredients', []))):
+                return False
+        required = max(0, math.ceil(matches[0]['amount'] * annotation['planned_batches']
+            - machine['input'].get(item, 0) - (matches[0]['amount'] if machine['crafting'] else 0)))
+        if (p['quantity'] != required or type(p['quantity']) is not int or required < 1
+                or tail['quantity'] != min(50 - machine['fuel']['coal'], stock['coal'])
+                or proof['native_receiver_capacity_and_each_step_require_rechecks'] is not True
+                or proof['later_fuel_output_and_target_completion_unverified'] is not True):
+            return False
+        for step, query in zip(plan.steps, proof['native_receipt_queries'], strict=True):
+            params = step.parameters
+            name, quantity = params['item'], params['quantity']
+            if (step.action != 'factory_insert' or step.effect != 'transfer'
+                    or step.item != '' or set(params) != {'role', 'item', 'quantity', 'receipt'}
+                    or type(quantity) is not int or not 1 <= quantity <= 200
+                    or step.costs != {name: quantity}
+                    or params['receipt'] != f'{tick}:factory_insert:{role}:{name}'
+                    or not _qualified_unused_buffer_receipt(facts,
+                        {'native_receipt_query': query}, params['receipt'], tick)):
+                return False
+            costs[name] = costs.get(name, 0) + quantity
+        if (set(stock) != set(costs) or proof['combined_paid_costs'] != costs
+                or any(type(stock[name]) is not int or type(facts['inventory'].get(name)) is not int
+                    or not costs[name] <= stock[name] <= facts['inventory'][name] for name in costs)):
+            return False
+        expected = {
+            'observed_tick': tick, 'planner_item_path': path,
+            'direct_native_recipe': recipe['name'], 'owned_source_role': role,
+            'owned_source_unit': machine['unit_number'], 'ingredient': item,
+            'ingredient_in_machine_now': machine['input'].get(item, 0),
+            'ingredient_in_inventory_now': facts['inventory'][item],
+            'burner_fuel_coal_now': machine['fuel']['coal'],
+            'paid_quantity_to_transfer': required, 'planned_native_receipt_id': p['receipt'],
+            'basis': 'current_planner_recipe_input_and_owned_native_machine',
+            'native_transfer_and_later_output_require_verification': True,
+        }
+        return start == expected and all(type(start[key]) is int for key in (
+            'observed_tick', 'owned_source_unit', 'ingredient_in_machine_now',
+            'ingredient_in_inventory_now', 'burner_fuel_coal_now', 'paid_quantity_to_transfer'))
+    except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
+        return False
+
 def _qualified_research_science_transfer(plan, facts, row):
     """Recheck current paid inputs; disclosed technology bill is native producer evidence."""
     proof = row.get('research_science_transfer_start_evidence')
@@ -1982,6 +2114,17 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 'does not select research or establish consumption, progress, or an unlock; '
                 'transfer, selection, power and later research require native verification.'
                 if _qualified_research_science_transfer(plan, facts, row) else '')
+            paid_service_hint = (
+                ' `paid_service_input_start_evidence` binds the first ingredient insert '
+                'to the current native recipe, owned furnace, carried input and exact '
+                'unused receipt, within a same-tick recompiled two-step paid service visit. '
+                'Both inserts fit the disclosed planner-admission carried budget and current stock. '
+                'The first insert supplies a bounded current recipe input; it does not '
+                'by itself remove fuel starvation or establish later fuel transfer, '
+                'smelted output, science production or target completion. Receiver '
+                'capacity and each step still require fresh native rechecks and receipts; '
+                'contrary current evidence can make usefulness unsupported.'
+                if _qualified_paid_service_input(plan, facts, row) else '')
             # Reuse the same qualifications for independent eligibility and
             # magnitude; score-level guidance belongs only to magnitude.
             contribution_hint = (
@@ -1989,7 +2132,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 + place_hint + fuel_hint + utility_lab_hint + power_hint
                 + transfer_hint + input_hint + outpost_kit_hint + pickup_hint
                 + research_trigger_hint + component_hint + buffer_build_hint + buffer_fuel_hint
-                + supplied_research_hint + science_transfer_hint
+                + supplied_research_hint + science_transfer_hint + paid_service_hint
             )
             usefulness_contribution_hint = ''
             if qualified_raw_gather:
@@ -2043,7 +2186,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     + component_hint
                     + buffer_build_hint
                     + buffer_fuel_hint
-                    + supplied_research_hint + science_transfer_hint
+                    + supplied_research_hint + science_transfer_hint + paid_service_hint
                 ),
             }
             questions[plan.id + "/benefit"] = {
@@ -2149,7 +2292,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                        "facts are present, so do not mark another observation needed merely "
                        "because later recipe output or technology unlock is unverified."
                        if qualified_research_trigger else "")
-                    + supplied_research_hint + science_transfer_hint
+                    + supplied_research_hint + science_transfer_hint + paid_service_hint
                     + (" This paid output arm has observed ownership, coal headroom, a bounded "
                        "current deficit, carried coal, actor readiness and unused receipt. Judge "
                        "start observations from those values; future transfer and flow verification "

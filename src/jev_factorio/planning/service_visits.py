@@ -44,6 +44,7 @@ def service_visit(planner, plan, *, max_steps: int = 3):
     recipe = planner.catalog.recipes.get(producer.get('recipe', ''), {})
     view = deepcopy(snapshot)
     spendable = carried_stock(planner)
+    admitted_stock = dict(spendable)
     steps, signatures = [], set()
     budget = ServiceBudget(planner, first, cell)
 
@@ -141,9 +142,25 @@ def service_visit(planner, plan, *, max_steps: int = 3):
     identity = [{k: v for k, v in s.parameters.items() if k != 'receipt'}
                 | {'action': s.action} for s in steps]
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:16]
-    return replace(plan, id=f'service:{source}:{digest}', steps=tuple(steps),
+    result = replace(plan, id=f'service:{source}:{digest}', steps=tuple(steps),
                    materials={**(plan.materials or {}), 'service_visit': {
                        **budget.summary(), 'steps': len(steps),
-                       'unit_numbers': [entities[s.parameters['role']]['unit_number'] for s in steps]}},
+                       'unit_numbers': [entities[s.parameters['role']]['unit_number'] for s in steps],
+                       'paid_stock_now': {item: admitted_stock[item] for item in sorted(
+                           {item for step in steps for item in (step.costs or {})})}}},
                    description=f'Service {source} in {len(steps)} individually verified transfers. '
                                + plan.description)
+
+    # Private, snapshot-local admission evidence is not reconstructed from a
+    # serialized annotation. It records this planner's actual carried ledger.
+    admissions = getattr(snapshot, '_paid_service_admissions', {})
+    if not isinstance(admissions, dict) or len(admissions) > 16:
+        admissions = {}
+    # A newer admission at this cell supersedes the earlier ledger budget,
+    # including when reservations change without a new native observation.
+    admissions = {key: value for key, value in admissions.items()
+                  if value.get('marker', {}).get('first_role') != role}
+    admissions[result.id] = {'identity': (snapshot.session_id, snapshot.tick),
+                             'marker': deepcopy(result.materials['service_visit'])}
+    snapshot._paid_service_admissions = admissions
+    return result
