@@ -372,6 +372,45 @@ def _native_additive_connection_contract(plan, facts) -> bool:
             and source['unit_number'] != target['unit_number'])
 
 
+def _qualified_candidate_local_raw_demand(plan, facts, row, evidence):
+    """Check a separate current parent purpose without changing the kit target."""
+    proof = row.get("candidate_local_raw_demand")
+    local, raw = row.get("local_target"), row.get("raw_prerequisite")
+    if not isinstance(proof, dict) or not isinstance(local, dict) or not isinstance(raw, dict):
+        return False
+    if (type(proof.get("parent_source_unit")) is not int or proof["parent_source_unit"] <= 0
+            or not isinstance(local.get("item"), str) or not local["item"]):
+        return False
+    parents = [value.get("input_route_kit_parent_purpose") for value in evidence.values()
+        if isinstance(value, dict) and isinstance(value.get("input_route_kit_parent_purpose"), dict)
+        and value["input_route_kit_parent_purpose"].get("source_unit") == proof["parent_source_unit"]]
+    if len(parents) != 1:
+        return False
+    parent = parents[0]
+    tick = facts.get("tick")
+    return (facts.get("world_kind") == "fle" and type(tick) is int
+        and type(proof.get("schema")) is int and proof["schema"] == 1
+        and type(proof.get("tick")) is int and proof["tick"] == tick
+        and set(proof) == {"schema", "tick", "session_id", "catalog_version", "parent_source_unit", "basis"}
+        and proof.get("basis") == "recompiled_current_parent_raw_demand"
+        and proof.get("session_id") == facts.get("session_id")
+        and isinstance(facts.get("session_id"), str) and bool(facts["session_id"])
+        and proof.get("catalog_version") == facts.get("game_version")
+        and isinstance(parent, dict)
+        and parent.get("basis") == "same_tick_recompiled_owned_input_route_kit_need"
+        and type(parent.get("observed_tick")) is int and parent["observed_tick"] == tick
+        and parent.get("session_id") == facts["session_id"]
+        and parent.get("parent_local_objective") == local
+        and local.get("ultimate_goal") == plan.goal
+        and type(local.get("inventory_target")) is int and local["inventory_target"] > 0
+        and isinstance(facts.get("inventory"), dict)
+        and type(facts["inventory"].get(local.get("item"), 0)) is int
+        and facts["inventory"].get(local.get("item"), 0) < local["inventory_target"]
+        and (plan.materials or {}).get("local_objective") == local
+        and isinstance(raw.get("planner_item_path"), list)
+        and raw["planner_item_path"][:1] == [local.get("item")])
+
+
 def _qualified_direct_parent_demand(plan, row, selected, facts) -> bool:
     """Check bindings before explaining a validated current gather purpose."""
     witness = row.get('direct_alternative_parent_demand_start_evidence')
@@ -1239,6 +1278,9 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
             if direct_parent_hint:
                 questions['candidate']['instructions'] += (
                     f" For {pointer}:" + direct_parent_hint)
+            candidate_local = _qualified_candidate_local_raw_demand(plan, facts, row, evidence)
+            candidate_target = row["local_target"]["item"] if candidate_local else target
+            candidate_objective = "this candidate's local_target" if candidate_local else objective
             raw = row.get('raw_prerequisite')
             raw_path = raw.get('planner_item_path') if isinstance(raw, dict) else None
             gather_start = row.get('gather_start_evidence')
@@ -1266,7 +1308,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 and raw.get('later_steps_require_fresh_native_preconditions') is True
                 and isinstance(raw_path, list) and 2 <= len(raw_path) <= 32
                 and all(isinstance(item, str) and bool(item) for item in raw_path)
-                and raw_path[0] == target
+                and raw_path[0] == candidate_target
                 and raw_path[-2] == raw.get('direct_product')
                 and raw_path[-1] == gather_step.item
                 and isinstance(raw.get('direct_recipe'), str)
@@ -1290,6 +1332,11 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 and type(gather_parameters.get('quantity')) is int
                 and gather_parameters['quantity'] == (
                     gather_step.threshold - gather_start['resource_inventory_now']))
+            candidate_local = candidate_local and qualified_raw_gather
+            candidate_objective = "this candidate's local_target" if candidate_local else objective
+            candidate_context_hint = (
+                " Recompiled parent demand supports recipe input; science output and route flow remain unverified."
+                if candidate_local else "")
             raw_gather_hint = (
                 " This sole current raw gather has observed resource and fair-target "
                 "start facts and a same-tick native-recipe path to the local target. "
@@ -2135,7 +2182,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 + supplied_research_hint + science_transfer_hint + paid_service_hint
             )
             usefulness_contribution_hint = ''
-            if qualified_raw_gather:
+            if qualified_raw_gather and not candidate_local:
                 usefulness_contribution_hint += (
                     ' `raw_prerequisite` binds this bounded gather to the same-tick '
                     'current local target through a validated native recipe input path. '
@@ -2170,7 +2217,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 },
                 "instructions": (
                     f"Would the next bounded action in {pointer} make useful progress toward "
-                    f"`{objective}` if its native receipt and fresh postcondition verify? "
+                    f"`{candidate_objective}` if its native receipt and fresh postcondition verify? "
                     "Judge independently using `facts`, this plan's current `candidate_evidence`, "
                     "and `execution_contract`; other questions' answers are unavailable. "
                     "Useful progress includes an evidenced prerequisite or intermediate, not "
@@ -2180,6 +2227,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "evidence. A planner proposal or future unverified result alone is not proof. "
                     "Report confidence in this usefulness choice, not in completing the game. "
                     "This judgment does not authorize execution or waive native checks."
+                    + candidate_context_hint
                     + direct_parent_hint.replace(' (level 1)', '')
                     + usefulness_contribution_hint
                     + current_target_craft_usefulness_hint
@@ -2189,14 +2237,28 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     + supplied_research_hint + science_transfer_hint + paid_service_hint
                 ),
             }
+            if candidate_local:
+                questions["candidate"]["instructions"] += (
+                    " Compare qualified candidate-local parent contributions separately from the kit target.")
+                questions[plan.id + "/useful_progress"]["instructions"] = (
+                    "Would this candidate's next bounded action make useful progress toward its "
+                    "`local_target` if its native receipt and fresh postcondition verify? "
+                    "Judge independently from facts, candidate_local_raw_demand, raw_prerequisite, "
+                    "gather_start_evidence and execution_contract. Its current native-recipe "
+                    "input path belongs to the kit's separate parent demand, not the kit target. "
+                    "Bounded raw input is partial progress, not harvested stock, science output, "
+                    "route flow or blocker removal. Missing, stale, mismatched or contrary "
+                    "evidence means unsupported. Report confidence in usefulness; other answers "
+                    "are unavailable. Native execution checks remain unchanged.")
             questions[plan.id + "/benefit"] = {
                 "type": "score",
                 "instructions": (
-                    f"How directly do the steps in {pointer} advance `{objective}` "
+                    f"How directly do the steps in {pointer} advance `{candidate_objective}` "
                     "given `facts`, current `candidate_evidence`, and `execution_contract`? Do not demand a full-game plan "
                     "from one bounded local production action. A current "
                     "`raw_prerequisite` is evidence that gathering supplies an input to "
                     "the named native recipe, not that the later craft already happened."
+                    + candidate_context_hint
                     + contribution_hint
                     + local_target_completion_hint
                 ),
