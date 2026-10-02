@@ -1517,6 +1517,94 @@ def _recipe_input_transfer_start_evidence(snapshot, catalog, plan, *, path_root=
     return evidence
 
 
+
+def _paid_service_input_start_evidence(snapshot, catalog, plan):
+    """Qualify the first ingredient insert of an exactly recompiled paid visit."""
+    from types import SimpleNamespace
+    from .factory import FactoryPlanner
+    from .service_visits import service_visit
+    from .demand import SupplyLedger
+
+    try:
+        factory, marker = snapshot.factory, (plan.materials or {})['service_visit']
+        identity = (snapshot.session_id, snapshot.tick)
+        if (snapshot.world_kind != 'fle' or len(plan.steps) != 2 or type(snapshot.tick) is not int
+                or type(factory.get('tick')) is not int or factory['tick'] != snapshot.tick
+                or catalog.version != snapshot.game_version
+                or getattr(snapshot, '_coherent_observation_verified', None) != identity
+                or getattr(snapshot, '_atomic_inventory_verified', None) != identity
+                or type(factory.get('crafting_queue')) is not int or factory['crafting_queue'] != 0
+                or not isinstance(factory.get('receipts'), dict)
+                or factory.get('craft_job', {}).get('status') not in {None, 'completed'}
+                or getattr(snapshot, '_paid_service_admissions', {}).get(plan.id) != {
+                    'identity': identity, 'marker': marker}):
+            return None
+        first, second = plan.steps
+        role = first.parameters['role']
+        if (first.action != 'factory_insert' or second.action != 'factory_insert'
+                or second.parameters.get('role') != role
+                or first.parameters.get('item') == 'coal'
+                or second.parameters.get('item') != 'coal'):
+            return None
+        stock = marker['paid_stock_now']
+        current_supply = SupplyLedger.capture(snapshot, catalog).carried
+        costs = {}
+        for step in plan.steps:
+            p = step.parameters
+            item, quantity = p['item'], p['quantity']
+            if (step.effect != 'transfer' or type(quantity) is not int or quantity < 1
+                    or step.costs != {item: quantity}
+                    or p['receipt'] != f'{snapshot.tick}:factory_insert:{role}:{item}'
+                    or p['receipt'] in factory['receipts']
+                    or not step.allowed(snapshot) or step.satisfied(snapshot)):
+                return None
+            costs[item] = costs.get(item, 0) + quantity
+        if (set(stock) != set(costs) or any(type(stock[item]) is not int
+                or not costs[item] <= stock[item] <= current_supply.get(item, -1)
+                for item in costs)):
+            return None
+        materials = {k: v for k, v in plan.materials.items() if k != 'service_visit'}
+        atomic = replace(plan, id=f'factory:factory_insert:{role}',
+                         steps=(first,), materials=materials)
+        input_start = _recipe_input_transfer_start_evidence(snapshot, catalog, atomic)
+        if input_start is None:
+            return None
+        planner = FactoryPlanner(catalog, snapshot, plan.goal)
+        planner.ledger = SimpleNamespace(carried=stock)
+        planner.targets = {}
+        compiled = service_visit(planner, atomic)
+        if (compiled.id != plan.id or compiled.steps != plan.steps
+                or compiled.materials.get('service_visit') != marker):
+            return None
+        recipe = catalog.recipes[input_start['direct_native_recipe']]
+        path = input_start['planner_item_path']
+        native_path = {}
+        for product, ingredient in zip(path, path[1:]):
+            native = catalog.recipes.get(product)
+            if (not isinstance(native, dict) or not catalog.enabled(native, snapshot.researched or [])
+                    or not any(row.get('type') == 'item' and row.get('name') == product
+                               for row in native.get('products', []))
+                    or not any(row.get('type') == 'item' and row.get('name') == ingredient
+                               for row in native.get('ingredients', []))):
+                return None
+            native_path[product] = deepcopy(native)
+        return {
+            'basis': 'current_recompiled_paid_service_first_recipe_input',
+            'observed_tick': snapshot.tick, 'session_id': snapshot.session_id,
+            'native_catalog_version': catalog.version,
+            'service_visit': deepcopy(marker), 'combined_paid_costs': costs,
+            'first_recipe_input': input_start,
+            'native_recipe': deepcopy(recipe), 'native_parent_recipes': native_path,
+            'native_receipt_queries': [{
+                'schema': 1, 'session_id': snapshot.session_id, 'tick': snapshot.tick,
+                'receipt_count': len(factory['receipts']), 'receipt': step.parameters['receipt'],
+                'present': False, 'map_verified': True} for step in plan.steps],
+            'native_receiver_capacity_and_each_step_require_rechecks': True,
+            'later_fuel_output_and_target_completion_unverified': True,
+        }
+    except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
+        return None
+
 def _output_pickup_start_evidence(snapshot, catalog, plan, *, path_root=None):
     """Describe ready output at an owned native source, never a completed pickup."""
     if len(plan.steps) != 1:
@@ -3253,6 +3341,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'utility_lab_research_dependency': utility_lab_dependency,
             'utility_power_prerequisite_start_evidence': utility_power_start,
             'recipe_input_transfer_start_evidence': recipe_input_transfer_start,
+            'paid_service_input_start_evidence': _paid_service_input_start_evidence(snapshot, catalog, plan),
             'native_research_trigger_start_evidence': native_research_trigger_start,
             'supplied_research_start_evidence': supplied_research_start,
             'research_science_transfer_start_evidence': science_transfer_start,
