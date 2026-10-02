@@ -261,6 +261,9 @@ def test_composed_outpost_only_defers_boiler_fuel_for_connected_plant(tmp_path, 
         'boiler', unit_number=901, fuel={'coal': 1})
     if connected:
         connected_power_plant(backend.state)
+    # Isolate the power prerequisite after the independent lab supply step.
+    backend.state.factory['entities']['utility:lab']['input'] = {
+        'logistic-science-pack': 20}
     plans, _ = loop._compile_candidates(backend.state)
     assert plans
     step = plans[0].steps[0]

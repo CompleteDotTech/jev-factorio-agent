@@ -93,13 +93,25 @@ def connected_power_plant(state, *, fuel=1):
 
 
 @pytest.mark.parametrize('connected', [False, True])
-def test_boiler_emergency_requires_connected_plant_before_science(tmp_path, connected):
+def test_lab_supply_precedes_boiler_fuel_and_power_checks(tmp_path, connected):
     backend, _ = progress_scenario()
     backend.state.factory['entities']['utility:boiler'] = machine(
         'boiler', unit_number=901, fuel={'coal': 1})
     if connected:
         connected_power_plant(backend.state)
     loop = controller(backend, tmp_path, kind=RouteLoop)
+    plans, _ = loop._compile_candidates(backend.state)
+    assert plans
+    step = plans[0].steps[0]
+    # Preparing a pack for an idle lab does not burn boiler fuel. The lab's
+    # current science deficit is resolved before the power check is allowed
+    # to request that service.
+    assert step.action == 'factory_insert'
+    assert step.parameters['role'] == 'utility:lab'
+    assert step.parameters['item'] == 'logistic-science-pack'
+
+    backend.state.factory['entities']['utility:lab']['input'] = {
+        'logistic-science-pack': 20}
     plans, _ = loop._compile_candidates(backend.state)
     assert plans
     step = plans[0].steps[0]

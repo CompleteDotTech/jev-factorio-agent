@@ -21,6 +21,10 @@ def power_state():
     state.inventory = {'coal': 5, 'steam-engine': 1, 'pipe': 200, 'small-electric-pole': 200}
     state.factory['entities']['utility:boiler']['fuel'] = {}
     state.factory['entities']['utility:lab']['energy'] = 0
+    # These tests isolate the power path. Keep the current study's bounded
+    # science requirement supplied so a missing lab pack does not correctly
+    # precede boiler service in the research planner.
+    state.factory['entities']['utility:lab']['input'] = {'automation-science-pack': 1}
     return data, state
 
 

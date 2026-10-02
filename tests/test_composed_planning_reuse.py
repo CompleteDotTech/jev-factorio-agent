@@ -47,10 +47,14 @@ def test_changed_catalog_is_used_by_next_decision(tmp_path):
 
 
 def test_completed_research_changes_composed_frontier_after_checkpoint_reload(tmp_path):
-    backend, _ = progress_scenario(science=0)
+    backend, data = progress_scenario(science=0)
+    # Give the next study a distinct native supply requirement. Both studies
+    # can correctly request packs before their missing power prerequisites.
+    data.technologies['rocket-silo']['count'] = 1
     loop = controller(backend, tmp_path, kind=RouteLoop)
     before, _ = loop._work_candidates(backend.state)
     assert before[0].steps[0].action == 'factory_craft'
+    assert before[0].steps[0].parameters['batches'] == 20
     loop.memory.save(tmp_path / 'state.json')
 
     resumed = controller(backend, tmp_path, kind=RouteLoop, resume=True)
@@ -62,7 +66,9 @@ def test_completed_research_changes_composed_frontier_after_checkpoint_reload(tm
     backend.state.factory['research'] = ''
     backend.state.factory['research_progress'] = 0
     after, _ = resumed._work_candidates(backend.state)
-    assert after[0].steps[0].action == 'factory_explore'
+    assert after[0].steps[0].action == 'factory_craft'
+    assert after[0].steps[0].parameters['recipe'] == 'logistic-science-pack'
+    assert after[0].steps[0].parameters['batches'] == 1
     assert [p.to_dict() for p in after] != [p.to_dict() for p in before]
 
 

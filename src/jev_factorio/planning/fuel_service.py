@@ -81,12 +81,16 @@ def service_plan(planner, primary: str, source: str | None, path, acquire):
             raise ValueError('Aliased fuel observations disagree')
         observed[unit] = identity
         furnace = name in {'stone-furnace', 'steel-furnace'}
-        if not furnace and name not in {'burner-inserter', 'burner-mining-drill'}:
+        boiler = role == 'utility:boiler' and name == 'boiler'
+        if name == 'boiler' and not boiler:
+            raise ValueError('The utility boiler role does not match its native entity')
+        if not furnace and not boiler and name not in {'burner-inserter', 'burner-mining-drill'}:
             return
         # Furnace fuel already in its inventory can power the next bounded
         # production step. A five-coal service target is not a reason to halt
         # science before that step. Route burners retain their two-coal trigger.
-        if current >= (1 if furnace else 2):
+        service_threshold = 5 if boiler else 1 if furnace else 2
+        if current >= service_threshold:
             return
         if insertable == 0:
             if role == primary:
@@ -188,7 +192,9 @@ def service_plan(planner, primary: str, source: str | None, path, acquire):
     # An active research job with no schedule is an unknown deadline, not
     # permission to add optional service to the required furnace visit.
     furnace_primary = entities[primary].get('name') in {'stone-furnace', 'steel-furnace'}
-    if furnace_primary and (scheduled or snapshot.factory.get('research')) and len(consumers) > 1:
+    boiler_primary = primary == 'utility:boiler'
+    thermal_primary = furnace_primary or boiler_primary
+    if thermal_primary and (scheduled or snapshot.factory.get('research')) and len(consumers) > 1:
         deadlines = [row['deadline_tick'] - snapshot.tick for row in scheduled
                      if row.get('deadline_tick') is not None]
         earliest = min(deadlines) if deadlines and len(deadlines) == len(scheduled) else None
@@ -255,9 +261,15 @@ def service_plan(planner, primary: str, source: str | None, path, acquire):
             rows = research_schedule(snapshot, planner.catalog)
             slack = [row['deadline_tick'] - snapshot.tick for row in rows
                      if row.get('amount', 0) and row.get('deadline_tick') is not None]
-            unknown_deadline = any(row.get('amount', 0) and row.get('deadline_tick') is None for row in rows)
+            active_research = bool(snapshot.factory.get('research'))
+            unknown_deadline = (active_research and not rows) or any(
+                row.get('amount', 0) and row.get('deadline_tick') is None for row in rows)
             boiler = entities.get('utility:boiler')
-            urgent_power = bool(boiler and _quantity(boiler.get('fuel', {}).get('coal', 0)) < 5)
+            # A measured reserve for the required boiler refill accounts for
+            # its observed depletion during this service lead. An unrelated
+            # boiler shortfall still defers optional reserve on other trips.
+            urgent_power = bool(boiler and primary != 'utility:boiler'
+                                and _quantity(boiler.get('fuel', {}).get('coal', 0)) < 5)
             if (unknown_deadline or urgent_power
                     or slack and lead + reserve * RAW_TICKS_PER_ITEM >= min(slack)):
                 reserve, reserve_basis = 0, 'science_or_power_deadline_defers_optional_reserve'
@@ -268,7 +280,13 @@ def service_plan(planner, primary: str, source: str | None, path, acquire):
     if lead is not None:
         lead += (target - deficit) * RAW_TICKS_PER_ITEM
     selected = consumers[0]
-    if spendable:
+    # For the primary boiler, avoid inserting a small carried remainder when
+    # the current deficit (or a measured, bounded service-lead reserve) still
+    # calls for an acquisition. Finish the bounded pickup before visiting the
+    # boiler so we do not split one refill across gather/insert/gather trips.
+    # Other due consumers retain the immediate partial-transfer policy.
+    boiler_primary_needs_batch = boiler_primary and spendable < target
+    if spendable and not boiler_primary_needs_batch:
         count = min(selected['deficit'], spendable)
         plan = planner._transfer(selected['role'], 'coal', count)
     else:

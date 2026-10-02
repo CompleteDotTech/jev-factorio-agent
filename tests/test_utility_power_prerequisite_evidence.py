@@ -85,6 +85,9 @@ def test_current_connected_boiler_qualifies_only_exact_paid_transfer_start():
 
 def test_current_lab_research_is_bound_to_the_recursive_technology_path():
     catalog, snapshot, _ = fixture(fuel=1, coal=5)
+    # Science preparation may precede power; this test isolates the recursive
+    # power witness once the current lab supply is already present.
+    snapshot.factory['entities']['utility:lab']['input'] = {'automation-science-pack': 20}
     plan = ReadyWorkPlanner(catalog, snapshot, 'rocket_launch').plan()
 
     assert plan.steps[0].action == 'factory_insert'
@@ -472,6 +475,7 @@ def test_ready_work_rocket_launch_plan_qualifies_its_current_utility_child():
     from jev_factorio.judgments import _qualified_utility_power_dependency
 
     catalog, snapshot, _ = fixture(fuel=1, coal=5)
+    snapshot.factory['entities']['utility:lab']['input'] = {'automation-science-pack': 20}
     catalog.recipes['iron-gear-wheel'] = native_recipe(
         'iron-gear-wheel', {'iron-plate': 2})
     catalog.recipes['pipe'] = native_recipe('pipe', {'iron-plate': 1})

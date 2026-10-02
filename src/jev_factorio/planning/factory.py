@@ -524,9 +524,6 @@ class FactoryPlanner:
         prerequisite = self._machine("utility:lab", "lab", path)
         if prerequisite:
             return prerequisite
-        prerequisite = self._powered("utility:lab", path)
-        if prerequisite:
-            return prerequisite
         current = self.factory.get("research", "")
         if current and current != name:
             return self._research(current, path)
@@ -540,9 +537,16 @@ class FactoryPlanner:
                 ))
                 prerequisite = self._need(item, max(1, needed), path)
                 return prerequisite or self._transfer("utility:lab", item, max(1, needed))
+        # Acquiring or inserting native science packs does not consume lab
+        # power. Prepare the current technology's bounded pack need first, so
+        # a low boiler cannot repeatedly defer science acquisition. Power is
+        # still required before selecting research or waiting for progress.
+        prerequisite = self._powered("utility:lab", path)
+        if prerequisite:
+            return prerequisite
         if not current:
-            # Selecting an empty lab only queues research. Prepare the native
-            # science ingredients first so selection has a current supplied lab.
+            # Selecting an empty lab only queues research. Require both the
+            # current science supply and a powered lab before making that plan.
             return self._plan("factory_research", "research_started", name,
                               parameters={"technology": name},
                               description=f"Select native research with a powered, science-supplied lab: {name}")
