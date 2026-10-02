@@ -2357,6 +2357,53 @@ def _outpost_kit_prerequisite_start_evidence(snapshot, catalog, plan):
     }
 
 
+def _supplied_research_start_evidence(snapshot, catalog, plan):
+    """Current lab readiness for selection, never projected research completion."""
+    if len(plan.steps) != 1 or plan.steps[0].action != 'factory_research':
+        return None
+    step = plan.steps[0]
+    name = (step.parameters or {}).get('technology')
+    factory = snapshot.factory
+    tech = catalog.technologies.get(name)
+    lab = factory.get('entities', {}).get('utility:lab', {})
+    if (snapshot.world_kind != 'fle' or factory.get('tick') != snapshot.tick
+            or getattr(snapshot, '_coherent_observation_verified', None) != (snapshot.session_id, snapshot.tick)
+            or catalog.version != snapshot.game_version
+            or not isinstance(tech, dict) or tech.get('enabled') is not True
+            or tech.get('trigger') or name in (snapshot.researched or [])
+            or any(parent not in (snapshot.researched or []) for parent in tech.get('prerequisites', []))
+            or factory.get('research') != ''
+            or factory.get('player_connected') is not True or factory.get('player_bound') is not True
+            or type(factory.get('crafting_queue')) is not int or factory['crafting_queue'] != 0
+            or lab.get('name') != 'lab' or type(lab.get('unit_number')) is not int
+            or lab['unit_number'] <= 0 or type(lab.get('electric_network_id')) is not int
+            or lab['electric_network_id'] <= 0 or not _finite(lab.get('energy')) or lab['energy'] <= 0
+            or not isinstance(lab.get('input'), dict)):
+        return None
+    bill = {}
+    for ingredient in tech.get('ingredients', []):
+        if (not isinstance(ingredient, dict) or ingredient.get('type', 'item') != 'item'
+                or not isinstance(ingredient.get('name'), str)
+                or not _finite(ingredient.get('amount')) or ingredient['amount'] <= 0):
+            return None
+        item, amount = ingredient['name'], ingredient['amount']
+        count = lab['input'].get(item, 0)
+        if not _finite(count) or count < amount:
+            return None
+        bill[item] = bill.get(item, 0) + amount
+    if not bill or any(lab['input'].get(item, 0) < amount for item, amount in bill.items()):
+        return None
+    return {'basis': 'current_powered_lab_supplied_for_native_research_selection',
+            'session_id': snapshot.session_id, 'observed_tick': snapshot.tick,
+            'native_catalog_version': catalog.version, 'technology': name,
+            'technology_enabled_and_unresearched': True, 'prerequisites_researched': True,
+            'lab_role': 'utility:lab', 'lab_unit': lab['unit_number'],
+            'electric_network_id': lab['electric_network_id'], 'energy_now': lab['energy'],
+            'ingredients_per_unit': bill, 'lab_input_now': dict(lab['input']),
+            'research_selection_and_later_progress_require_native_verification': True,
+            'technology_completion_not_established': True}
+
+
 def _native_research_trigger_start_evidence(snapshot, catalog, plan, gather_start):
     """Qualify immediate input to a native trigger without inventing a recipe edge."""
     from .research_trigger import current_machine_input_requirement, current_trigger
@@ -3033,6 +3080,10 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             snapshot, catalog, plan)
         native_research_trigger_start = _native_research_trigger_start_evidence(
             snapshot, catalog, plan, gather_start)
+        supplied_research_start = _supplied_research_start_evidence(snapshot, catalog, plan)
+        if supplied_research_start is not None:
+            scope = 'immediate'
+            reasons.append('current_powered_science_supplied_research_selection')
         passive = all(s.action in {'factory_wait', 'idle'} for s in plan.steps)
         result[plan.id] = {
             'work_scope': scope,
@@ -3061,6 +3112,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'utility_power_prerequisite_start_evidence': utility_power_start,
             'recipe_input_transfer_start_evidence': recipe_input_transfer_start,
             'native_research_trigger_start_evidence': native_research_trigger_start,
+            'supplied_research_start_evidence': supplied_research_start,
             'outpost_kit_prerequisite_start_evidence': outpost_kit_start,
             'direct_alternative_parent_demand_start_evidence': direct_alternative_start,
             'output_pickup_start_evidence': output_pickup_start,

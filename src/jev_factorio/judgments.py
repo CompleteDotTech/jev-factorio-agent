@@ -23,6 +23,48 @@ class InvalidJudgment(ValueError):
     """Malformed or out-of-domain answers must not authorize an action."""
 
 
+def _qualified_supplied_research(plan, facts, row):
+    proof = row.get('supplied_research_start_evidence')
+    if not isinstance(proof, dict) or len(plan.steps) != 1:
+        return False
+    step = plan.steps[0]; factory = facts.get('factory', {})
+    if not isinstance(factory, dict) or not isinstance(factory.get('entities'), dict):
+        return False
+    lab = factory.get('entities', {}).get('utility:lab', {})
+    if not isinstance(lab, dict):
+        return False
+    bill = proof.get('ingredients_per_unit')
+    numeric = lambda x: type(x) in (int, float) and math.isfinite(x)
+    return (facts.get('world_kind') == 'fle' and step.action == 'factory_research'
+        and proof.get('basis') == 'current_powered_lab_supplied_for_native_research_selection'
+        and proof.get('session_id') == facts.get('session_id')
+        and isinstance(proof.get('session_id'), str) and bool(proof['session_id'])
+        and type(proof.get('observed_tick')) is int
+        and type(facts.get('tick')) is int and type(factory.get('tick')) is int
+        and proof['observed_tick'] == facts.get('tick') == factory.get('tick')
+        and proof.get('native_catalog_version') == facts.get('game_version')
+        and proof.get('technology') == (step.parameters or {}).get('technology') == step.item
+        and step.item not in facts.get('researched', []) and factory.get('research') == ''
+        and factory.get('player_connected') is True and factory.get('player_bound') is True
+        and type(factory.get('crafting_queue')) is int and factory['crafting_queue'] == 0
+        and lab.get('name') == 'lab' and type(lab.get('unit_number')) is int
+        and lab['unit_number'] > 0 and type(proof.get('lab_unit')) is int
+        and proof.get('lab_unit') == lab['unit_number']
+        and proof.get('lab_role') == 'utility:lab'
+        and type(lab.get('electric_network_id')) is int and lab['electric_network_id'] > 0
+        and type(proof.get('electric_network_id')) is int
+        and proof.get('electric_network_id') == lab['electric_network_id']
+        and numeric(lab.get('energy')) and lab['energy'] > 0
+        and numeric(proof.get('energy_now')) and proof.get('energy_now') == lab['energy']
+        and isinstance(lab.get('input'), dict) and proof.get('lab_input_now') == lab['input']
+        and isinstance(bill, dict) and bool(bill)
+        and all(isinstance(k, str) and k and numeric(v) and v > 0
+                and numeric(lab['input'].get(k)) and lab['input'][k] >= v for k,v in bill.items())
+        and all(proof.get(k) is True for k in ('technology_enabled_and_unresearched',
+            'prerequisites_researched','research_selection_and_later_progress_require_native_verification',
+            'technology_completion_not_established')))
+
+
 def _number(value, maximum: float = 1.0) -> float:
     if (isinstance(value, bool) or not isinstance(value, (float, int))
             or not math.isfinite(value) or not 0 <= value <= maximum):
@@ -1870,6 +1912,14 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "Verify each action normally and reevaluate from a fresh native observation."
                 if qualified_research_trigger else ""
             )
+            supplied_research_hint = (
+                ' `supplied_research_start_evidence` binds this selection to the current '
+                'powered lab and observed science inputs covering one native research unit. '
+                'The disclosed catalog bill is a producer-validated native prerequisite, '
+                'not an independently projected completion. Selecting this technology '
+                'enables that supplied lab to attempt research; native selection and later '
+                'science consumption, progress and unlock still require verification.'
+                if _qualified_supplied_research(plan, facts, row) else '')
             # Reuse the same qualifications for independent eligibility and
             # magnitude; score-level guidance belongs only to magnitude.
             contribution_hint = (
@@ -1877,6 +1927,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 + place_hint + fuel_hint + utility_lab_hint + power_hint
                 + transfer_hint + input_hint + outpost_kit_hint + pickup_hint
                 + research_trigger_hint + component_hint + buffer_build_hint + buffer_fuel_hint
+                + supplied_research_hint
             )
             usefulness_contribution_hint = ''
             if qualified_raw_gather:
@@ -1930,6 +1981,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     + component_hint
                     + buffer_build_hint
                     + buffer_fuel_hint
+                    + supplied_research_hint
                 ),
             }
             questions[plan.id + "/benefit"] = {
@@ -2035,6 +2087,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                        "facts are present, so do not mark another observation needed merely "
                        "because later recipe output or technology unlock is unverified."
                        if qualified_research_trigger else "")
+                    + supplied_research_hint
                     + (" This paid output arm has observed ownership, coal headroom, a bounded "
                        "current deficit, carried coal, actor readiness and unused receipt. Judge "
                        "start observations from those values; future transfer and flow verification "
