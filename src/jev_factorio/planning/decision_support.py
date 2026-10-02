@@ -2739,6 +2739,47 @@ def _input_route_kit_parent_purpose(snapshot, catalog, plan):
             'later_steps_require_fresh_native_preconditions': True}
 
 
+def _candidate_local_raw_demand(snapshot, catalog, plans, plan, rows):
+    """Bind a manual input to the current parent demand beside a route-kit offer."""
+    if not plans or plan.id == plans[0].id or len(plan.steps) != 1:
+        return None
+    row = rows.get(plan.id, {})
+    parent = rows.get(plans[0].id, {}).get("input_route_kit_parent_purpose")
+    local, raw = row.get("local_target"), row.get("raw_prerequisite")
+    identity = (snapshot.session_id, snapshot.tick)
+    if (snapshot.world_kind != "fle" or snapshot.game_version != catalog.version
+            or getattr(snapshot, "_coherent_observation_verified", None) != identity
+            or getattr(snapshot, "_atomic_inventory_verified", None) != identity
+            or not isinstance(parent, dict) or not isinstance(local, dict)
+            or parent.get("parent_local_objective") != local
+            or not isinstance(local.get("item"), str) or not local["item"]
+            or local.get("ultimate_goal") != plan.goal
+            or type(local.get("inventory_target")) is not int
+            or local["inventory_target"] <= 0
+            or type(snapshot.inventory.get(local.get("item"), 0)) is not int
+            or snapshot.inventory.get(local.get("item"), 0) >= local["inventory_target"]
+            or row.get("work_scope") != "immediate"
+            or row.get("reasons") != [] or row.get("unknowns") != []
+            or not isinstance(raw, dict) or raw.get("observed_tick") != snapshot.tick
+            or not _current_item_dependency_path(snapshot, catalog,
+                raw.get("planner_item_path"), local.get("item"), plan.steps[0].item)):
+        return None
+    try:
+        from .input_routes import InputRoutePlanner
+        matches = [candidate for candidate in InputRoutePlanner(
+            catalog, snapshot, plan.goal).candidates()
+            if candidate.id == plan.id and candidate.steps == plan.steps
+            and all((candidate.materials or {}).get(key) == (plan.materials or {}).get(key)
+                    for key in ("local_objective", "raw_prerequisite", "work_intent", "shortages", "batches"))]
+        if len(matches) != 1:
+            return None
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    return {"schema": 1, "tick": snapshot.tick, "session_id": snapshot.session_id,
+            "catalog_version": catalog.version, "parent_source_unit": parent["source_unit"],
+            "basis": "recompiled_current_parent_raw_demand"}
+
+
 def candidate_evidence(snapshot, catalog, plans) -> dict:
     """Describe the admitted frontier without inventing downstream output."""
     entities = snapshot.factory.get('entities', {})
@@ -3386,6 +3427,10 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             row['work_scope'] = 'shared_prerequisite'
             row['current_prerequisite_units'] = min(required[item], row['processed_units'])
             row['reasons'].append('same_item_current_prerequisite')
+    for plan in plans:
+        purpose = _candidate_local_raw_demand(snapshot, catalog, plans, plan, result)
+        if purpose is not None:
+            result[plan.id]["candidate_local_raw_demand"] = purpose
     return result
 
 
