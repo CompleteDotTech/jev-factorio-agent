@@ -37,8 +37,15 @@ def _owned_samples(snapshot) -> dict | None:
     if not isinstance(entities, dict) or len(entities) > MAX_ENTITIES:
         return None
     result = {}
-    for machine in entities.values():
-        if not isinstance(machine, dict) or machine.get('name') not in BURNERS:
+    for role, machine in entities.items():
+        if not isinstance(machine, dict):
+            continue
+        burner = machine.get('name') in BURNERS
+        # The boiler is tracked only through its canonical campaign role. Do
+        # not let another boiler-shaped entity or an alias add a second sample
+        # to the power-service estimate.
+        boiler = role == 'utility:boiler' and machine.get('name') == 'boiler'
+        if not burner and not boiler:
             continue
         unit, fuel = machine.get('unit_number'), machine.get('fuel')
         point = machine.get('position')

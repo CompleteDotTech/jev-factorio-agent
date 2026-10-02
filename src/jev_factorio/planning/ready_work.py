@@ -48,6 +48,17 @@ class ReadyWorkPlanner(EconomicProduction, FactoryPlanner):
         planner's established behavior.
         """
         machine = self.entities.get(role, {})
+        if role == 'utility:boiler' and self.snapshot.world_kind == 'fle':
+            fuel = machine.get('fuel')
+            coal = fuel.get('coal') if isinstance(fuel, dict) else None
+            unit = machine.get('unit_number')
+            if (machine.get('name') != 'boiler' or type(unit) is not int or unit <= 0
+                    or type(coal) is not int or coal < 0):
+                raise ValueError('Current native boiler identity and coal stock are required')
+            if coal >= 5:
+                return None
+            from .fuel_service import service_plan
+            return service_plan(self, role, role, path, self._need)
         if (not role.startswith('recipe:') or machine.get('name') not in
                 {'stone-furnace', 'steel-furnace'}):
             return super()._fuel(role, path)
