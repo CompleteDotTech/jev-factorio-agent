@@ -65,6 +65,60 @@ def _qualified_supplied_research(plan, facts, row):
             'technology_completion_not_established')))
 
 
+def _qualified_research_science_transfer(plan, facts, row):
+    """Recheck current paid inputs; disclosed technology bill is native producer evidence."""
+    proof = row.get('research_science_transfer_start_evidence')
+    if not isinstance(proof, dict) or len(plan.steps) != 1:
+        return False
+    try:
+        step = plan.steps[0]; parameters = step.parameters or {}
+        factory = facts['factory']; lab = factory['entities']['utility:lab']
+        tick, item, quantity = facts['tick'], parameters['item'], parameters['quantity']
+        bill, name = proof['ingredients_per_unit'], proof['technology']
+        annotation = (plan.materials or {}).get('research_science_transfer')
+        amount, supplied = bill[item], lab['input'].get(item, 0)
+        count, progress = proof['research_count'], factory.get('research_progress', 0)
+        numeric = lambda value: type(value) in (int, float) and math.isfinite(value)
+        return (facts.get('world_kind') == 'fle'
+            and type(tick) is int and type(factory.get('tick')) is int and factory['tick'] == tick
+            and proof.get('basis') == 'current_native_technology_paid_science_input'
+            and isinstance(proof.get('session_id'), str) and bool(proof['session_id'])
+            and proof['session_id'] == facts.get('session_id')
+            and type(proof.get('observed_tick')) is int and proof['observed_tick'] == tick
+            and proof.get('native_catalog_version') == facts.get('game_version')
+            and isinstance(name, str) and bool(name) and name not in facts.get('researched', [])
+            and isinstance(annotation, dict) and type(annotation.get('observed_tick')) is int
+            and annotation == {'observed_tick': tick, 'technology': name, 'ingredient': item}
+            and isinstance(proof.get('prerequisites'), list)
+            and all(isinstance(parent, str) and parent in facts.get('researched', []) for parent in proof['prerequisites'])
+            and factory.get('research') in ('', name)
+            and factory.get('player_connected') is True and factory.get('player_bound') is True
+            and type(factory.get('crafting_queue')) is int and factory['crafting_queue'] == 0
+            and lab.get('name') == 'lab' and type(lab.get('unit_number')) is int and lab['unit_number'] > 0
+            and type(proof.get('lab_unit')) is int and proof['lab_unit'] == lab['unit_number']
+            and proof.get('lab_role') == parameters.get('role') == 'utility:lab'
+            and step.action == 'factory_insert' and step.effect == 'transfer'
+            and isinstance(bill, dict) and bool(bill)
+            and all(isinstance(key, str) and bool(key) and numeric(value) and value > 0 for key, value in bill.items())
+            and numeric(amount) and amount > 0 and numeric(supplied) and 0 <= supplied < amount
+            and proof.get('lab_input_now') == lab['input'] and proof.get('ingredient') == item
+            and numeric(count) and count > 0 and numeric(progress) and 0 <= progress <= 1
+            and numeric(proof.get('research_progress_now')) and proof['research_progress_now'] == progress
+            and type(quantity) is int and quantity == max(1, min(20, math.ceil(count * (1 - progress) * amount)))
+            and type(proof.get('paid_quantity_to_transfer')) is int and proof['paid_quantity_to_transfer'] == quantity
+            and step.costs == {item: quantity}
+            and type(facts['inventory'].get(item)) is int and facts['inventory'][item] >= quantity
+            and type(proof.get('actor_science_now')) is int and proof['actor_science_now'] == facts['inventory'][item]
+            and proof.get('planned_native_receipt') == parameters.get('receipt')
+            and isinstance(parameters.get('receipt'), str) and bool(parameters['receipt'])
+            and _qualified_unused_buffer_receipt(facts, proof, parameters['receipt'], tick)
+            and all(proof.get(key) is True for key in ('technology_enabled_and_unresearched',
+                'transfer_selection_and_research_progress_require_native_verification',
+                'research_selection_or_completion_not_established')))
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
 def _number(value, maximum: float = 1.0) -> float:
     if (isinstance(value, bool) or not isinstance(value, (float, int))
             or not math.isfinite(value) or not 0 <= value <= maximum):
@@ -1920,6 +1974,14 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 'enables that supplied lab to attempt research; native selection and later '
                 'science consumption, progress and unlock still require verification.'
                 if _qualified_supplied_research(plan, facts, row) else '')
+            science_transfer_hint = (
+                ' `research_science_transfer_start_evidence` binds these paid, carried science '
+                'packs to the current owned lab missing an ingredient of the enabled, '
+                'unresearched native technology. The disclosed native bill and remaining '
+                'count bound this immediate science-supply prerequisite. This transfer '
+                'does not select research or establish consumption, progress, or an unlock; '
+                'transfer, selection, power and later research require native verification.'
+                if _qualified_research_science_transfer(plan, facts, row) else '')
             # Reuse the same qualifications for independent eligibility and
             # magnitude; score-level guidance belongs only to magnitude.
             contribution_hint = (
@@ -1927,7 +1989,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 + place_hint + fuel_hint + utility_lab_hint + power_hint
                 + transfer_hint + input_hint + outpost_kit_hint + pickup_hint
                 + research_trigger_hint + component_hint + buffer_build_hint + buffer_fuel_hint
-                + supplied_research_hint
+                + supplied_research_hint + science_transfer_hint
             )
             usefulness_contribution_hint = ''
             if qualified_raw_gather:
@@ -1981,7 +2043,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     + component_hint
                     + buffer_build_hint
                     + buffer_fuel_hint
-                    + supplied_research_hint
+                    + supplied_research_hint + science_transfer_hint
                 ),
             }
             questions[plan.id + "/benefit"] = {
@@ -2087,7 +2149,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                        "facts are present, so do not mark another observation needed merely "
                        "because later recipe output or technology unlock is unverified."
                        if qualified_research_trigger else "")
-                    + supplied_research_hint
+                    + supplied_research_hint + science_transfer_hint
                     + (" This paid output arm has observed ownership, coal headroom, a bounded "
                        "current deficit, carried coal, actor readiness and unused receipt. Judge "
                        "start observations from those values; future transfer and flow verification "

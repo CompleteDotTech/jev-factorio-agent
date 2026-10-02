@@ -170,6 +170,14 @@ network identity, and inputs covering one research unit. This is current start
 readiness, not proof of later science consumption, research progress, or an unlock;
 those outcomes still require native verification and all independent model gates.
 
+The preceding lab-input transfer retains its selected native technology and
+ingredient demand. Its bounded proof binds the current owned lab, missing science
+input, paid actor inventory, remaining native bill, and unused same-tick receipt
+query. Compact observations disclose the receipt-map count rather than copying
+receipt history. Supplying packs is an immediate preparation step; it does not
+establish research selection, consumption, progress, or completion, and neither
+the proof nor its factual judgment guidance replaces the independent model gates.
+
 ## Sources
 
 - FLE repo: https://github.com/JackHopkins/factorio-learning-environment

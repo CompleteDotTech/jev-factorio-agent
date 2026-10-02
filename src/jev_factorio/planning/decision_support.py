@@ -2358,6 +2358,74 @@ def _outpost_kit_prerequisite_start_evidence(snapshot, catalog, plan):
     }
 
 
+def _research_science_transfer_start_evidence(snapshot, catalog, plan):
+    """Paid packs for the current technology, not research progress or completion."""
+    annotation = (plan.materials or {}).get('research_science_transfer')
+    if not isinstance(annotation, dict) or len(plan.steps) != 1:
+        return None
+    step = plan.steps[0]
+    parameters = step.parameters or {}
+    name, item = annotation.get('technology'), annotation.get('ingredient')
+    factory = snapshot.factory
+    tech = catalog.technologies.get(name)
+    lab = factory.get('entities', {}).get('utility:lab', {})
+    identity = (snapshot.session_id, snapshot.tick)
+    receipts = factory.get('receipts')
+    quantity, receipt = parameters.get('quantity'), parameters.get('receipt')
+    if (snapshot.world_kind != 'fle' or type(snapshot.tick) is not int
+            or not isinstance(snapshot.session_id, str) or not snapshot.session_id
+            or type(factory.get('tick')) is not int or factory.get('tick') != snapshot.tick
+            or getattr(snapshot, '_coherent_observation_verified', None) != identity
+            or getattr(snapshot, '_atomic_inventory_verified', None) != identity
+            or catalog.version != snapshot.game_version
+            or type(annotation.get('observed_tick')) is not int
+            or annotation.get('observed_tick') != snapshot.tick
+            or not isinstance(tech, dict) or tech.get('enabled') is not True
+            or tech.get('trigger') or name in (snapshot.researched or [])
+            or any(parent not in (snapshot.researched or []) for parent in tech.get('prerequisites', []))
+            or factory.get('research') not in ('', name)
+            or factory.get('player_connected') is not True or factory.get('player_bound') is not True
+            or type(factory.get('crafting_queue')) is not int or factory['crafting_queue'] != 0
+            or not isinstance(lab, dict) or lab.get('name') != 'lab'
+            or type(lab.get('unit_number')) is not int or lab['unit_number'] <= 0
+            or not isinstance(lab.get('input'), dict) or not isinstance(receipts, dict)
+            or not isinstance(receipt, str) or not receipt or receipt in receipts
+            or step.action != 'factory_insert' or step.effect != 'transfer'
+            or parameters.get('role') != 'utility:lab' or parameters.get('item') != item
+            or type(quantity) is not int or quantity < 1 or step.costs != {item: quantity}):
+        return None
+    bill = {}
+    for ingredient in tech.get('ingredients', []):
+        if (not isinstance(ingredient, dict) or ingredient.get('type', 'item') != 'item'
+                or not isinstance(ingredient.get('name'), str)
+                or not _finite(ingredient.get('amount')) or ingredient['amount'] <= 0):
+            return None
+        bill[ingredient['name']] = bill.get(ingredient['name'], 0) + ingredient['amount']
+    amount, carried = bill.get(item), snapshot.inventory.get(item)
+    supplied, progress, count = lab['input'].get(item, 0), factory.get('research_progress', 0), tech.get('count')
+    if (not _finite(amount) or amount <= 0 or not _finite(supplied) or not 0 <= supplied < amount
+            or type(carried) is not int or carried < quantity
+            or not _finite(progress) or not 0 <= progress <= 1
+            or not _finite(count) or count <= 0
+            or quantity != max(1, min(20, math.ceil(count * (1 - progress) * amount)))):
+        return None
+    return {'basis': 'current_native_technology_paid_science_input',
+            'session_id': snapshot.session_id, 'observed_tick': snapshot.tick,
+            'native_catalog_version': catalog.version, 'technology': name,
+            'technology_enabled_and_unresearched': True,
+            'prerequisites': list(tech.get('prerequisites', [])),
+            'ingredients_per_unit': bill, 'research_count': count, 'research_progress_now': progress,
+            'lab_role': 'utility:lab', 'lab_unit': lab['unit_number'],
+            'lab_input_now': dict(lab['input']), 'ingredient': item,
+            'actor_science_now': carried, 'paid_quantity_to_transfer': quantity,
+            'planned_native_receipt': receipt,
+            'native_receipt_query': {'schema': 1, 'session_id': snapshot.session_id,
+                'tick': snapshot.tick, 'receipt_count': len(receipts), 'receipt': receipt,
+                'present': False, 'map_verified': True},
+            'transfer_selection_and_research_progress_require_native_verification': True,
+            'research_selection_or_completion_not_established': True}
+
+
 def _supplied_research_start_evidence(snapshot, catalog, plan):
     """Current lab readiness for selection, never projected research completion."""
     if len(plan.steps) != 1 or plan.steps[0].action != 'factory_research':
@@ -3150,6 +3218,10 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
         native_research_trigger_start = _native_research_trigger_start_evidence(
             snapshot, catalog, plan, gather_start)
         supplied_research_start = _supplied_research_start_evidence(snapshot, catalog, plan)
+        science_transfer_start = _research_science_transfer_start_evidence(snapshot, catalog, plan)
+        if science_transfer_start is not None:
+            scope = 'immediate'
+            reasons.append('current_native_technology_science_input')
         if supplied_research_start is not None:
             scope = 'immediate'
             reasons.append('current_powered_science_supplied_research_selection')
@@ -3183,6 +3255,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'recipe_input_transfer_start_evidence': recipe_input_transfer_start,
             'native_research_trigger_start_evidence': native_research_trigger_start,
             'supplied_research_start_evidence': supplied_research_start,
+            'research_science_transfer_start_evidence': science_transfer_start,
             'outpost_kit_prerequisite_start_evidence': outpost_kit_start,
             'direct_alternative_parent_demand_start_evidence': direct_alternative_start,
             'output_pickup_start_evidence': output_pickup_start,
