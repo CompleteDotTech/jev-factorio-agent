@@ -1,14 +1,27 @@
 """Opt-in input routes layered on the existing output-buffer planner."""
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 from ..input_routes import COMMAND, flow_complete, remaining, sources
 from ..production_sites import sources as production_sites, summary as site_summary
 from ..output_buffers import flow_complete as output_flow_complete
 from .output_buffers import OutputBufferPlanner
+
+
+def _manual_step_semantics(plan):
+    steps = []
+    for step in plan.steps:
+        row = asdict(step)
+        # A new native receipt identifies an attempt, not different work.
+        row["parameters"] = {key: value for key, value in (step.parameters or {}).items()
+                             if key != "receipt"}
+        steps.append(row)
+    return steps
 
 
 class InputRoutePlanner(OutputBufferPlanner):
@@ -58,6 +71,15 @@ class InputRoutePlanner(OutputBufferPlanner):
                 for plan in alternatives:
                     step = plan.steps[0]
                     if step.allowed(self.snapshot) and not step.satisfied(self.snapshot):
+                        prior = unique.get(plan.id)
+                        if prior is not None:
+                            semantics = _manual_step_semantics(plan)
+                            if semantics == _manual_step_semantics(prior):
+                                continue
+                            encoded = json.dumps(semantics, sort_keys=True,
+                                                 separators=(",", ":"), allow_nan=False)
+                            suffix = hashlib.sha256(encoded.encode()).hexdigest()
+                            plan = replace(plan, id=f"{plan.id}:manual:{suffix}")
                         unique.setdefault(plan.id, plan)
                 plans = list(unique.values())[:self.max_candidates]
         sites = site_summary(self.snapshot)
