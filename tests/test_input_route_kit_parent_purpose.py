@@ -27,8 +27,9 @@ def captured():
     catalog = Catalog.from_dict(data['catalog'])
     assert catalog.version == state.game_version == '2.0.77'
     plans = MiningOutpostPlanner(catalog, state, 'rocket_launch').candidates()
-    assert len(plans) == 1
-    return state, catalog, plans[0], data['historical_answers']
+    kit = [plan for plan in plans if (plan.materials or {}).get('input_route_kit_prerequisite')]
+    assert len(kit) == 1
+    return state, catalog, kit[0], data['historical_answers']
 
 
 def context(state, catalog, plan):

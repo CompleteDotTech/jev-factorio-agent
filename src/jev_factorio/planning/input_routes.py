@@ -43,6 +43,23 @@ class InputRoutePlanner(OutputBufferPlanner):
 
     def candidates(self):
         plans = super().candidates()
+        # An unstarted input-route kit is optional capacity investment. Keep
+        # its bounded proposal, but expose the existing manual production path
+        # as an independent choice. Owned route service remains serial.
+        marker = (plans[0].materials or {}).get('input_route_kit_prerequisite') if plans else None
+        if (marker and marker.get('state') == 'proposed'
+                and not getattr(self, '_defer_proposed_input_route', False)):
+            worker = type(self)(self.catalog, self.snapshot, self.goal,
+                                self.collection_batch, self.max_candidates)
+            worker._defer_proposed_input_route = True
+            alternatives = super(InputRoutePlanner, worker).candidates()
+            if not worker._buffer_service:
+                unique = {plan.id: plan for plan in plans}
+                for plan in alternatives:
+                    step = plan.steps[0]
+                    if step.allowed(self.snapshot) and not step.satisfied(self.snapshot):
+                        unique.setdefault(plan.id, plan)
+                plans = list(unique.values())[:self.max_candidates]
         sites = site_summary(self.snapshot)
         diagnostics = self.factory.get("input_routes", {}).get("diagnostics", {})
         return [replace(plan, materials={**(plan.materials or {}), "automation_sites": sites,
@@ -69,7 +86,10 @@ class InputRoutePlanner(OutputBufferPlanner):
                                if entry.startswith('item:')]
                 if parent_path[-1:] != [parent['item']]:
                     parent_path.append(parent['item'])
-                plan = replace(plan, materials={**(plan.materials or {}),
+                materials = dict(plan.materials or {})
+                parent_shortages = materials.pop('shortages', {})
+                materials['parent_material_shortages'] = parent_shortages
+                plan = replace(plan, materials={**materials,
                     'input_route_kit_prerequisite': {
                         'schema': 1, 'observed_tick': self.snapshot.tick,
                         'session_id': self.snapshot.session_id,
@@ -159,7 +179,8 @@ class InputRoutePlanner(OutputBufferPlanner):
             recurring = (self.goal == "rocket_launch" and amount - self.snapshot.inventory.get(item, 0) >= 10
                          and self.entities[row["source"]].get("products_finished", 0) >= 20
                          and output_flow_complete(row["source"], output.get("layout", ""), self.snapshot))
-            if not proposed or recurring:
+            if (not proposed or recurring) and not (proposed and
+                    getattr(self, '_defer_proposed_input_route', False)):
                 service = self._route(row, path)
                 if service:
                     return service
