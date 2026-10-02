@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/banner.jpg" alt="Pixel-art robot Jev operating conveyor belts, machines and robotic arms in a neon-lit factory" width="100%"></p>
+
 # jev-factorio
 
 A Jev-powered Factorio agent. Jev (TypeSafe AI's System One model) makes the
