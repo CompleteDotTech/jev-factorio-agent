@@ -530,10 +530,6 @@ class FactoryPlanner:
         current = self.factory.get("research", "")
         if current and current != name:
             return self._research(current, path)
-        if not current:
-            return self._plan("factory_research", "research_started", name,
-                              parameters={"technology": name},
-                              description=f"Start native research: {name}")
         lab = self.entities["utility:lab"]
         for ingredient in tech["ingredients"]:
             item = ingredient["name"]
@@ -544,6 +540,12 @@ class FactoryPlanner:
                 ))
                 prerequisite = self._need(item, max(1, needed), path)
                 return prerequisite or self._transfer("utility:lab", item, max(1, needed))
+        if not current:
+            # Selecting an empty lab only queues research. Prepare the native
+            # science ingredients first so selection has a current supplied lab.
+            return self._plan("factory_research", "research_started", name,
+                              parameters={"technology": name},
+                              description=f"Select native research with a powered, science-supplied lab: {name}")
         progress = self.factory.get("research_progress", 0)
         increment = min(0.01, 1 / max(1, tech["count"]))
         # A wait which timed out while the lab lacked a pack must not veto a

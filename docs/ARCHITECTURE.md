@@ -162,6 +162,14 @@ no game, no key, no spend. That runs today.
 - **Latency variance** (70-500 ms): fine at 0.1-0.5 Hz, unusable for
   twitch control - combat/defense needs a scripted reflex layer.
 
+Science-consuming research prepares and inserts its native science ingredients
+before selecting a technology on an idle force. Selecting an empty lab only queues
+research. The bounded selection proof instead binds a coherent same-session
+observation and matching native catalog version to the powered lab, its unit and
+network identity, and inputs covering one research unit. This is current start
+readiness, not proof of later science consumption, research progress, or an unlock;
+those outcomes still require native verification and all independent model gates.
+
 ## Sources
 
 - FLE repo: https://github.com/JackHopkins/factorio-learning-environment
