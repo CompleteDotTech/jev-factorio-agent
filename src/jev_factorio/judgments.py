@@ -2241,15 +2241,12 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 questions["candidate"]["instructions"] += (
                     " Compare qualified candidate-local parent contributions separately from the kit target.")
                 questions[plan.id + "/useful_progress"]["instructions"] = (
-                    "Would this candidate's next bounded action make useful progress toward its "
-                    "`local_target` if its native receipt and fresh postcondition verify? "
-                    "Judge independently from facts, candidate_local_raw_demand, raw_prerequisite, "
-                    "gather_start_evidence and execution_contract. Its current native-recipe "
-                    "input path belongs to the kit's separate parent demand, not the kit target. "
-                    "Bounded raw input is partial progress, not harvested stock, science output, "
-                    "route flow or blocker removal. Missing, stale, mismatched or contrary "
-                    "evidence means unsupported. Report confidence in usefulness; other answers "
-                    "are unavailable. Native execution checks remain unchanged.")
+                    f"For {pointer}, use `candidate_evidence[{json.dumps(plan.id)}]` "
+                    "to judge useful next-step progress toward its local_target after native verification. "
+                    "Judge current facts and raw-demand/start proof independently. "
+                    "Raw input is partial progress, not kit completion, science output, route flow or blocker removal. "
+                    "Missing, stale, mismatched or contrary evidence means unsupported. "
+                    "Native checks apply; other answers are unavailable.")
             questions[plan.id + "/benefit"] = {
                 "type": "score",
                 "instructions": (
