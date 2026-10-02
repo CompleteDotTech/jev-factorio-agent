@@ -536,7 +536,15 @@ class FactoryPlanner:
                     * ingredient["amount"]
                 ))
                 prerequisite = self._need(item, max(1, needed), path)
-                return prerequisite or self._transfer("utility:lab", item, max(1, needed))
+                if prerequisite:
+                    return prerequisite
+                plan = self._transfer("utility:lab", item, max(1, needed))
+                materials = dict(plan.materials or {})
+                materials['research_science_transfer'] = {
+                    'observed_tick': self.snapshot.tick, 'technology': name,
+                    'ingredient': item,
+                }
+                return replace(plan, materials=materials)
         # Acquiring or inserting native science packs does not consume lab
         # power. Prepare the current technology's bounded pack need first, so
         # a low boiler cannot repeatedly defer science acquisition. Power is
