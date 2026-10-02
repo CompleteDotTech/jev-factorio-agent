@@ -108,6 +108,42 @@ class Decision:
     diagnostics: dict = field(default_factory=dict)
 
 
+def _native_additive_connection_contract(plan, facts) -> bool:
+    """Identify the paid native connector contract, not a surveyed route."""
+    if not isinstance(facts, dict) or facts.get('world_kind') != 'fle' or len(plan.steps) != 1:
+        return False
+    step = plan.steps[0]
+    parameters = step.parameters
+    factory = facts.get('factory')
+    tick, session = facts.get('tick'), facts.get('session_id')
+    if (step.action != 'factory_connect' or step.effect != 'connection'
+            or not isinstance(parameters, dict)
+            or set(parameters) != {'source', 'target', 'kind', 'fluid'}
+            or parameters.get('kind') not in {'pipe', 'small-electric-pole'}
+            or any(not isinstance(parameters.get(key), str) or not parameters[key]
+                   for key in ('source', 'target', 'fluid'))
+            or parameters['source'] == parameters['target']
+            or (parameters['kind'] == 'small-electric-pole') != (parameters['fluid'] == 'electricity')
+            or type(tick) is not int or not isinstance(session, str) or not session
+            or not isinstance(factory, dict) or type(factory.get('tick')) is not int
+            or factory['tick'] != tick):
+        return False
+    ownership = factory.get('connector_ownership')
+    entities = factory.get('entities')
+    if (not isinstance(ownership, dict) or type(ownership.get('protocol')) is not int
+            or ownership['protocol'] != 1 or ownership.get('session_id') != session
+            or type(ownership.get('tick')) is not int or ownership['tick'] != tick
+            or not isinstance(ownership.get('routes'), dict)
+            or not isinstance(entities, dict)):
+        return False
+    source, target = entities.get(parameters['source']), entities.get(parameters['target'])
+    return (isinstance(source, dict) and isinstance(target, dict)
+            and all(type(entity.get('unit_number')) is int and entity['unit_number'] > 0
+                    and isinstance(entity.get('name'), str) and bool(entity['name'])
+                    for entity in (source, target))
+            and source['unit_number'] != target['unit_number'])
+
+
 def _qualified_direct_parent_demand(plan, row, selected, facts) -> bool:
     """Check bindings before explaining a validated current gather purpose."""
     witness = row.get('direct_alternative_parent_demand_start_evidence')
@@ -766,6 +802,16 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
         evidence = context.get('candidate_evidence') or {}
         facts = state.get('facts')
         tick = facts.get('tick') if isinstance(facts, dict) else None
+        if any(_native_additive_connection_contract(plan, facts) for plan in selected):
+            context['execution_contract'] += (
+                " For a `factory_connect` candidate bound to the current paid native "
+                "connector protocol, dispatch surveys a collision-aware route, reuses "
+                "matching existing connectors, and places only missing pipes or poles "
+                "from carried stock. It does not mine, remove, stop or rebuild existing "
+                "factory entities. A blocked route or insufficient actual materials "
+                "can reject native preparation; the planner's material allowance is "
+                "not a surveyed placement count. Approach, placement receipts and "
+                "fresh topology verification remain required, and flow is not established.")
         local = state.get('local_objective')
         primary = local.get('primary_target') if isinstance(local, dict) else None
         target = primary.get('item') if isinstance(primary, dict) else None
@@ -1923,12 +1969,17 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 "type": "score",
                 "instructions": (
                     f"How disruptive are the steps in {pointer} to the existing factory "
-                    "in `facts`, under `execution_contract`?"
+                    "in `facts`, under `execution_contract`?" + (
+                        " Judge construction or alteration of infrastructure separately "
+                        "from uncertainty about approach, route clearance or execution "
+                        "success; native preconditions and postconditions still apply."
+                        if _native_additive_connection_contract(plan, facts) else "")
                 ),
                 "criteria": [
                     "Only moves, gathers resources, waits, fuels an existing machine, "
                     "or handcrafts from carried inputs without changing existing entities",
-                    "Places new machinery without removing any existing entity",
+                    "Places new machinery or connectors, such as pipes, poles or belts, "
+                    "without removing any existing entity",
                     "Stops, removes, or rebuilds existing factory infrastructure",
                 ],
             }

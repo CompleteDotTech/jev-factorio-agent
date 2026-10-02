@@ -46,6 +46,15 @@ the vocabulary for our macro actions.**
 
 ## 2. Decision loop design
 
+For a single native `factory_connect` step with coherent current connector
+ownership facts, the model receives the executor's additive construction
+contract: dispatch surveys the corridor, reuses matching connectors and places
+only missing pipes or poles from carried inventory. It does not remove or rebuild
+existing factory entities. The disruption rubric includes connector placement;
+approach, clearance and successful flow remain separate uncertainties. A planner
+material allowance is not a surveyed placement count. Native preparation checks
+and the model confidence floors still apply.
+
 Factorio runs at 60 UPS, but it is a planning game: meaningful decisions
 are macro-level (what to automate next, where to expand, what is blocked).
 That matches Jev perfectly - 70-500 ms latency, typed answers, fractions of
