@@ -11,10 +11,48 @@ from pathlib import Path
 
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+# Candidate generation includes the composed planner and its demand, fuel,
+# ownership, route and evidence helpers. Keep this explicit and blob-bound: a
+# Git commit or unrelated file change must never grant a new evaluation.
 _CONTRACT_PATHS = (
     "src/jev_factorio/judgments.py",
     "src/jev_factorio/planning/decision_support.py",
     "src/jev_factorio/planning/mining_outposts.py",
+    "src/jev_factorio/planning/background_work.py",
+    "src/jev_factorio/planning/capacity_evidence.py",
+    "src/jev_factorio/planning/capital.py",
+    "src/jev_factorio/planning/catalog.py",
+    "src/jev_factorio/planning/coal_admission.py",
+    "src/jev_factorio/planning/coal_current_evidence.py",
+    "src/jev_factorio/planning/coal_economic_binding.py",
+    "src/jev_factorio/planning/coal_economic_proof.py",
+    "src/jev_factorio/planning/coal_economics.py",
+    "src/jev_factorio/planning/coal_funding.py",
+    "src/jev_factorio/planning/coal_goal_alignment.py",
+    "src/jev_factorio/planning/coal_supply.py",
+    "src/jev_factorio/planning/connection_identity.py",
+    "src/jev_factorio/planning/connections.py",
+    "src/jev_factorio/planning/demand.py",
+    "src/jev_factorio/planning/economics.py",
+    "src/jev_factorio/planning/factory.py",
+    "src/jev_factorio/planning/fuel_failure_budget.py",
+    "src/jev_factorio/planning/fuel_history.py",
+    "src/jev_factorio/planning/fuel_service.py",
+    "src/jev_factorio/planning/goals.py",
+    "src/jev_factorio/planning/input_routes.py",
+    "src/jev_factorio/planning/launch.py",
+    "src/jev_factorio/planning/materials.py",
+    "src/jev_factorio/planning/output_buffers.py",
+    "src/jev_factorio/planning/productive_work.py",
+    "src/jev_factorio/planning/ready_work.py",
+    "src/jev_factorio/planning/research_trigger.py",
+    "src/jev_factorio/planning/scheduling.py",
+    "src/jev_factorio/planning/service_policy.py",
+    "src/jev_factorio/planning/service_visits.py",
+    "src/jev_factorio/planning/solid_funding.py",
+    "src/jev_factorio/planning/solid_investment.py",
+    "src/jev_factorio/planning/solid_routes.py",
+    "src/jev_factorio/planning/successors.py",
 )
 _BLOCKED_REASONS = {"Candidate evidence insufficient", "low choice confidence"}
 

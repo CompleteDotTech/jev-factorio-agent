@@ -13,6 +13,7 @@ from jev_factorio.blocked_reevaluation import (
     validate_blocked_memory,
     validate_checkpoint_capture,
     validate_source_revision,
+    _CONTRACT_PATHS,
 )
 from jev_factorio.controller import HierarchicalLoop
 from jev_factorio.judgments import Decision
@@ -50,6 +51,11 @@ def _source_repo(root: Path) -> tuple[str, Path, Path, Path]:
     judgments.write_bytes(b"def decision():\n    return 'old'\n")
     support.write_bytes(b"def support():\n    return 'old'\n")
     planner.write_bytes(b"def candidates():\n    return ['old']\n")
+    for name in _CONTRACT_PATHS:
+        path = root / name
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"def decision_dependency():\n    return 'old'\n")
     _git(root, "add", ".")
     _git(root, "commit", "--quiet", "-m", "initial")
     return _git(root, "rev-parse", "HEAD"), judgments, support, planner
@@ -584,3 +590,59 @@ def test_persistent_block_below_threshold_is_reevaluated_and_commits_a_passive_w
     with pytest.raises(ValueError, match='Decision contract was already re-evaluated'):
         CampaignMemory.from_bytes(json.dumps(duplicate).encode(),
                                   backend.session_id, 'bootstrap_mining')
+
+
+@pytest.mark.parametrize("relative", [name for name in _CONTRACT_PATHS
+    if name not in {"src/jev_factorio/judgments.py",
+                    "src/jev_factorio/planning/decision_support.py",
+                    "src/jev_factorio/planning/mining_outposts.py"}])
+def test_composed_planner_dependency_change_changes_contract(tmp_path, relative):
+    root = tmp_path / "planner-dependency"
+    root.mkdir()
+    old, *_ = _source_repo(root)
+    path = root / relative
+    path.write_bytes(b"def decision_dependency():\n    return 'new candidate behavior'\n")
+    _git(root, "add", relative)
+    _git(root, "commit", "--quiet", "-m", "change planner dependency")
+    result = validate_source_revision(old, root)
+    assert result["decision_contract_sha256"] != result["previous_contract_sha256"]
+
+
+def test_input_route_change_allows_fresh_contract_once_and_keeps_old_ledger(tmp_path):
+    root = tmp_path / "input-route-contract"
+    root.mkdir()
+    old, *_ = _source_repo(root)
+    route = root / "src/jev_factorio/planning/input_routes.py"
+    route.write_bytes(b"def candidates():\n    return ['kit', 'manual-current-science']\n")
+    _git(root, "add", str(route.relative_to(root)))
+    _git(root, "commit", "--quiet", "-m", "offer proposed route manual frontier")
+    contract = validate_source_revision(old, root)
+    memory = CampaignMemory("contract-test", "rocket_launch", last_tick=1, status="blocked",
+        reason="Candidate evidence insufficient", stalled_decisions=4)
+    entry = {"schema": 1, "authorization_id": "1" * 32,
+        "blocked_source_revision": old, "source_head": contract["source_head"],
+        "decision_contract_sha256": contract["previous_contract_sha256"],
+        "checkpoint_sha256": "a" * 64, "stalled_decisions": 4,
+        "reason": memory.reason, "tick": 1, "state": "consumed"}
+    memory.blocked_reevaluations = [entry]
+    checkpoint = tmp_path / "blocked.json"
+    memory.save(checkpoint)
+    raw = checkpoint.read_bytes()
+    admitted = validate_checkpoint_capture(raw, hashlib.sha256(raw).hexdigest(),
+        CampaignMemory, "rocket_launch", decision_contract_sha256=contract["decision_contract_sha256"])
+    assert admitted.blocked_reevaluations == [entry]
+    admitted.blocked_reevaluations.append({**entry, "authorization_id": "2" * 32,
+        "decision_contract_sha256": contract["decision_contract_sha256"]})
+    admitted.save(checkpoint)
+    raw = checkpoint.read_bytes()
+    with pytest.raises(ValueError, match="already consumed"):
+        validate_checkpoint_capture(raw, hashlib.sha256(raw).hexdigest(), CampaignMemory,
+            "rocket_launch", decision_contract_sha256=contract["decision_contract_sha256"])
+    assert CampaignMemory.load(checkpoint, "contract-test", "rocket_launch").blocked_reevaluations == admitted.blocked_reevaluations
+    (root / "tests").mkdir()
+    (root / "tests/test_cosmetic.py").write_text("# unrelated test change\n")
+    _git(root, "add", "tests/test_cosmetic.py")
+    prior = _git(root, "rev-parse", "HEAD")
+    _git(root, "commit", "--quiet", "-m", "tests do not change decision contract")
+    with pytest.raises(ValueError, match="contract has not changed"):
+        validate_source_revision(prior, root)
