@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 from dataclasses import replace
 
 from ..input_routes import COMMAND, flow_complete, remaining, sources
@@ -50,6 +51,8 @@ class InputRoutePlanner(OutputBufferPlanner):
     def _acquire(self, item, count, path):
         previous = self._acquiring_route
         economic = getattr(self, "_economic_acquiring", False)
+        focus = self.focus
+        parent = getattr(self, '_route_kit_parent', None)
         self._acquiring_route = self._economic_acquiring = True
         try:
             # Keep the output-buffer-aware ingredient path, not the raw serial
@@ -58,8 +61,34 @@ class InputRoutePlanner(OutputBufferPlanner):
             # a material from the outer consumer's path. Route expansion stays
             # disabled; cycles inside the kit and the shared expansion limit
             # still apply, and owned output-buffer access remains authoritative.
-            return super()._need(item, count, ())
+            if parent is not None and focus is not None:
+                self.focus = (item, count)
+            plan = super()._need(item, count, ())
+            if plan is not None and parent is not None and focus is not None:
+                parent_path = [entry.removeprefix('item:') for entry in path
+                               if entry.startswith('item:')]
+                if parent_path[-1:] != [parent['item']]:
+                    parent_path.append(parent['item'])
+                plan = replace(plan, materials={**(plan.materials or {}),
+                    'input_route_kit_prerequisite': {
+                        'schema': 1, 'observed_tick': self.snapshot.tick,
+                        'session_id': self.snapshot.session_id,
+                        'source': parent['source'], 'source_unit': parent['source_unit'],
+                        'layout': parent['layout'], 'state': parent['state'],
+                        'kit_item': item, 'kit_inventory_target': count,
+                        'kit_kind': 'construction_fuel' if item == 'coal' else 'route_component',
+                        'construction_fuel_inventory_target': 15,
+                        'parent_local_objective': {
+                            'item': focus[0], 'inventory_target': focus[1],
+                            'ultimate_goal': self.goal},
+                        'parent_planner_item_path': parent_path,
+                        'remaining_route_bill': deepcopy(remaining(parent,
+                            self._science_reserve() if parent['state'] == 'proposed'
+                            else parent['reserve_belts'])),
+                    }})
+            return plan
         finally:
+            self.focus = focus
             self._acquiring_route = previous
             self._economic_acquiring = economic
 
@@ -82,7 +111,12 @@ class InputRoutePlanner(OutputBufferPlanner):
             bill = remaining(row, reserve)
             for item, count in sorted({**bill, "coal": 15}.items()):
                 if self.snapshot.inventory.get(item, 0) < count:
-                    prerequisite = self._acquire(item, count, path)
+                    previous_parent = getattr(self, '_route_kit_parent', None)
+                    self._route_kit_parent = row
+                    try:
+                        prerequisite = self._acquire(item, count, path)
+                    finally:
+                        self._route_kit_parent = previous_parent
                     if prerequisite:
                         return prerequisite
             spec = todo[0]

@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import math
 from copy import deepcopy
+from dataclasses import replace
 
 from .scheduling import (RAW_TICKS_PER_ITEM, SAFETY_TICKS, SERVICE_TICKS,
                          TRAVEL_TICKS_PER_TILE, research_schedule)
@@ -2522,6 +2523,66 @@ def _native_research_trigger_start_evidence(snapshot, catalog, plan, gather_star
     }
 
 
+def _input_route_kit_parent_purpose(snapshot, catalog, plan):
+    """Recompile a bounded kit need from the current owned route and parent path."""
+    marker = (plan.materials or {}).get('input_route_kit_prerequisite')
+    if not isinstance(marker, dict):
+        return None
+    local = (plan.materials or {}).get('local_objective')
+    parent = marker.get('parent_local_objective')
+    path = marker.get('parent_planner_item_path')
+    identity = (snapshot.session_id, snapshot.tick)
+    if (snapshot.world_kind != 'fle' or plan.goal != 'rocket_launch'
+            or snapshot.game_version != catalog.version
+            or type(marker.get('schema')) is not int or marker['schema'] != 1
+            or type(marker.get('observed_tick')) is not int
+            or marker['observed_tick'] != snapshot.tick
+            or marker.get('session_id') != snapshot.session_id
+            or getattr(snapshot, '_coherent_observation_verified', None) != identity
+            or getattr(snapshot, '_atomic_inventory_verified', None) != identity
+            or not isinstance(local, dict) or not isinstance(parent, dict)
+            or local != {'item': marker.get('kit_item'),
+                         'inventory_target': marker.get('kit_inventory_target'),
+                         'ultimate_goal': plan.goal}
+            or parent.get('ultimate_goal') != plan.goal
+            or type(parent.get('inventory_target')) is not int
+            or parent['inventory_target'] < 1
+            or type(marker.get('kit_inventory_target')) is not int
+            or marker['kit_inventory_target'] < 1
+            or not isinstance(marker.get('source'), str)
+            or not _current_item_dependency_path(snapshot, catalog, path,
+                parent.get('item'), marker['source'].removeprefix('recipe:'))):
+        return None
+    try:
+        from ..input_routes import current
+        from .input_routes import InputRoutePlanner
+        row = input_route_sources(snapshot).get(marker['source'])
+        if (not isinstance(row, dict) or not current(row, snapshot)
+                or row.get('state') not in {'proposed', 'building'}
+                or type(marker.get('source_unit')) is not int
+                or marker['source_unit'] != row['source_unit']):
+            return None
+        planner = InputRoutePlanner(catalog, snapshot, plan.goal)
+        matches = [candidate for candidate in planner.candidates()
+                   if candidate.id == plan.id and candidate.steps == plan.steps]
+        if len(matches) != 1:
+            return None
+        derived = matches[0]
+        if (derived.steps != plan.steps
+                or (derived.materials or {}).get('input_route_kit_prerequisite') != marker
+                or (derived.materials or {}).get('local_objective') != local
+                or (derived.materials or {}).get('raw_prerequisite') !=
+                    (plan.materials or {}).get('raw_prerequisite')
+                or (derived.materials or {}).get('craft_dependency') !=
+                    (plan.materials or {}).get('craft_dependency')):
+            return None
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    return {**deepcopy(marker), 'basis': 'same_tick_recompiled_owned_input_route_kit_need',
+            'route_flow_and_parent_output_are_not_established': True,
+            'later_steps_require_fresh_native_preconditions': True}
+
+
 def candidate_evidence(snapshot, catalog, plans) -> dict:
     """Describe the admitted frontier without inventing downstream output."""
     entities = snapshot.factory.get('entities', {})
@@ -2536,6 +2597,14 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
     has_solid_offer = any(solid_marker(plan, snapshot) for plan in plans)
     has_coal_offer = any(coal_marker(plan, snapshot) for plan in plans)
     for index, plan in enumerate(plans):
+        kit_parent_purpose = _input_route_kit_parent_purpose(snapshot, catalog, plan)
+        if ('input_route_kit_prerequisite' in (plan.materials or {})
+                and kit_parent_purpose is None):
+            # A stale or forged kit annotation cannot acquire a local-target
+            # recipe proof. Keep the executable step and its native guards.
+            plan = replace(plan, materials={**(plan.materials or {}),
+                'local_objective': None, 'raw_prerequisite': None,
+                'craft_dependency': None, 'placement_dependency': None})
         placement_start = _placement_start_evidence(snapshot, plan)
         utility_lab_dependency = _utility_lab_research_dependency(snapshot, catalog, plan)
         power_annotation = (plan.materials or {}).get('utility_power_prerequisite')
@@ -3095,6 +3164,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             'processed_units': quantities, 'material_costs': costs,
             'delivers_or_crafts': sorted(outputs), 'unknowns': sorted(set(unknown)),
             'raw_prerequisite': prerequisite_evidence,
+            'input_route_kit_parent_purpose': kit_parent_purpose,
             'gather_start_evidence': gather_start,
             'fuel_prerequisite': fuel_prerequisite,
             'fuel_transfer_start_evidence': fuel_transfer_start,
@@ -3266,6 +3336,15 @@ def scheduling_context(snapshot, catalog, plans, goal: str) -> dict:
                    'Immediate prerequisites precede discretionary lookahead at equal urgency; '
                    'moving more items is not evidence of more useful production.')
     first_evidence = evidence.get(plans[0].id, {}) if plans else {}
+    if plans and 'input_route_kit_prerequisite' in (plans[0].materials or {}):
+        primary = first_evidence.get('local_target')
+        kit_purpose = first_evidence.get('input_route_kit_parent_purpose')
+        if isinstance(kit_purpose, dict):
+            instruction = (
+                'Acquire the bounded input-route kit target shown here. Its '
+                'same-tick parent demand remains a separate conditional purpose; '
+                'a raw ingredient is recipe input progress, not a completed kit, '
+                'route flow, science output, or ultimate-goal completion.')
     lab_dependency = (first_evidence.get('utility_lab_research_dependency')
                       if isinstance(first_evidence, dict) else None)
     if isinstance(lab_dependency, dict):
