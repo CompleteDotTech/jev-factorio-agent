@@ -50,6 +50,12 @@ def test_basic_assembler_unlock_precedes_rocket_dependency_order():
     state.researched = []
     state.factory['research'] = ''
     assert capability_technology(data, []) == 'automation'
+    prerequisite = ReadyWorkPlanner(data, state, 'rocket_launch').plan()
+    assert prerequisite.steps[0].action == 'factory_craft'
+    assert prerequisite.steps[0].parameters['recipe'] == 'automation-science-pack'
+    assert prerequisite.materials['economics']['objective'] == 'unlock_basic_assembly'
+    assert state.factory['research'] == ''
+    state.factory['entities']['utility:lab']['input'] = {'automation-science-pack': 1}
     plan = ReadyWorkPlanner(data, state, 'rocket_launch').plan()
     assert plan.steps[0].action == 'factory_research'
     assert plan.steps[0].parameters['technology'] == 'automation'
