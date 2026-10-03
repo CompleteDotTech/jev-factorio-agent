@@ -8,6 +8,7 @@ inputs and must remain retained by the durable caller.
 from __future__ import annotations
 from copy import deepcopy
 import hashlib
+import base64
 import json
 import os
 import re
@@ -37,8 +38,23 @@ def _require(value, message):
         raise ValueError(message)
 
 
+# v1 is an explicit supervisor recovery authority, not a caller-selected trust root.
+# This public enrollment pin is independent of persisted checkpoint/history data.
+RECONCILIATION_SIGNERS_BASENAME = "source-signature-allowed-signers-0095-v3.txt"
+RECONCILIATION_SIGNERS_SHA256 = "d8463a2453db96f179b86bd9682c77fe80d90bd299c8e36ef9ed361d8ae91bfd"
+
+_AUTHORITY_FIELDS = {"schema", "authorization_id", "checkpoint_sha256",
+        "events_sha256", "manifest_sha256", "integrity_sha256", "session_id", "source_revision",
+        "prior_index", "paid_index", "model_call_id", "selected_plan_id", "confidence_floor",
+        "max_request_bytes", "owner_absent", "native_pending_none", "fresh_candidate",
+        "fresh_candidate_evidence", "fresh_tick", "fresh_native_proof_sha256", "native073_proof_sha256", "writer_lock_pin", "target_source_revision", "source_handoff_sha256", "source_handoff_status", "ordinary_gates_sha256", "budget_carry_sha256"}
+
 def _verify_signature(raw, signature, trust_pin):
     """Verify actual OpenSSH authority and the complete pinned public trust file."""
+    _require(type(trust_pin) is dict and set(trust_pin) == {"path","sha256","size","device","inode","uid","mode","mtime_ns","ctime_ns"}
+             and type(trust_pin.get("path")) is str and Path(trust_pin["path"]).name == RECONCILIATION_SIGNERS_BASENAME
+             and trust_pin.get("sha256") == RECONCILIATION_SIGNERS_SHA256,
+             "Reconciliation authority trust root is not enrolled")
     path = Path(trust_pin["path"])
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     descriptors = []
@@ -94,11 +110,7 @@ def prepare_paid_duplicate_projection(checkpoint_raw, events_raw, manifest_raw,
                  "Missing or oversized complete reconciliation input")
     _verify_signature(authority_raw, signature, trust_pin)
     authority = _json(authority_raw)
-    _require(set(authority) == {"schema", "authorization_id", "checkpoint_sha256",
-        "events_sha256", "manifest_sha256", "integrity_sha256", "session_id", "source_revision",
-        "prior_index", "paid_index", "model_call_id", "selected_plan_id", "confidence_floor",
-        "max_request_bytes", "owner_absent", "native_pending_none", "fresh_candidate",
-        "fresh_candidate_evidence", "fresh_tick", "fresh_native_proof_sha256", "native073_proof_sha256", "writer_lock_pin", "target_source_revision", "source_handoff_sha256", "source_handoff_status", "ordinary_gates_sha256"}
+    _require(type(authority) is dict and set(authority) == _AUTHORITY_FIELDS
         and authority["schema"] == "jev.paid-selection-representation-reconciliation.v1",
         "Invalid explicit reconciliation authority")
     for field, raw in (("checkpoint_sha256", checkpoint_raw), ("events_sha256", events_raw),
@@ -253,7 +265,14 @@ def prepare_paid_duplicate_projection(checkpoint_raw, events_raw, manifest_raw,
     input_raw = json.dumps(original_input, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     _require(_hash(input_raw) == paid["decision_input_sha256"],
              "Exact original paid input is not reconstructed")
-    raw_state = deepcopy(packet)
+    # Reconstruct the complete pre-question compiler state, including recipe
+    # records factored inside native facts. Exact WAL bytes above stay unchanged.
+    from .blocked_persistence import _selection_semantic_evidence, selection_state_sha256
+    shared = packet.get("shared_recipes")
+    unfactored = deepcopy(packet)
+    unfactored.pop("shared_recipes", None)
+    raw_state = (_selection_semantic_evidence({"candidate_evidence": {"state": unfactored},
+                 "shared_recipes": shared})["state"] if shared is not None else unfactored)
     for key in ("execution_contract", "judgment_contract", "candidate_plans", "shared_plan_materials", "shared_recipes"):
         raw_state.pop(key, None)
     raw_state["candidate_evidence"] = deepcopy(decision["selection_support"]["candidate_evidence"])
@@ -284,13 +303,34 @@ def prepare_paid_duplicate_projection(checkpoint_raw, events_raw, manifest_raw,
     _validate_state(proposal["blocked_recovery"], proposal["session_id"])
     proposal["active_plan"], proposal["step_index"] = selected, 0
     proposal["status"], proposal["reason"] = "running", ""
+    original_state_hash = selection_state_sha256(raw_state, plan_rows,
+        session_id=checkpoint["session_id"], source_revision=authority["source_revision"],
+        target=checkpoint["target"], policy="jev", confidence_floor=authority["confidence_floor"],
+        current_tick=paid["tick"])
+    _require(original_state_hash == paid["selection_batch"]["state_sha256"] == prior["selection_batch"]["state_sha256"],
+             "Original pre-question state is not reconstructed")
+    target_state_hash = selection_state_sha256(raw_state, plan_rows,
+        session_id=checkpoint["session_id"], source_revision=target,
+        target=checkpoint["target"], policy="jev", confidence_floor=authority["confidence_floor"],
+        current_tick=paid["tick"])
+    budget_carry = dict(schema="jev.paid-selection-representation-budget-carry.v1",
+        session_id=checkpoint["session_id"], target=checkpoint["target"], policy="jev",
+        confidence_floor=authority["confidence_floor"], tick=paid["tick"],
+        original_state_sha256=original_state_hash, target_state_sha256=target_state_hash,
+        pre_question_state=deepcopy(raw_state), plans=deepcopy(plan_rows),
+        authority_base64=base64.b64encode(authority_raw).decode("ascii"),
+        signature_base64=base64.b64encode(signature).decode("ascii"), trust_pin=deepcopy(trust_pin))
+    scope_sha = representation_budget_scope_sha256(budget_carry, authority["source_revision"],
+        target, [prior, paid], corrected, selected)
+    _require(authority["budget_carry_sha256"] == scope_sha,
+             "ROOT signed exact paid budget carry scope differs")
     receipt = dict(schema="jev.paid-selection-representation-reconciliation-receipt.v1",
         authorization_id=authority["authorization_id"], authority_sha256=_hash(authority_raw),
         original_source_revision=deepcopy(authority["source_revision"]),
         target_source_revision=deepcopy(target), source_handoff_sha256=_hash(source_handoff_raw),
         original_checkpoint_sha256=_hash(checkpoint_raw), events_sha256=_hash(events_raw),
         original_attempts=deepcopy([prior, paid]), corrected_offered=deepcopy(corrected),
-        selected_plan=deepcopy(selected), same_semantic_candidates=True,
+        selected_plan=deepcopy(selected), same_semantic_candidates=True, budget_carry=budget_carry,
         original_prior_index=prior_index, original_paid_index=paid_index,
         original_paid_batch_count=sum(1 for row in state["attempts"] if "selection_batch" in row),
         active_attempt_count=len(state["attempts"]), archive=deepcopy(checkpoint["blocked_recovery_archive"]),
@@ -364,3 +404,126 @@ def projection_bytes_under_held_lock(lock_fd, lock_path, checkpoint_raw, events_
     original_lock()
     encode = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     return encode(proposal), encode(receipt)
+
+
+def validate_representation_budget_carry(memory, record, *, archive_index=None):
+    """Authenticate one exact paid representation correction, never source equivalence.
+
+    Original row sources, billed batches and legacy wire hashes remain unchanged.
+    The only aliases are two receipted rows and the exact rehashed state.
+    """
+    from .blocked_persistence import (_source, _validate_state, _candidate_semantic_sha256,
+        selection_state_sha256, find_attempt)
+    _require(type(record) is dict and record.get("kind") == "paid_duplicate_selection_reconciled"
+             and record.get("schema") == "jev.paid-selection-representation-reconciliation-receipt.v1",
+             "Invalid paid reconciliation receipt")
+    carry = record.get("budget_carry")
+    required = {"schema", "session_id", "target", "policy", "confidence_floor", "tick",
+        "original_state_sha256", "target_state_sha256", "pre_question_state", "plans",
+        "authority_base64", "signature_base64", "trust_pin"}
+    _require(type(carry) is dict and set(carry) == required
+             and carry["schema"] == "jev.paid-selection-representation-budget-carry.v1",
+             "Invalid scoped representation budget carry")
+    _require(carry["session_id"] == memory.session_id and carry["target"] == memory.target
+             and carry["policy"] == "jev" and type(carry["tick"]) is int and carry["tick"] >= 0,
+             "Paid carry campaign scope differs")
+    raw = base64.b64decode(carry["authority_base64"], validate=True)
+    sig = base64.b64decode(carry["signature_base64"], validate=True)
+    _require(0 < len(raw) <= 4*1024*1024 and 0 < len(sig) <= 32768,
+             "Paid carry signed authority bound differs")
+    _verify_signature(raw, sig, carry["trust_pin"])
+    authority = _json(raw)
+    _require(type(authority) is dict and set(authority) == _AUTHORITY_FIELDS
+             and authority["owner_absent"] is True and authority["native_pending_none"] is True,
+             "Incomplete ROOT paid carry authority")
+    source = _source(record["original_source_revision"])
+    target = _source(record["target_source_revision"])
+    _require(authority["schema"] == "jev.paid-selection-representation-reconciliation.v1"
+             and authority["authorization_id"] == record["authorization_id"]
+             and _hash(raw) == record["authority_sha256"]
+             and authority["source_revision"] == source and authority["target_source_revision"] == target
+             and authority["session_id"] == memory.session_id
+             and authority["checkpoint_sha256"] == record["original_checkpoint_sha256"]
+             and authority["events_sha256"] == record["events_sha256"]
+             and authority["source_handoff_sha256"] == record["source_handoff_sha256"]
+             and authority["confidence_floor"] == carry["confidence_floor"]
+             and authority["ordinary_gates_sha256"] == record["ordinary_gates_sha256"],
+             "Paid carry signed receipt crosslinks differ")
+    _require(record["same_semantic_candidates"] is True
+             and record["representation_correction_only"] is True
+             and record["paid_attempt_count_unchanged"] is True
+             and type(record["duplicate_paid_batches_count"]) is int
+             and record["duplicate_paid_batches_count"] == 2
+             and all(record[key] is False for key in ("model_called","native_action_called","automatic_retry_allowed")),
+             "Paid carry causal facts differ")
+    original = record["original_attempts"]
+    _require(authority["budget_carry_sha256"] == representation_budget_scope_sha256(
+        carry,source,target,original,record["corrected_offered"],record["selected_plan"]),
+        "Paid carry ROOT signed exact scope differs")
+    _require(type(original) is list and len(original) == 2
+             and original[0]["outcome"] == "rejected" and original[1]["outcome"] == "pending"
+             and original[0]["source_revision"] == original[1]["source_revision"] == source
+             and original[0]["selection_batch"]["offered"] == original[1]["selection_batch"]["offered"]
+             and original[0]["selection_batch"]["state_sha256"] == original[1]["selection_batch"]["state_sha256"] == carry["original_state_sha256"]
+             and original[1]["selection_batch"]["request_sha256"] == record["original_request_sha256"]
+             and original[1]["decision_input_sha256"] == record["original_input_sha256"]
+             and original[0]["decision_input_sha256"] != original[1]["decision_input_sha256"]
+             and carry["tick"] == original[1]["tick"], "Paid carry exact original rows differ")
+    for revision, expected in ((source, carry["original_state_sha256"]),
+                               (target, carry["target_state_sha256"])):
+        calculated = selection_state_sha256(carry["pre_question_state"], carry["plans"],
+            session_id=memory.session_id, source_revision=revision, target=memory.target,
+            policy=carry["policy"], confidence_floor=carry["confidence_floor"], current_tick=carry["tick"])
+        _require(calculated == expected, "Paid carry exact normalized state differs")
+    evidence = carry["pre_question_state"].get("candidate_evidence", {})
+    canonical = sorted(({"plan_id": plan["id"], "candidate_sha256":
+        _candidate_semantic_sha256(plan,evidence.get(plan["id"]),current_tick=carry["tick"])}
+        for plan in carry["plans"]), key=lambda row:(row["plan_id"],row["candidate_sha256"]))
+    _require(canonical == record["corrected_offered"]
+             and [row["plan_id"] for row in canonical] == [row["plan_id"] for row in original[1]["selection_batch"]["offered"]],
+             "Paid carry canonical seen candidates differ")
+    _require(type(authority["fresh_tick"]) is int and authority["fresh_tick"] >= carry["tick"],
+             "Paid carry fresh proof predates original state")
+    chosen_hash=next((row["candidate_sha256"] for row in canonical
+                     if row["plan_id"] == authority["selected_plan_id"]),None)
+    _require(chosen_hash is not None and _candidate_semantic_sha256(authority["fresh_candidate"],
+        authority["fresh_candidate_evidence"],current_tick=authority["fresh_tick"]) == chosen_hash,
+        "Paid carry signed fresh candidate differs")
+    selected = next((plan for plan in carry["plans"] if plan["id"] == authority["selected_plan_id"]),None)
+    _require(selected == record["selected_plan"], "Paid carry selected plan differs")
+    state = _validate_state(memory.blocked_recovery,memory.session_id)
+    rows=[]
+    for position, before in enumerate(original):
+        expected = deepcopy(before)
+        if position == 1:
+            expected["selection_batch"]["offered"] = deepcopy(canonical)
+            expected["outcome"] = "selected"
+        row = find_attempt(memory,source,before["decision_input_sha256"],archive_index=archive_index)
+        _require(row == expected, "Paid carry preserved billed row differs or is absent")
+        rows.append(deepcopy(row))
+    return {"target_source":target,"target_state_sha256":carry["target_state_sha256"],
+            "rows":rows,"seen_candidate_sha256":{row["candidate_sha256"] for row in canonical}}
+
+
+def scoped_representation_budget_rows(memory, aliases, *, archive_index=None):
+    """Return rows only for a receipted state under a source already queried."""
+    result=[];seen=set();matches=0
+    for record in memory.history:
+        if not isinstance(record,dict) or record.get("kind") != "paid_duplicate_selection_reconciled":continue
+        scope=validate_representation_budget_carry(memory,record,archive_index=archive_index)
+        if (scope["target_source"],scope["target_state_sha256"]) not in aliases:continue
+        matches+=1
+        _require(matches==1,"Ambiguous paid representation budget carry")
+        result.extend(scope["rows"]);seen.update(scope["seen_candidate_sha256"])
+    return result,seen
+
+
+def representation_budget_scope_sha256(carry, original_source, target_source,
+                                       original_attempts, corrected_offered, selected_plan):
+    """Pure unsigned scope proposal; its digest requires explicit ROOT signature."""
+    metadata={key:value for key,value in carry.items()
+              if key not in {"authority_base64","signature_base64","trust_pin"}}
+    body={"carry":metadata,"original_source_revision":original_source,
+          "target_source_revision":target_source,"original_attempts":original_attempts,
+          "corrected_offered":corrected_offered,"selected_plan":selected_plan}
+    return _hash(json.dumps(body,sort_keys=True,separators=(",",":"),allow_nan=False).encode())

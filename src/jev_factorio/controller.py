@@ -443,11 +443,16 @@ class HierarchicalLoop(AgentLoop):
         if legacy_row is not None and "selection_batch" not in legacy_row:
             return {"record": self._persistent_wait(snapshot, legacy_input)}
 
-        seen_candidates = {
-            offered["candidate_sha256"]
-            for row in rows
-            for offered in row["selection_batch"]["offered"]
-        }
+        from .paid_selection_reconciliation import scoped_representation_budget_rows
+        carried, carried_seen = scoped_representation_budget_rows(
+            self.memory,aliases,archive_index=self._blocked_recovery_archive_index)
+        carried_keys={(row["source_revision"]["commit"],row["source_revision"]["source_sha256"],
+                       row["decision_input_sha256"]) for row in carried}
+        seen_candidates = set(carried_seen) | {
+            offered["candidate_sha256"] for row in rows
+            if (row["source_revision"]["commit"],row["source_revision"]["source_sha256"],
+                row["decision_input_sha256"]) not in carried_keys
+            for offered in row["selection_batch"]["offered"]}
         for row in rows:
             if row.get("outcome") != "rejected" or row.get("reason") not in RECOVERABLE_REASONS:
                 return {"record": self._persistent_wait(
@@ -1070,8 +1075,21 @@ class HierarchicalLoop(AgentLoop):
         if not self.persist_recoverable_blocks:
             return self.memory.history[-8:]
         from .blocked_persistence import _SYSTEM_HISTORY_EVENTS
-        return [event for event in self.memory.history
-                if event.get("kind") not in _SYSTEM_HISTORY_EVENTS][-8:]
+        from .paid_selection_reconciliation import validate_representation_budget_carry
+        import subprocess
+        result=[]
+        for event in self.memory.history:
+            if event.get("kind") in _SYSTEM_HISTORY_EVENTS:continue
+            if event.get("kind") == "paid_duplicate_selection_reconciled":
+                try:
+                    validate_representation_budget_carry(self.memory,event,
+                        archive_index=self._blocked_recovery_archive_index)
+                except (ValueError,KeyError,TypeError,OSError,subprocess.SubprocessError):
+                    pass  # Invalid administrative claims remain ordinary history.
+                else:
+                    continue
+            result.append(event)
+        return result[-8:]
 
     def _model_facts(self, snapshot: GameSnapshot) -> dict:
         facts = snapshot.for_jev()
