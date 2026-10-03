@@ -1427,7 +1427,7 @@ def _receiver_capacity_start_evidence(snapshot, catalog, role, item, quantity, s
 
 
 def _recipe_input_transfer_start_evidence(snapshot, catalog, plan, *, path_root=None,
-                                          require_receiver_capacity=False):
+                                          require_receiver_capacity=False, include_dependency_chain=False):
     """Bind a paid recipe input transfer to current native facts, not future output."""
     if len(plan.steps) != 1:
         return None
@@ -1509,6 +1509,16 @@ def _recipe_input_transfer_start_evidence(snapshot, catalog, plan, *, path_root=
         'basis': 'current_planner_recipe_input_and_owned_native_machine',
         'native_transfer_and_later_output_require_verification': True,
     }
+    if include_dependency_chain and path_root is None:
+        try:
+            from .bootstrap_chain import dependency_chain
+            chain = dependency_chain(snapshot, catalog, local, path)
+            if chain['raw_input_inventory_target'] == required:
+                evidence['recipe_dependency_chain'] = chain
+                evidence['session_id'] = snapshot.session_id
+                evidence['native_catalog_version'] = catalog.version
+        except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
+            pass  # Existing start evidence retains its original scope.
     if require_receiver_capacity:
         receiver_capacity = _receiver_capacity_start_evidence(
             snapshot, catalog, role, item, required, machine['unit_number'])
@@ -2906,7 +2916,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
             if isinstance(power_path, list) else None
         if power_path_root is None:
             recipe_input_transfer_start = _recipe_input_transfer_start_evidence(
-                snapshot, catalog, plan)
+                snapshot, catalog, plan, include_dependency_chain=True)
             output_pickup_start = _output_pickup_start_evidence(snapshot, catalog, plan)
         else:
             recipe_input_transfer_start = _recipe_input_transfer_start_evidence(
