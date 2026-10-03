@@ -29,6 +29,7 @@ def qualified():
     modules['coal_manual_journal_v1'] = False
     modules['coal_manual_cycle_v2'] = False
     modules['connector_observer_bridge_v1'] = False
+    modules['bootstrap_output_v1'] = False
     return {'schema': 1, 'qualified': True, 'session_id': 'synthetic-session',
             'actor_unit': 17, 'modules': modules, 'solid_intents': [],
             'coal_targets': [], 'coal_admission_evidence': False,
@@ -183,6 +184,7 @@ def test_connector_ledger_without_observer_bridge_cannot_reattach():
     row['modules']['coal_manual_journal_v1'] = False
     row['modules']['coal_manual_cycle_v2'] = False
     row['modules']['connector_observer_bridge_v1'] = False
+    row['modules']['bootstrap_output_v1'] = False
     row['connector_observer_bridge_qualified'] = False
     row['native_installation'] = {
         'schema': NATIVE_SCHEMA, 'session_id': row['session_id'],

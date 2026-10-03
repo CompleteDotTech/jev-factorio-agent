@@ -325,6 +325,8 @@ class FleBackend:
         return snapshot
 
     def act(self, action: str) -> str:
+        if action != 'idle' and getattr(self, '_bootstrap_output_pending', False):
+            raise ValueError('Native bootstrap journal requires reconciliation before actor mutation')
         from fle.env import Direction, Prototype
 
         tools = self._tools
@@ -349,14 +351,24 @@ class FleBackend:
                 amount = self._fair.harvest(resource, self._resources[resource], quantity=5)
                 return f"Harvested {amount} {resource}"
             if action == "place_burner_drill":
+                attachment = getattr(self, '_native_attachment', None)
+                bootstrap_owned = bool(attachment and attachment['modules'].get('bootstrap_output_v1'))
+                if bootstrap_owned:
+                    from .native_attachment import require_asset
+                    require_asset(attachment, 'bootstrap_output_v1')
                 self._drill = self._fair.place_entity(
                     Prototype.BurnerMiningDrill,
                     direction=Direction.UP,
                     position=self._resources["iron-ore"],
                     exact=False,
+                    **({'bootstrap_owned': True} if bootstrap_owned else {}),
                 )
-                self._fair.place_entity(Prototype.WoodenChest, position=self._drill.drop_position,
-                                        direction=Direction.UP, exact=True)
+                chest = self._fair.place_entity(Prototype.WoodenChest, position=self._drill.drop_position,
+                                        direction=Direction.UP, exact=True,
+                                        **({'bootstrap_owned': True} if bootstrap_owned else {}))
+                if bootstrap_owned:
+                    self._fair.command('storage.bootstrap_output_v1.bind_paid('
+                        + str(self._drill.unit_number) + ',' + str(chest.unit_number) + ')')
                 return "Placed burner drill on iron with an output chest"
             if action == "fuel_drill":
                 if self._drill is None:

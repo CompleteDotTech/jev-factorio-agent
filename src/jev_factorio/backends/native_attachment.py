@@ -16,6 +16,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from ..iteration_timing import decode_native
+from ..bootstrap_output import MODULE as BOOTSTRAP_MODULE, PROFILE as BOOTSTRAP_PROFILE
 
 
 # These bytes were installed from main e759462 in the isolated native fixture.
@@ -38,7 +39,7 @@ PINNED_ASSETS = {
     'successors': '7cd7999d3a4fee0faeb157c81487091b05366d919e17f34ae51a3061274d90ae',
 }
 OPTIONAL_ASSETS = {'coal_manual_journal_v1', 'coal_manual_cycle_v2',
-                   'connector_observer_bridge_v1'}
+                   'connector_observer_bridge_v1', BOOTSTRAP_MODULE}
 
 LEGACY_OBSERVATION_PROFILE = 'e759-observation-v2-bound-bootstrap-v2'
 LEGACY_OBSERVATION_SHA256 = 'f51ea4aeb66b5c11366dbfe37cb755f2187152fa634928ac8a911f670d746780'
@@ -293,6 +294,7 @@ local p=rt and rt.production_sites
 local x=rt and rt.successors
 local mj=rt and rt.coal_manual_journal_v1
 local cj=rt and rt.coal_manual_cycle_v2
+local bo=rt and rt.bootstrap_output_v1
 local n=rt and rt.native_installation
 local nc=n and n.callbacks
 local a=rt and rt.agent_characters and rt.agent_characters[1]
@@ -343,6 +345,12 @@ if cj then ok=ok and cj.protocol==2 and mj and cj.session_id==rt.jev_session_id
     and good(cj.tick_handler) and good(cj.combined_tick_handler)
     and good(cj.begin) and good(cj.begin_delivery)
     and good(cj.finish_delivery) and good(cj.finish) end
+if bo then ok=ok and bo.protocol==1 and bo.phase=="ready" and bo.session_id==rt.jev_session_id
+    and bo.actor_unit==a.unit_number and bo.surface_index==a.surface.index
+    and bo.force_index==a.force.index and good(bo.observe) and good(bo.extract)
+    and good(bo.place) and good(bo.bind_paid) and good(bo.reconcile_pending)
+    and good(bo.complete_install) and f.bootstrap_place==bo.place
+    and bo.original_place==f.place and bo.original_transfer==c.transfer end
 if c and c.connector_ledger then ok=ok and c.connector_ledger.protocol==1
     and type(c.connector_ledger.routes)=="table" and good(c.connector_begin)
     and good(c.connector_finish) and good(c.connector_page)
@@ -359,7 +367,13 @@ if n then ok=ok and type(n.assets)=="table" and type(nc)=="table"
     and nc.connector_page==(c and c.connector_page)
     and nc.connector_observe==(c and c.observe_connector_ownership)
     and nc.journal_tick==(mj and mj.tick_handler)
-    and nc.cycle_tick==(cj and cj.combined_tick_handler) end
+    and nc.cycle_tick==(cj and cj.combined_tick_handler)
+    and nc.bootstrap_observe==(bo and bo.observe)
+    and nc.bootstrap_extract==(bo and bo.extract)
+    and nc.bootstrap_place==(bo and bo.place)
+    and nc.bootstrap_bind_paid==(bo and bo.bind_paid)
+    and nc.bootstrap_reconcile_pending==(bo and bo.reconcile_pending)
+    and nc.bootstrap_complete_install==(bo and bo.complete_install) end
 if c and s then ok=ok and c.observe==s.observer and c.transfer==s.transfer
 elseif c and i then ok=ok and c.observe==i.observer and c.transfer==i.transfer
 elseif c and b then ok=ok and c.observe==b.observer and c.transfer==b.transfer
@@ -386,7 +400,7 @@ local modules={fair_actions=true,factory=c~=nil,launch_readiness=l~=nil,
     mining_outposts=o~=nil,solid_routes=s~=nil,coal_supply=q~=nil,
     successors=x~=nil,connector_ownership=c and c.connector_ledger~=nil or false,
     coal_manual_journal_v1=mj~=nil,coal_manual_cycle_v2=cj~=nil,
-    connector_observer_bridge_v1=bridge~=nil}
+    connector_observer_bridge_v1=bridge~=nil,bootstrap_output_v1=bo~=nil}
 rcon.print(helpers.table_to_json({schema=1,qualified=ok==true,
     session_id=rt and rt.jev_session_id or "",actor_unit=a and a.unit_number or 0,
     modules=modules,solid_intents=s and s.intents or {},coal_targets=q and q.targets or {},
@@ -414,7 +428,13 @@ CALLBACKS_EXPR = (
     'journal_tick=jev_fle_runtime.coal_manual_journal_v1 '
     'and jev_fle_runtime.coal_manual_journal_v1.tick_handler or nil, '
     'cycle_tick=jev_fle_runtime.coal_manual_cycle_v2 '
-    'and jev_fle_runtime.coal_manual_cycle_v2.combined_tick_handler or nil}'
+    'and jev_fle_runtime.coal_manual_cycle_v2.combined_tick_handler or nil, '
+    'bootstrap_observe=jev_fle_runtime.bootstrap_output_v1 and jev_fle_runtime.bootstrap_output_v1.observe or nil, '
+    'bootstrap_extract=jev_fle_runtime.bootstrap_output_v1 and jev_fle_runtime.bootstrap_output_v1.extract or nil, '
+    'bootstrap_place=jev_fle_runtime.bootstrap_output_v1 and jev_fle_runtime.bootstrap_output_v1.place or nil, '
+    'bootstrap_bind_paid=jev_fle_runtime.bootstrap_output_v1 and jev_fle_runtime.bootstrap_output_v1.bind_paid or nil, '
+    'bootstrap_reconcile_pending=jev_fle_runtime.bootstrap_output_v1 and jev_fle_runtime.bootstrap_output_v1.reconcile_pending or nil, '
+    'bootstrap_complete_install=jev_fle_runtime.bootstrap_output_v1 and jev_fle_runtime.bootstrap_output_v1.complete_install or nil}'
 )
 
 
@@ -573,8 +593,9 @@ def readback(client, *, receipt_path=None, connector_witness_path=None,
                                      else PINNED_ASSETS.get(name))
                            for name, value in native['assets'].items())):
                 raise RuntimeError('Legacy v5 observer requires the one-use repair migration')
-        elif profile == CLOSED_WORLD_PROFILE:
+        elif profile in {CLOSED_WORLD_PROFILE, BOOTSTRAP_PROFILE}:
             if (result['modules']['connector_ownership'] is not True
+                    or result['modules'][BOOTSTRAP_MODULE] != (profile == BOOTSTRAP_PROFILE)
                     or result['modules']['successors']
                     or result['modules']['coal_manual_journal_v1'] is not True
                     or result['modules']['coal_manual_cycle_v2'] is not True
@@ -591,6 +612,8 @@ def readback(client, *, receipt_path=None, connector_witness_path=None,
                                      else manual_journal_sha256() if name == 'coal_manual_journal_v1'
                                      else cycle_journal_sha256() if name == 'coal_manual_cycle_v2'
                                      else connector_observer_bridge_sha256() if name == 'connector_observer_bridge_v1'
+                                     else hashlib.sha256(_asset_source(BOOTSTRAP_MODULE).read_bytes()).hexdigest()
+                                         if name == BOOTSTRAP_MODULE and profile == BOOTSTRAP_PROFILE
                                      else PINNED_ASSETS.get(name))
                            for name, value in native['assets'].items())):
                 raise RuntimeError('Closed-world migration profile requires reconciliation')
@@ -607,7 +630,7 @@ def readback(client, *, receipt_path=None, connector_witness_path=None,
             if profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE,
                            WATER_ORIGIN_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE,
                            LEGACY_MANUAL_CYCLE_PROFILE,
-                           CLOSED_WORLD_PROFILE} \
+                           CLOSED_WORLD_PROFILE, BOOTSTRAP_PROFILE} \
                     and name not in {'observation_v2', 'connector_ownership',
                                      'coal_manual_journal_v1', 'coal_manual_cycle_v2',
                                      'connector_observer_bridge_v1'}:
@@ -666,7 +689,7 @@ def require_asset(attachment, name):
                 and profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE,
                                 WATER_ORIGIN_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE,
                                 LEGACY_MANUAL_CYCLE_PROFILE,
-                                CLOSED_WORLD_PROFILE}
+                                 CLOSED_WORLD_PROFILE, BOOTSTRAP_PROFILE}
                 and name in PINNED_ASSETS
                 and name not in {'observation_v2', 'connector_ownership',
                                  'coal_manual_journal_v1', 'coal_manual_cycle_v2',
