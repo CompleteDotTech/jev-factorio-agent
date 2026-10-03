@@ -259,6 +259,47 @@ def selection_frontier_sha256(state: dict, plans: list[dict], *, session_id: str
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _selection_semantic_evidence(context: dict) -> dict:
+    """Resolve lossless wire recipe references before candidate identity hashing.
+
+    The exact prepared request keeps its original representation and digest.
+    Candidate identity instead matches the compiler's complete evidence records.
+    """
+    evidence = context.get("candidate_evidence", {})
+    if not isinstance(evidence, dict):
+        raise ValueError("Invalid prepared candidate evidence")
+    if "shared_recipes" not in context:
+        return evidence
+    shared = context["shared_recipes"]
+    if not isinstance(shared, dict) or not shared:
+        raise ValueError("Invalid shared recipe records")
+    for key, recipe in shared.items():
+        if (type(key) is not str or not isinstance(recipe, dict)
+                or recipe.get("name") != key
+                or not {"name", "category", "ingredients", "products", "enabled"} <= set(recipe)):
+            raise ValueError("Invalid complete shared recipe")
+    def restore(value):
+        if isinstance(value, dict):
+            if "shared_recipe_key" in value:
+                key = value["shared_recipe_key"]
+                if set(value) != {"shared_recipe_key"} or type(key) is not str or key not in shared:
+                    raise ValueError("Invalid shared recipe reference")
+                recipe = shared[key]
+                # Factoring never creates nested references inside complete recipes.
+                def reserved(record):
+                    if isinstance(record, dict):
+                        return "shared_recipe_key" in record or any(reserved(v) for v in record.values())
+                    return isinstance(record, list) and any(reserved(v) for v in record)
+                if reserved(recipe):
+                    raise ValueError("Nested shared recipe reference")
+                return deepcopy(recipe)
+            return {key: restore(child) for key, child in value.items()}
+        if isinstance(value, list):
+            return [restore(child) for child in value]
+        return deepcopy(value)
+    return restore(evidence)
+
+
 def selection_batch_metadata(context: dict, questions: dict, offered: list,
                              *, state_sha256: str, frontier_sha256: str,
                              current_tick: int) -> dict:
@@ -279,9 +320,7 @@ def selection_batch_metadata(context: dict, questions: dict, offered: list,
     if len(raw_ids) != len(set(raw_ids)):
         raise ValueError("Duplicate offered persistent selection candidate IDs")
     mapping = _candidate_id_map(raw_ids)
-    evidence = context.get("candidate_evidence", {})
-    if not isinstance(evidence, dict):
-        raise ValueError("Invalid prepared candidate evidence")
+    evidence = _selection_semantic_evidence(context)
     request_sha256 = _selection_request_sha256(
         context, questions, plan_rows, current_tick=current_tick)
     offered_rows = []
@@ -727,6 +766,14 @@ def record_attempt(memory, source_revision: dict, input_sha256: str,
                "reason": reason, "tick": tick, "outcome": "pending"}
     if selection_batch is not None:
         attempt["selection_batch"] = selection_batch
+    # Validate the proposed WAL before changing memory or letting a caller
+    # durably prepare a provider request. A distinct request fingerprint does
+    # not authorize offering the same candidate again for this source/state.
+    proposed = deepcopy(state)
+    proposed["attempts"].append(attempt)
+    proposed["last_input_sha256"] = input_sha256
+    proposed["wait_level"] = 1
+    _validate_state(proposed, memory.session_id)
     state["attempts"].append(attempt)
     state["last_input_sha256"] = input_sha256
     state["wait_level"] = 1
