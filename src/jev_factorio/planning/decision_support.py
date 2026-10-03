@@ -1729,6 +1729,7 @@ def _bootstrap_output_pickup_start_evidence(snapshot, catalog, plan):
             or type(provenance.get('source_unit')) is not int
             or provenance['source_unit'] != owned['chest_unit']
             or provenance.get('item') != 'iron-ore'
+            or not isinstance(provenance.get('current_raw_demand'), dict)
             or type(provenance.get('observed_output')) is not int
             or provenance['observed_output'] != owned['output'].get('iron-ore', 0)
             or not _current_item_dependency_path(snapshot, catalog,
@@ -1753,6 +1754,7 @@ def _bootstrap_output_pickup_start_evidence(snapshot, catalog, plan):
         'ownership_sha256': _bootstrap_output_ownership_digest(owned),
         'planner_item_path': list(provenance['planner_item_path']),
         'inventory_now': snapshot.inventory.get('iron-ore', 0),
+        'current_raw_demand': deepcopy(provenance['current_raw_demand']),
         'planned_pickup_quantity': p['quantity'], 'planned_native_receipt_id': p['receipt'],
         'basis': 'recompiled_current_local_demand_and_owned_bootstrap_output',
         'native_pickup_and_inventory_delta_require_verification': True,

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+from copy import deepcopy
 from dataclasses import asdict, replace
 
 from ..factory_contract import connected
@@ -197,12 +198,27 @@ class FactoryPlanner:
                     }})
             from ..bootstrap_output import ROLE, binding
             if role == ROLE and binding(self.snapshot) is not None:
+                direct_recipe = self.catalog.recipe_for(item_path[-2]) if len(item_path) > 1 else None
                 pickup = replace(pickup, materials={**(pickup.materials or {}),
                     'bootstrap_output_pickup': {
                         'observed_tick': self.snapshot.tick,
                         'planner_item_path': item_path,
                         'source_role': role, 'source_unit': machine['unit_number'],
                         'item': item, 'observed_output': machine.get('output', {}).get(item),
+                        'current_raw_demand': {
+                            'schema': 1, 'item': item,
+                            'scope': 'next_recursive_recipe_input_batch',
+                            'direct_recipe': deepcopy(direct_recipe),
+                            'direct_product': item_path[-2] if len(item_path) > 1 else None,
+                            'observed_tick': self.snapshot.tick,
+                            'session_id': self.snapshot.session_id,
+                            'required_carried_quantity': math.ceil(amount),
+                            'carried_inventory': have, 'carried_deficit': missing,
+                            'owned_source_stock': machine.get('output', {}).get(item),
+                            'inventory_headroom': self.snapshot.factory['bootstrap_output']['capacity']['count'],
+                            'planned_pickup_quantity': step.parameters['quantity'],
+                            'accounting': 'carried_deficit_before_owned_stock_allocation',
+                        },
                     }})
             return pickup
         if item in RAW_ITEMS:
