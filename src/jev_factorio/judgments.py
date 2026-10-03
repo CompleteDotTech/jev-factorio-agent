@@ -66,6 +66,45 @@ def _qualified_supplied_research(plan, facts, row):
 
 
 
+def _qualified_recipe_transfer_chain(plan, facts, row):
+    """Recompile current input handling and downstream arithmetic from independent facts."""
+    try:
+        from types import SimpleNamespace
+        from .planning.catalog import Catalog
+        from .planning.decision_support import _recipe_input_transfer_start_evidence
+        from .planning.bootstrap_chain import validate_dependency_chain
+        proof = row['recipe_input_transfer_start_evidence']
+        factory = facts['factory']; observed = factory['recipe_dependency_catalog']
+        local = plan.materials['local_objective']; annotation = plan.materials['recipe_input_transfer']
+        if (facts['world_kind'] != 'fle' or type(facts['tick']) is not int
+                or type(factory.get('tick')) is not int or factory['tick'] != facts['tick']
+                or proof['session_id'] != facts['session_id']
+                or proof['native_catalog_version'] != facts['game_version']
+                or row['local_target'] != local or local.get('ultimate_goal') != plan.goal
+                or not isinstance(observed.get('machines'), dict)):
+            return False
+        machine = factory['entities'][proof['owned_source_role']]
+        prototype = observed['machines'][machine['name']]
+        categories = prototype.get('categories')
+        if (not isinstance(prototype, dict) or type(prototype.get('burner')) is not bool
+                or type(prototype.get('electric')) is not bool
+                or not isinstance(categories, dict)
+                or any(type(name) is not str or type(value) is not bool
+                       for name, value in categories.items())
+                or categories.get(observed['recipes'][proof['direct_native_recipe']]['category']) is not True):
+            return False
+        snapshot = SimpleNamespace(**{key: facts[key] for key in
+            ('tick','session_id','world_kind','inventory','factory')}, researched=facts.get('researched', []))
+        catalog = Catalog(observed['version'], observed['recipes'], {}, observed['machines'],
+                          observed['hand_categories'], observed['stack_sizes'])
+        expected = _recipe_input_transfer_start_evidence(snapshot, catalog, plan, include_dependency_chain=True)
+        return (expected == proof and validate_dependency_chain(facts, local,
+            annotation['planner_item_path'], proof['recipe_dependency_chain'],
+            plan.steps[0].parameters['quantity']))
+    except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
+        return False
+
+
 def _qualified_paid_service_input(plan, facts, row):
     """Independently bind the first paid insert, without certifying later service."""
     import hashlib
@@ -2493,6 +2532,16 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                         'mismatched or contrary CURRENT ownership, stock, headroom or recipe demand means unsupported. '
                         'No historical placement proof, completed pickup/output, route flow or blocker removal is proved; '
                         'execution and success require native verification.')
+            if _qualified_recipe_transfer_chain(plan, facts, row):
+                questions[plan.id + '/useful_progress']['instructions'] = (
+                    f'For {pointer}, read recipe_input_transfer_start_evidence and its '
+                    'recipe_dependency_chain: enabled inputs/yields, carried products, bounded batches '
+                    'and current machine input/fuel prove only the selected branch toward the evidence-row '
+                    'local_target. Would this paid input advance that branch IF its native receipt and '
+                    'fresh postcondition verify? Future receipt/output absence alone is not contrary '
+                    'start evidence. Missing, stale, mismatched or contrary current ownership, inputs, '
+                    'fuel or recipe dependencies means unsupported. Later output/full completion remain '
+                    'unverified; this judgment waives no native checks.')
             questions[plan.id + "/benefit"] = {
                 "type": "score",
                 "instructions": (

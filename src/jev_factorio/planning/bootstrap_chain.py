@@ -114,12 +114,16 @@ def validate_dependency_chain(facts, local, path, witness, raw_required):
 
 def catalog_projection(snapshot, catalog, plans):
     """Independent current Catalog subset; never copied from candidate witnesses."""
-    recipes = {}; hand = {}; stacks = {}
+    recipes = {}; hand = {}; stacks = {}; machines = {}
     for plan in plans:
-        marker = (plan.materials or {}).get('bootstrap_output_pickup')
+        marker = (plan.materials or {}).get('bootstrap_output_pickup') or (plan.materials or {}).get('recipe_input_transfer')
         if not isinstance(marker, dict):continue
         path = marker.get('planner_item_path')
         if not isinstance(path, list):continue
+        if 'recipe_input_transfer' in (plan.materials or {}):
+            machine = snapshot.factory.get('entities', {}).get(marker.get('source_role'), {})
+            name = machine.get('name')
+            if name in catalog.machines:machines[name] = deepcopy(catalog.machines[name])
         for product in path[:-1]:
             recipe = catalog.recipe_for(product)
             recipes[recipe['name']] = deepcopy(recipe)
@@ -128,4 +132,4 @@ def catalog_projection(snapshot, catalog, plans):
                 for entry in recipe['ingredients']:
                     stacks[entry['name']] = catalog.stack_sizes.get(entry['name'], 200)
     return {'schema': 1, 'tick': snapshot.tick, 'session_id': snapshot.session_id,
-        'version': catalog.version, 'recipes': recipes, 'hand_categories': hand, 'stack_sizes': stacks}
+        'version': catalog.version, 'recipes': recipes, 'hand_categories': hand, 'stack_sizes': stacks, **({'machines': machines} if machines else {})}
