@@ -96,6 +96,8 @@ def test_archived_exact_billed_rows_keep_carry(monkeypatch):
 @pytest.mark.skipif(__import__('os').name!='posix',reason='Native OpenSSH/memfd POSIX trust qualification')
 def test_real_crypto_alternate_trust_key_is_not_checkpoint_authority(tmp_path,monkeypatch):
     import os,stat,subprocess
+    if os.geteuid() not in (0,1000):
+        pytest.skip('Native trust fixture requires UID1000 ownership or root chown authority')
     if not Path('/usr/bin/ssh-keygen').exists():pytest.skip('Native OpenSSH unavailable')
     folders={}
     for label in ('enrolled','foreign'):

@@ -70,3 +70,8 @@ candidates. Changing inventory, state or source does not widen this authority.
 The controller excludes an administrative reconciliation record from model
 history only after validating the complete signed carry. Invalid records remain
 in model history and stop persistent selection before another provider request.
+
+The native OpenSSH trust test requires UID1000 or root permission to create the
+UID1000 trust fixture. It skips on other users, including hosted runners that
+cannot assign that ownership. Production trust ownership remains mandatory;
+those skips do not qualify native crypto verification.
