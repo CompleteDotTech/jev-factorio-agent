@@ -406,14 +406,9 @@ def projection_bytes_under_held_lock(lock_fd, lock_path, checkpoint_raw, events_
     return encode(proposal), encode(receipt)
 
 
-def validate_representation_budget_carry(memory, record, *, archive_index=None):
-    """Authenticate one exact paid representation correction, never source equivalence.
-
-    Original row sources, billed batches and legacy wire hashes remain unchanged.
-    The only aliases are two receipted rows and the exact rehashed state.
-    """
-    from .blocked_persistence import (_source, _validate_state, _candidate_semantic_sha256,
-        selection_state_sha256, find_attempt)
+def authenticate_representation_history_receipt(record, session_id, campaign_target):
+    """Authenticate complete signed scope; row/archive authority is checked by loaders."""
+    from .blocked_persistence import (_source, _candidate_semantic_sha256, selection_state_sha256)
     _require(type(record) is dict and record.get("kind") == "paid_duplicate_selection_reconciled"
              and record.get("schema") == "jev.paid-selection-representation-reconciliation-receipt.v1",
              "Invalid paid reconciliation receipt")
@@ -424,7 +419,7 @@ def validate_representation_budget_carry(memory, record, *, archive_index=None):
     _require(type(carry) is dict and set(carry) == required
              and carry["schema"] == "jev.paid-selection-representation-budget-carry.v1",
              "Invalid scoped representation budget carry")
-    _require(carry["session_id"] == memory.session_id and carry["target"] == memory.target
+    _require(carry["session_id"] == session_id and carry["target"] == campaign_target
              and carry["policy"] == "jev" and type(carry["tick"]) is int and carry["tick"] >= 0,
              "Paid carry campaign scope differs")
     raw = base64.b64decode(carry["authority_base64"], validate=True)
@@ -442,7 +437,7 @@ def validate_representation_budget_carry(memory, record, *, archive_index=None):
              and authority["authorization_id"] == record["authorization_id"]
              and _hash(raw) == record["authority_sha256"]
              and authority["source_revision"] == source and authority["target_source_revision"] == target
-             and authority["session_id"] == memory.session_id
+             and authority["session_id"] == session_id
              and authority["checkpoint_sha256"] == record["original_checkpoint_sha256"]
              and authority["events_sha256"] == record["events_sha256"]
              and authority["source_handoff_sha256"] == record["source_handoff_sha256"]
@@ -472,7 +467,7 @@ def validate_representation_budget_carry(memory, record, *, archive_index=None):
     for revision, expected in ((source, carry["original_state_sha256"]),
                                (target, carry["target_state_sha256"])):
         calculated = selection_state_sha256(carry["pre_question_state"], carry["plans"],
-            session_id=memory.session_id, source_revision=revision, target=memory.target,
+            session_id=session_id, source_revision=revision, target=campaign_target,
             policy=carry["policy"], confidence_floor=carry["confidence_floor"], current_tick=carry["tick"])
         _require(calculated == expected, "Paid carry exact normalized state differs")
     evidence = carry["pre_question_state"].get("candidate_evidence", {})
@@ -491,6 +486,14 @@ def validate_representation_budget_carry(memory, record, *, archive_index=None):
         "Paid carry signed fresh candidate differs")
     selected = next((plan for plan in carry["plans"] if plan["id"] == authority["selected_plan_id"]),None)
     _require(selected == record["selected_plan"], "Paid carry selected plan differs")
+    return original, canonical, source, target, carry
+
+
+def validate_representation_budget_carry(memory, record, *, archive_index=None):
+    """Authenticate signed scope and exact current/archive-backed billed rows."""
+    from .blocked_persistence import _validate_state, find_attempt
+    original, canonical, source, target, carry = authenticate_representation_history_receipt(
+        record, memory.session_id, memory.target)
     state = _validate_state(memory.blocked_recovery,memory.session_id)
     rows=[]
     for position, before in enumerate(original):

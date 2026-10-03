@@ -191,6 +191,36 @@ def read_authorization(path: Path, expected_sha256: str) -> dict:
     return value
 
 
+def validate_selected_paid_handoff(memory) -> None:
+    """Permit only an authenticated, undispatched paid plan at its first step.
+
+    This is source-handoff eligibility, never new selection or native authority.
+    The full existing decision/budget contracts and signed scope still apply.
+    """
+    from .paid_selection_reconciliation import validate_representation_budget_carry
+    if (memory.status != "running" or type(memory.step_index) is not int
+            or memory.step_index != 0 or not isinstance(memory.active_plan, dict)
+            or any(getattr(memory, key, None) is not None for key in (
+                "pending", "attempt", "native_pending", "native_attempt",
+                "background_job", "background_attempt", "transfer_recovery"))
+            or memory.reservations):
+        raise ValueError("Compatible paid handoff requires an undispatched quiescent selected plan")
+    records = [row for row in memory.history if isinstance(row, dict)
+               and row.get("kind") == "paid_duplicate_selection_reconciled"]
+    if len(records) != 1 or memory.active_plan != records[0].get("selected_plan"):
+        raise ValueError("Compatible paid handoff differs from its unique signed selected plan")
+    index = getattr(memory, "_blocked_recovery_archive_index", None)
+    if memory.blocked_recovery_archive is not None and index is None:
+        raise ValueError("Compatible paid handoff requires authenticated archive coverage")
+    if index is not None:
+        index.validate_files()
+    verified = validate_representation_budget_carry(memory, records[0], archive_index=index)
+    if len(verified["rows"]) != 2 or len(verified["seen_candidate_sha256"]) != 2:
+        raise ValueError("Compatible paid handoff lost its billed rows or canonical seen candidates")
+    if index is not None:
+        index.validate_files()
+
+
 def validate_authorization(authorization: dict, raw: bytes, memory, current_source: dict,
                            owner_invocation: dict, *, checkout: Path | None = None) -> dict:
     """Validate exact source/contract/checkpoint without native observation."""
@@ -209,7 +239,10 @@ def validate_authorization(authorization: dict, raw: bytes, memory, current_sour
             or authorization["owner_invocation"] != owner_invocation
             or authorization["current_source"] != _source(current_source)):
         raise ValueError("Compatible recovery differs from authorized checkpoint/owner/source scope")
-    validate_blocked_memory(memory, 4)
+    if memory.status == "running":
+        validate_selected_paid_handoff(memory)
+    else:
+        validate_blocked_memory(memory, 4)
     if memory.blocked_recovery is None:
         raise ValueError("Compatible recovery requires known persistent budget coverage")
     recovery = _validate_state(memory.blocked_recovery, memory.session_id)

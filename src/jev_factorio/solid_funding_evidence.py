@@ -49,10 +49,9 @@ def _budget(values: object, key: str) -> int | None:
 
 
 def _funding_events(history: object) -> list[dict]:
-    if (not isinstance(history, list) or len(history) > 64
-            or any(not isinstance(event, dict) for event in history)):
-        raise ValueError('Invalid bounded funding history')
-    return [event for event in history if isinstance(event, dict)
+    from .memory import ordinary_history
+    ordinary = ordinary_history(history)
+    return [event for event in ordinary if isinstance(event, dict)
             and isinstance(event.get('kind'), str)
             and event['kind'].startswith('solid_kit_')]
 
