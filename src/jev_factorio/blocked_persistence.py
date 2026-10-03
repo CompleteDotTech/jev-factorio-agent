@@ -559,10 +559,16 @@ def validate_memory_state(memory, current_source: dict, *, allow_source_change: 
 
 
 def validate_checkpoint_metadata(data: object, current_source: dict, *,
-                                 allow_source_change: bool = False) -> None:
+                                 allow_source_change: bool = False,
+                                 owner_context: dict | None = None) -> None:
     """Pre-backend CLI guard for a persistent recovery checkpoint."""
     if not isinstance(data, dict):
         raise ValueError("Persistent blocked-recovery checkpoint is malformed")
+    from types import SimpleNamespace
+    from .compatible_recovery import validate_current_owner
+    validate_current_owner(SimpleNamespace(
+        session_id=data.get("session_id"), target=data.get("target"),
+        compatible_source_recoveries=data.get("compatible_source_recoveries", [])), owner_context)
     status, reason = data.get("status"), data.get("reason")
     state = data.get("blocked_recovery")
     session_id = data.get("session_id")
@@ -645,26 +651,48 @@ def find_attempt(memory, source_revision: dict, input_sha256: str, *, archive_in
 
 
 def selection_attempts_for_state(memory, source_revision: dict, state_sha256: str,
-                                 *, archive_index=None) -> list[dict]:
+                                 *, archive_index=None, compatible_state_hashes=None) -> list[dict]:
     """Return verified prepared-batch WAL rows for one source-bound game state."""
     source = _source(source_revision)
     if type(state_sha256) is not str or not _SHA256.fullmatch(state_sha256):
         raise ValueError("Invalid persistent selection state fingerprint")
     if memory.blocked_recovery_archive is not None and archive_index is None:
         raise ValueError("Blocked-recovery archive index is required for selection history")
+    from .compatible_recovery import approved_sources
+    approved = approved_sources(memory, source)
+    aliases = [(source, state_sha256)]
+    if compatible_state_hashes is not None:
+        if (not isinstance(compatible_state_hashes, list)
+                or any(not isinstance(row, tuple) or len(row) != 2
+                       for row in compatible_state_hashes)
+                or [row[0] for row in compatible_state_hashes] != approved
+                or any(type(row[1]) is not str or not _SHA256.fullmatch(row[1])
+                       for row in compatible_state_hashes)
+                or compatible_state_hashes[-1] != (source, state_sha256)):
+            raise ValueError("Persistent selection aliases are not authorized compatible lineage")
+        aliases = compatible_state_hashes
+    elif len(approved) > 1:
+        raise ValueError("Compatible-source selection requires complete source-bound state aliases")
     rows = {}
     if archive_index is not None:
-        for row in archive_index.selection_attempts(
-                source, state_sha256, memory=memory):
-            rows[row["decision_input_sha256"]] = deepcopy(row)
+        for alias_source, alias_hash in aliases:
+            for row in archive_index.selection_attempts(
+                    alias_source, alias_hash, memory=memory):
+                key = (row["source_revision"]["commit"], row["source_revision"]["source_sha256"],
+                       row["decision_input_sha256"])
+                rows[key] = deepcopy(row)
     if memory.blocked_recovery is not None:
         state = _validate_state(memory.blocked_recovery, memory.session_id)
         for row in state["attempts"]:
-            if row["source_revision"] != source:
+            alias_hash = next((digest for revision, digest in aliases
+                               if row["source_revision"] == revision), None)
+            if alias_hash is None:
                 continue
             batch = row.get("selection_batch")
-            if isinstance(batch, dict) and batch["state_sha256"] == state_sha256:
-                rows[row["decision_input_sha256"]] = deepcopy(row)
+            if isinstance(batch, dict) and batch["state_sha256"] == alias_hash:
+                key = (row["source_revision"]["commit"], row["source_revision"]["source_sha256"],
+                       row["decision_input_sha256"])
+                rows[key] = deepcopy(row)
     result = [rows[key] for key in sorted(rows)]
     if len(result) > MAX_SELECTION_BATCHES_PER_STATE:
         raise ValueError("Persistent selection batch limit is exceeded for one state")

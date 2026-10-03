@@ -43,6 +43,7 @@ class CampaignMemory:
     # Keep this optional extension after the legacy fields so positional
     # CampaignMemory construction retains its historical argument order.
     blocked_recovery_archive: dict | None = None
+    compatible_source_recoveries: list[dict] = field(default_factory=list)
 
     def event(self, kind: str, **details) -> None:
         self.history.append({"kind": kind, **details})
@@ -217,6 +218,8 @@ class CampaignMemory:
             if memory.blocked_recovery is not None:
                 from .blocked_persistence import _validate_state
                 _validate_state(memory.blocked_recovery, memory.session_id)
+            from .compatible_recovery import validate_lineage
+            validate_lineage(memory)
             if memory.blocked_recovery_archive is not None:
                 archive = memory.blocked_recovery_archive
                 required = {"schema", "session_id", "target", "entry_count",

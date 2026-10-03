@@ -87,7 +87,8 @@ def _contract_sha256(files: dict[str, bytes]) -> str:
 
 
 def validate_source_revision(blocked_source_revision: str,
-                             root: Path | None = None) -> dict:
+                             root: Path | None = None, *,
+                             require_changed_contract: bool = True) -> dict:
     """Require clean descendant source with a changed decision contract.
 
     The replay identity hashes the judgment, evidence, and candidate-planning
@@ -140,8 +141,10 @@ def validate_source_revision(blocked_source_revision: str,
             old_files[name] = _git(checkout, "show", f"{old}:{name}")
         current_contract = _contract_sha256(current_files)
         old_contract = _contract_sha256(old_files)
-        if current_contract == old_contract:
+        if require_changed_contract and current_contract == old_contract:
             raise ValueError("Decision contract has not changed since the blocked source")
+        if not require_changed_contract and current_contract != old_contract:
+            raise ValueError("Compatible recovery requires an equal decision contract")
         # Recheck identity around file reads so a concurrent checkout cannot
         # turn the contract digest into an unbound claim.
         if os.fsdecode(_git(checkout, "rev-parse", "--verify", "HEAD^{commit}")).strip() != head:
@@ -206,6 +209,15 @@ def validate_blocked_memory(memory, max_stalled_decisions: int) -> None:
     """
     ledger = memory.blocked_recovery
     persistent_block = isinstance(ledger, dict) and bool(ledger.get("attempts"))
+    archive = getattr(memory, "blocked_recovery_archive", None)
+    archive_index = getattr(memory, "_blocked_recovery_archive_index", None)
+    if (not persistent_block and isinstance(archive, dict)
+            and type(archive.get("entry_count")) is int and archive["entry_count"] > 0
+            and archive_index is not None):
+        # A verified rotation legitimately leaves the active tail empty. Its
+        # authenticated rows still prove a persistent block below threshold.
+        archive_index.validate_files()
+        persistent_block = True
     job = getattr(memory, "background_job", None)
     attempt = getattr(memory, "background_attempt", None)
     if (memory.status != "blocked" or not isinstance(memory.reason, str)

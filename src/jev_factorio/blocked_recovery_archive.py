@@ -271,6 +271,19 @@ class VerifiedAttemptArchive:
                 seen_candidates.add(candidate_sha256)
         return rows
 
+    def compatibility_rows(self, *, memory):
+        """Authenticated archived coverage audit before explicit source migration."""
+        if (memory.session_id != self._session_id or memory.target != self._target
+                or memory.blocked_recovery_archive != self._archive_pointer):
+            raise ValueError("Blocked-recovery archive index belongs to a different checkpoint")
+        self.validate_files()
+        cursor = self._connection.execute("SELECT payload FROM attempts")
+        try:
+            for (payload,) in cursor:
+                yield json.loads(payload)
+        finally:
+            cursor.close()
+
     def close(self) -> None:
         try:
             self._connection.close()

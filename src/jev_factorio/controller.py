@@ -266,6 +266,15 @@ class HierarchicalLoop(AgentLoop):
         delay = max(self.tick_seconds, delay)
         attempt = find_attempt(self.memory, source, input_sha256,
                                archive_index=self._blocked_recovery_archive_index)
+        if attempt is None:
+            from .compatible_recovery import approved_sources
+            historical = [row for revision in approved_sources(self.memory, source)[:-1]
+                          if (row := find_attempt(
+                              self.memory, revision, input_sha256,
+                              archive_index=self._blocked_recovery_archive_index)) is not None]
+            if len(historical) > 1:
+                raise ValueError("Ambiguous compatible-source wait identity")
+            attempt = historical[0] if historical else None
         unresolved = attempt is not None and attempt.get("outcome") == "pending"
         # An unresolved (possibly billed) decision is never abandoned here; only a
         # resolved, unchanged fingerprint already at the longest delay counts as idle.
@@ -410,9 +419,16 @@ class HierarchicalLoop(AgentLoop):
             state, plan_rows, session_id=snapshot.session_id, source_revision=source,
             target=self.target, policy=self.policy, confidence_floor=self.confidence_floor,
             current_tick=snapshot.tick)
+        from .compatible_recovery import approved_sources
+        aliases = [(revision, selection_state_sha256(
+            state, plan_rows, session_id=snapshot.session_id, source_revision=revision,
+            target=self.target, policy=self.policy, confidence_floor=self.confidence_floor,
+            current_tick=snapshot.tick))
+            for revision in approved_sources(self.memory, source)]
         rows = selection_attempts_for_state(
             self.memory, source, state_sha256,
-            archive_index=self._blocked_recovery_archive_index)
+            archive_index=self._blocked_recovery_archive_index,
+            compatible_state_hashes=aliases)
 
         # Old implementations keyed one request by the entire unprepared
         # frontier. It cannot tell us which candidates the provider actually
@@ -778,6 +794,8 @@ class HierarchicalLoop(AgentLoop):
             memory._blocked_recovery_archive_index = archive_index
         self._blocked_recovery_archive_index = getattr(
             memory, "_blocked_recovery_archive_index", None)
+        from .compatible_recovery import validate_current_owner
+        validate_current_owner(memory, self.provenance)
         if self.persist_recoverable_blocks:
             from .blocked_persistence import validate_memory_state
             validate_memory_state(
