@@ -1,0 +1,11 @@
+# Prospective owned-stock recipe contribution
+
+The actual080 first request used source9863 and fresh model evaluation. It retained both owned-stock pickup candidates,13 and20 ore, but usefulness was voted unsupported. This is not stale cross-source cache: persistent selection binds exact commit and source fingerprint. The model's private reason is unavailable.
+
+The request showed only the direct ore-to-plate recipe and names of downstream products. The new evidence makes the missing downstream recipe arithmetic visible. It is a concrete packet gap, not proof that a future model vote will change.
+
+The producer first performs the existing full current InputRoutePlanner recompile. It then projects the selected recursive recipe branch with normal enabled recipe inputs/yields, carried product inventory, batch ceiling20, current machine input/in-flight bounds, and selected input quantity. An independent current Catalog subset is projected into model facts with current tick/session/version. The consumer matches every recipe, hand category and stack bound against that projection and repeats arithmetic; self-consistent altered candidate recipes do not qualify.
+
+For the actual frontier,25 belts need13 selected plate inputs; those need13 ore in this next batch. The separate gear ingredient remains a later prerequisite.20 science need20 gears, requiring40 plates, but the next smelting batch is bounded to20 ore. Neither witness claims whole-target closure. The original global shortage40 and allocation-ledger remaining0 stay visible: allocation remaining is not carried inventory, and the selected current branch is not the entire material bill.
+
+Identical complete recipe records are losslessly factored through shared_recipes and explicit shared_recipe_key pointers. Qualified pickup instructions are compressed; score rubrics, confidence thresholds, native gates, request limit48000 and provider budgets are unchanged. Recorded080 refusals still reject. Tests regenerate prospective evidence offline from the actual080 full observation and the already retained normal2.0.77 catalog; only logger-redacted public authorization is restored from its equal binding ID. No native action or model call is performed by these tests.

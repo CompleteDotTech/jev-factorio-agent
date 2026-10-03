@@ -54,6 +54,8 @@ def prospective_frontier():
     assert snapshot.__dict__ == before
     state = deepcopy(captured['state'])
     state['facts'] = snapshot.for_jev()
+    from jev_factorio.planning.bootstrap_chain import catalog_projection
+    state['facts']['factory']['recipe_dependency_catalog'] = catalog_projection(snapshot,catalog,plans)
     for key in ('acceptance_runtime', 'consumed', 'observation_snapshot_schema',
                 'observation_query_bounds', 'inventory_insertable_evidence'):
         state['facts']['factory'].pop(key, None)
@@ -74,7 +76,8 @@ def test_actual067_prospective_owned_stock_survives_full_request_cap():
     before = deepcopy(state)
     packet, questions, offered = question_batch(state, plans, max_bytes=48000)
     assert [p.id for p in offered] == [p.id for p in plans]
-    assert packet['facts'] == state['facts'] and packet['history'] == captured['state']['history']
+    from test_bootstrap_recipe_chain import expand
+    assert expand(packet)['facts'] == state['facts'] and packet['history'] == captured['state']['history']
     assert packet['local_objective'] == captured['state']['local_objective']
     manual = plans[1]
     assert rows[manual.id]['local_target']['item'] == 'automation-science-pack'

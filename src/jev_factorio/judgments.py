@@ -424,7 +424,7 @@ def _qualified_bootstrap_output_pickup(plan, facts, row):
         return False
     if set(proof) != {'schema', 'observed_tick', 'session_id', 'catalog_version',
             'source_role', 'source_unit', 'binding_id', 'ownership_sha256',
-            'planner_item_path', 'inventory_now', 'current_raw_demand', 'planned_pickup_quantity',
+            'planner_item_path', 'inventory_now', 'current_raw_demand', 'recipe_dependency_chain', 'planned_pickup_quantity',
             'planned_native_receipt_id', 'basis',
             'native_pickup_and_inventory_delta_require_verification',
             'later_recipe_output_and_target_completion_unverified'}:
@@ -478,6 +478,10 @@ def _qualified_bootstrap_output_pickup(plan, facts, row):
                            for entry in current_recipe['products'])):
             return False
     except (KeyError, TypeError, ValueError, IndexError, ArithmeticError):
+        return False
+    from .planning.bootstrap_chain import validate_dependency_chain
+    if not validate_dependency_chain(facts, local, proof['planner_item_path'],
+            proof.get('recipe_dependency_chain'), demand['required_carried_quantity']):
         return False
     owned = factory.get('bootstrap_output')
     entities = factory.get('entities')
@@ -1195,6 +1199,51 @@ def _compact_plan_documents(plans):
                                      (document.get("materials") or {}).items() if key not in shared}
             document["shared_materials_keys"] = sorted(shared)
     return documents, shared
+
+
+def _factor_bootstrap_recipes(context):
+    """Losslessly factor identical recipe records for qualified chain packets."""
+    from copy import deepcopy
+    if not any(isinstance(row, dict) and isinstance(row.get('bootstrap_output_pickup_start_evidence'), dict)
+            and 'recipe_dependency_chain' in row['bootstrap_output_pickup_start_evidence']
+            for row in (context.get('candidate_evidence') or {}).values()):
+        return context
+    def reserved(value):
+        if isinstance(value, dict):
+            return ('shared_recipes' in value or 'shared_recipe_key' in value
+                    or any(reserved(child) for child in value.values()))
+        return isinstance(value, list) and any(reserved(child) for child in value)
+    if reserved(context):
+        return context  # Existing caller fields must never be overwritten or reinterpreted.
+    counts = {}; records = {}
+    def collect(value):
+        if isinstance(value, dict):
+            if {'name', 'category', 'ingredients', 'products', 'enabled'} <= set(value):
+                key = _json_identity(value)
+                counts[key] = counts.get(key, 0) + 1; records[key] = value
+            else:
+                for child in value.values(): collect(child)
+        elif isinstance(value, list):
+            for child in value: collect(child)
+    collect(context)
+    keys = {identity: record['name'] for identity, record in records.items() if counts[identity] > 1}
+    if len(set(keys.values())) != len(keys):
+        return context  # Never merge unequal recipes with the same name.
+    if not keys:
+        return context
+    def project(value):
+        if isinstance(value, dict):
+            identity = _json_identity(value)
+            if identity in keys:
+                return {'shared_recipe_key': keys[identity]}
+            return {key: project(child) for key, child in value.items()}
+        if isinstance(value, list):
+            return [project(child) for child in value]
+        return deepcopy(value)
+    result = project(context)
+    result['shared_recipes'] = {keys[key]: deepcopy(records[key]) for key in sorted(keys)}
+    result['execution_contract'] += ' Resolve each shared_recipe_key through shared_recipes; it is the identical complete recipe record.'
+    return result
 
 
 def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
@@ -2418,8 +2467,9 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "Judge the supplied local_objective when present; otherwise judge active_goal.",
                     "For qualified candidate-local raw demand, judge that candidate's evidence row local_target; "
                     "otherwise judge supplied local_objective or active_goal.")
-                questions["candidate"]["instructions"] += (
-                    " Compare qualified candidate-local parent contributions separately from the kit target.")
+                local_instruction = " Compare qualified candidate-local parent contributions separately from the kit target."
+                if local_instruction not in questions["candidate"]["instructions"]:
+                    questions["candidate"]["instructions"] += local_instruction
                 questions[plan.id + "/useful_progress"]["criteria"]["useful"] = (
                     "Current evidence supports progress toward this candidate's evidence row local_target")
                 questions[plan.id + "/useful_progress"]["instructions"] = (
@@ -2430,18 +2480,19 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "Judge independently; native verification is required.")
                 if bootstrap_local:
                     questions[plan.id + '/useful_progress']['instructions'] = (
-                        f'For {pointer}, use `candidate_evidence[{json.dumps(plan.id)}]` '
-                        'and its bootstrap_output_pickup_start_evidence: would the next pickup advance '
-                        'this row local_target IF its native receipt and fresh inventory delta verify? '
-                        'Read current_raw_demand for the next scoped recipe-input batch: required carried quantity, carried inventory, deficit, owned stock, headroom and pickup. Allocation-ledger remaining is not carried inventory. Read current stock and headroom in facts.factory.bootstrap_output.output and '
-                        'capacity, and the proof planner_item_path and planned_pickup_quantity. '
-                        'Collecting owned raw stock can supply a bounded recipe prerequisite; '
-                        'judge prospective usefulness separately from completion. An unexecuted pickup '
-                        'has no receipt or inventory delta yet; their absence alone is not contrary '
-                        'start evidence. Missing, stale, mismatched or contrary CURRENT ownership, '
-                        'stock, headroom or recipe-demand evidence means unsupported. This is not '
-                        'historical placement proof, completed pickup, recipe output, route flow or '
-                        'blocker removal. Execution and success still require native verification.')
+                        f'For {pointer}, use `candidate_evidence[{json.dumps(plan.id)}]` and '
+                        'bootstrap_output_pickup_start_evidence: would pickup advance its local_target '
+                        'IF native receipt and fresh inventory delta verify? Read recipe_dependency_chain '
+                        'for enabled inputs/yields, carried inventory, bounded batches and machine inputs; '
+                        'it proves only the selected recursive branch, not the full target bill. '
+                        'current_raw_demand gives required carried quantity, deficit, stock, headroom and pickup. '
+                        'Allocation-ledger remaining is not carried inventory. Match planner_item_path and '
+                        'planned_pickup_quantity to facts.factory.bootstrap_output.output and capacity. '
+                        'Judge prospective recipe-input usefulness independently; an unexecuted pickup has no '
+                        'receipt or delta, and their absence alone is not contrary start evidence. Missing, stale, '
+                        'mismatched or contrary CURRENT ownership, stock, headroom or recipe demand means unsupported. '
+                        'No historical placement proof, completed pickup/output, route flow or blocker removal is proved; '
+                        'execution and success require native verification.')
             questions[plan.id + "/benefit"] = {
                 "type": "score",
                 "instructions": (
@@ -2576,6 +2627,24 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                        if qualified_utility_lab else "")
                 ),
             }
+        if all(_qualified_bootstrap_output_pickup(plan, facts,
+                (state.get('candidate_evidence') or {}).get(plan.id)) for plan in selected):
+            questions['candidate']['instructions'] = (
+                'Choose the best pickup from facts, candidate_evidence, history and execution_contract. '
+                'Judge each row local_target; kit and parent purposes differ. Observe only for missing or '
+                'disputed current start facts. Owned stock/capacity and recipe_dependency_chain/current_raw_demand '
+                'support a bounded input branch; travel, pickup and output still need native verification. '
+                'Unchanged observation cannot establish future outcomes. Confidence concerns this action, '
+                'not ultimate completion. Judge independently of other answers.')
+        for plan in selected:
+            row = (state.get('candidate_evidence') or {}).get(plan.id)
+            if _qualified_bootstrap_output_pickup(plan, facts, row):
+                questions[plan.id + '/benefit']['instructions'] = (
+                    f'How directly would `candidate_plans[{json.dumps(plan.id)}]` advance its evidence-row local_target? '
+                    'Use facts, execution_contract and bootstrap_output_pickup_start_evidence with recipe_dependency_chain/current_raw_demand. '
+                    'Owned stock can supply this bounded recipe-input branch; pickup, output, '
+                    'science/route flow remain unverified; no full-game plan required.')
+        context = _factor_bootstrap_recipes(context)
         size = len(json.dumps({"state": context, "questions": questions},
                               ensure_ascii=False, allow_nan=False).encode("utf-8"))
         if size <= max_bytes:

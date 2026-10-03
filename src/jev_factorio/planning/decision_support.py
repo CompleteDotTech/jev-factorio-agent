@@ -1747,9 +1747,17 @@ def _bootstrap_output_pickup_start_evidence(snapshot, catalog, plan):
             return None
     except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
         return None
+    try:
+        from .bootstrap_chain import dependency_chain
+        chain = dependency_chain(snapshot, catalog, local, provenance['planner_item_path'])
+        if chain['raw_input_inventory_target'] != provenance['current_raw_demand']['required_carried_quantity']:
+            return None
+    except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
+        return None
     return {
         'schema': 1, 'observed_tick': snapshot.tick, 'session_id': snapshot.session_id,
         'catalog_version': catalog.version, 'source_role': ROLE,
+        'recipe_dependency_chain': chain,
         'source_unit': owned['chest_unit'], 'binding_id': owned['binding_id'],
         'ownership_sha256': _bootstrap_output_ownership_digest(owned),
         'planner_item_path': list(provenance['planner_item_path']),
