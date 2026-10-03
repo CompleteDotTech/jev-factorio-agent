@@ -270,18 +270,24 @@ def _measure_patch(node: Any, base: Any, anchor: Any, budget: list[int],
 
 
 def _patch(value: Any, base: Any, path: list[Any]) -> dict:
+    """Choose the smallest existing typed node; tiny references can cost more."""
+    inline = {"k": "v", "v": value}
     if (_same_json_type(value, base) and canonical(value) == canonical(base)):
-        return {"k": "r", "p": path, "h": digest(base)}
-    if type(value) is dict and type(base) is dict:
+        candidate = {"k": "r", "p": path, "h": digest(base)}
+    elif type(value) is dict and type(base) is dict:
         fields = {}
         for key in sorted(value):
             fields[key] = (_patch(value[key], base[key], [*path, key])
                            if key in base else {"k": "v", "v": value[key]})
-        return {"k": "o", "d": sorted(base.keys() - value.keys()), "f": fields}
-    if type(value) is list and type(base) is list and len(value) == len(base):
-        return {"k": "a", "v": [_patch(item, old, [*path, index])
-                                  for index, (item, old) in enumerate(zip(value, base))]}
-    return {"k": "v", "v": value}
+        candidate = {"k": "o", "d": sorted(base.keys() - value.keys()), "f": fields}
+    elif type(value) is list and type(base) is list and len(value) == len(base):
+        candidate = {"k": "a", "v": [_patch(item, old, [*path, index])
+                                     for index, (item, old) in enumerate(zip(value, base))]}
+    else:
+        return inline
+    # Both nodes use the unchanged decoder grammar and exact JSON type checks.
+    # Prefer inline on ties rather than retain an unnecessary anchor dependency.
+    return min((inline, candidate), key=lambda node: len(canonical(node)))
 
 
 def _apply(node: Any, base: Any, anchor: Any, depth: int = 0) -> Any:
