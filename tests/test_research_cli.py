@@ -287,7 +287,7 @@ def test_until_complete_cli_records_unbounded_hierarchical_mode(tmp_path, monkey
 
 
 @pytest.mark.parametrize(("limit_args", "expected"), [
-    ([], 6),
+    ([], 0),
     (["--persistent-idle-observations", "3"], 3),
     (["--persistent-idle-observations", "0"], 0),
 ])

@@ -741,7 +741,9 @@ def test_persistent_mode_needs_a_continuous_live_resume_configuration():
         _configuration(asdict(replace(valid, backend="mock")))
 
 
-def _idle_loop(tmp_path, monkeypatch, *, idle_observations, backend=None, log_file=None):
+_DEFAULT_IDLE_ARGUMENT = object()
+
+def _idle_loop(tmp_path, monkeypatch, *, idle_observations=_DEFAULT_IDLE_ARGUMENT, backend=None, log_file=None):
     import jev_factorio.controller as controller
 
     monkeypatch.setattr(controller, "gameplay_context", lambda: {"code_revision": SOURCE})
@@ -757,7 +759,8 @@ def _idle_loop(tmp_path, monkeypatch, *, idle_observations, backend=None, log_fi
     loop = HierarchicalLoop(
         backend, jev=LiveClient(), policy="jev", target="bootstrap_mining",
         checkpoint=str(checkpoint), resume_controller=True, tick_seconds=0,
-        persist_recoverable_blocks=True, persistent_idle_observations=idle_observations,
+        persist_recoverable_blocks=True,
+        **({"persistent_idle_observations": idle_observations} if idle_observations is not _DEFAULT_IDLE_ARGUMENT else {}),
         log_file=log_file)
     if loop._safety is not None:
         loop._safety.admission = lambda *_args: None
@@ -1376,3 +1379,23 @@ def test_selection_batch_hash_normalizes_planned_craft_job_uuid_and_order():
     batch_b = persistence.selection_batch_metadata(context_b, questions_b, offered_b, **common)
     assert batch_a["request_sha256"] == batch_b["request_sha256"]
     assert batch_a["offered"] == batch_b["offered"]
+
+
+def test_default_persistence_keeps_same_controller_observing_without_rebilling(tmp_path, monkeypatch):
+    loop, backend, checkpoint, requests, _ = _idle_loop(tmp_path, monkeypatch)
+    assert loop.persistent_idle_observations == 0
+    for _ in range(12):
+        loop.step()
+    before = deepcopy(loop.memory.blocked_recovery['attempts'])
+    stalled = loop.memory.stalled_decisions
+    for _ in range(20):
+        loop.step()
+    assert loop.terminal is False and loop._persistent_idle_exhausted is False
+    assert requests == [True] and backend.actions == []
+    assert loop.memory.blocked_recovery['attempts'] == before
+    assert loop.memory.stalled_decisions == stalled
+    assert loop.memory.status == 'blocked' and loop.memory.pending is None
+    assert loop.persistent_recovery_wait_seconds() == 300
+    saved = CampaignMemory.load(checkpoint, backend.session_id, 'bootstrap_mining')
+    assert saved.blocked_recovery['attempts'] == before
+    assert saved.stalled_decisions == stalled and saved.status == 'blocked'

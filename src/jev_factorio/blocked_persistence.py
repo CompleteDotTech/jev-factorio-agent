@@ -25,7 +25,7 @@ MAX_WAIT_LEVEL = 9
 MAX_WAIT_SECONDS = 300.0
 # Both wait paths reach this delay (2 ** 8) before the 300 s cap applies to one of them.
 IDLE_DELAY_SECONDS = 256.0
-DEFAULT_IDLE_OBSERVATIONS = 6
+DEFAULT_IDLE_OBSERVATIONS = 0
 MAX_IDLE_OBSERVATIONS = 1000
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z")

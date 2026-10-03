@@ -211,14 +211,14 @@ is bypassed, and progress still requires the existing native verification.
 If the process stops after saving a request fingerprint but before committing its
 model outcome, the next resume marks the evaluation outcome unknown and continues
 observing; it never repeats that same request fingerprint.
-Waiting cannot produce new evidence when the blocked decision is the actor's only
-pending work, so the wait is bounded. After `--persistent-idle-observations`
-consecutive observations (default 6, about 30 minutes) at the longest delay with an
-unchanged, resolved fingerprint, the invocation ends normally with the recovery phase
-`idle_wait_exhausted`. The blocked status, attempts, stall and failure history are
-preserved and no model request is made; the checkpoint stays resumable with
-`--reevaluate-blocked-once` after a decision-contract change. The count is
-process-local, so a new invocation waits again. `0` disables the bound. The
+Persistent recovery defaults to observation-only waiting without an idle cutoff
+(`--persistent-idle-observations 0`). The same controller retains its original lock,
+checkpoint, blocked decision history and budgets; it does not repeat an unchanged
+model request or dispatch an unsupported action. Delays still back off to 300 seconds.
+An operator may explicitly set a positive idle-observation limit. After that many
+maximum-delay observations with unchanged resolved evidence, the invocation ends
+with `idle_wait_exhausted`, preserving its blocked checkpoint. A finite configured
+limit remains process-local; it is not goal completion. The
 invocation exits normally in this case, but that is not success: the campaign is still
 blocked, and a launcher must not treat the exit as completion. An
 unresolved evaluation outcome is never abandoned by this bound.
