@@ -2378,11 +2378,17 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 if bootstrap_local:
                     questions[plan.id + '/useful_progress']['instructions'] = (
                         f'For {pointer}, use `candidate_evidence[{json.dumps(plan.id)}]` '
-                        'and its bootstrap_output_pickup_start_evidence to judge this row local_target. '
-                        'Collecting observed owned raw stock is partial recipe-input progress; '
-                        'it is not historical placement proof, completed pickup, recipe output, '
-                        'route flow or blocker removal. Native receipt and inventory-delta verification '
-                        'are required; missing, stale, mismatched or contrary evidence means unsupported.')
+                        'and its bootstrap_output_pickup_start_evidence: would the next pickup advance '
+                        'this row local_target IF its native receipt and fresh inventory delta verify? '
+                        'Read current stock and headroom in facts.factory.bootstrap_output.output and '
+                        'capacity, and the proof planner_item_path and planned_pickup_quantity. '
+                        'Collecting owned raw stock can supply a bounded recipe prerequisite; '
+                        'judge prospective usefulness separately from completion. An unexecuted pickup '
+                        'has no receipt or inventory delta yet; their absence alone is not contrary '
+                        'start evidence. Missing, stale, mismatched or contrary CURRENT ownership, '
+                        'stock, headroom or recipe-demand evidence means unsupported. This is not '
+                        'historical placement proof, completed pickup, recipe output, route flow or '
+                        'blocker removal. Execution and success still require native verification.')
             questions[plan.id + "/benefit"] = {
                 "type": "score",
                 "instructions": (

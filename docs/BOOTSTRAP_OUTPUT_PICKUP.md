@@ -93,3 +93,9 @@ the reviewed Lua body is used without a source transformation.
 Offline tests and prospective replay prove these source contracts only. A source
 merge is followed by signed native installation and fresh receipt-verified
 gameplay; neither mocked ownership nor green CI demonstrates native progress.
+
+### Prospective usefulness and completion
+
+Native074 supplied qualified current stock, ownership, actor headroom and recipe-demand evidence for pickups of 13 and 20 iron ore. Its bootstrap-specific usefulness question omitted the generic question's conditional postcondition and said native receipt/inventory verification was required beside missing-evidence rejection. This conflated evidence to start with evidence of completed execution. The captured classifier selected pickup13 and scored both benefits positively, but rejected usefulness for both. Those votes do not reveal its private reasoning; the instruction conflict is a source defect, not proof of the classifier's cause.
+
+Qualified bootstrap questions now ask whether pickup helps if its native receipt and fresh inventory delta verify. They point to the current owned output/capacity and recipe path/quantity, distinguish missing or contrary current start evidence from absent future receipts, and retain native execution/success verification. Unqualified candidates receive no exception. Recorded native074 unsupported responses still reject; no scores or eligibility floors change. The actual event fixture retains logging redaction; replay restores the nonsecret signed installer authority digest from its matching binding ID and checks the recorded ownership digest. This is offline regression evidence, not a new native trial.
