@@ -14,8 +14,13 @@ import json
 import math
 import re
 
-from ..bootstrap_output import MODULE, PROFILE
-from .native_attachment import CLOSED_WORLD_PROFILE, CALLBACKS_EXPR
+from ..bootstrap_output import MODULE, PROFILE, MANUAL_CYCLE_PROFILE as MANUAL_CYCLE_BOOTSTRAP_PROFILE
+from .native_attachment import CLOSED_WORLD_PROFILE, MANUAL_CYCLE_PROFILE, CALLBACKS_EXPR
+
+BOOTSTRAP_PROFILE_BY_BASE = {
+    MANUAL_CYCLE_PROFILE: MANUAL_CYCLE_BOOTSTRAP_PROFILE,
+    CLOSED_WORLD_PROFILE: PROFILE,
+}
 
 HASH_FIELDS = {"authorization_sha256", "checkpoint_sha256", "source_fingerprint",
                "source_tree", "source_revision", "attachment_sha256", "native_identity_report_sha256"}
@@ -66,13 +71,13 @@ def proposed_manifest(attachment, scope):
             or attachment.get("modules", {}).get(MODULE) is not False):
         raise ValueError("Bootstrap install requires the exact qualified original attachment")
     old = attachment.get("native_installation")
-    if not isinstance(old, dict) or old.get("profile") != CLOSED_WORLD_PROFILE:
-        raise ValueError("Bootstrap install requires the retained closed-world callback chain")
+    if not isinstance(old, dict) or old.get("profile") not in BOOTSTRAP_PROFILE_BY_BASE:
+        raise ValueError("Bootstrap install requires the retained qualified v5 or v6 callback chain")
     result = deepcopy(old)
     if MODULE in result.get("assets", {}):
         raise ValueError("Bootstrap asset already exists; reconcile rather than reinstall")
     result["assets"][MODULE] = asset_sha256()
-    result["profile"] = PROFILE
+    result["profile"] = BOOTSTRAP_PROFILE_BY_BASE[old["profile"]]
     return result
 
 

@@ -7,6 +7,7 @@ import re
 ROLE = "bootstrap-output:iron-ore"
 MODULE = "bootstrap_output_v1"
 PROFILE = "e759-observation-v2-water-origin-v4-manual-cycle-v6-connector-observer-v1-bootstrap-output-v1"
+MANUAL_CYCLE_PROFILE = "e759-observation-v2-water-origin-v4-manual-cycle-v5-connector-observer-v1-bootstrap-output-v1"
 ORIGINS = {"native_paid_bootstrap_placement", "legacy_authorized_current_asset"}
 
 
