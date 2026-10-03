@@ -88,6 +88,7 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
         LEGACY_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE,
         WATER_ORIGIN_OBSERVATION_PROFILE,
     )
+    from ..bootstrap_output import PROFILE as BOOTSTRAP_PROFILE
 
     backend = native.backend
     attachment = getattr(backend, '_native_attachment', None)
@@ -99,7 +100,7 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
         if profile == LEGACY_OBSERVATION_PROFILE:
             expected_bounds = BOUNDS
         elif profile in {EXPANDED_OBSERVATION_PROFILE, WATER_ORIGIN_OBSERVATION_PROFILE,
-                         MANUAL_CYCLE_PROFILE, CLOSED_WORLD_PROFILE} or (
+                         MANUAL_CYCLE_PROFILE, CLOSED_WORLD_PROFILE, BOOTSTRAP_PROFILE} or (
                 profile is False and isinstance(installed, dict)):
             expected_bounds = EXPANDED_ANCHOR_BOUNDS
         else:
@@ -115,7 +116,9 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
     from .native_input_capacity import decode as decode_receiver_capacity
     from .native_input_capacity import observation_command
 
-    raw = native.command(observation_command(native))
+    from .native_bootstrap_output import observation_command as bootstrap_command
+    from .native_bootstrap_output import decode as decode_bootstrap
+    raw = native.command(bootstrap_command(observation_command(native)))
     result = parse_snapshot(raw, backend._observation_profile, schemas=(2,))
     session = result.get('session_id')
     if not isinstance(session, str) or not session or len(session) > 128:
@@ -269,7 +272,7 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
             if (group == 'anchors' and item == 'water'
                     and (attachment is None or profile in {
                          WATER_ORIGIN_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE,
-                         CLOSED_WORLD_PROFILE}
+                         CLOSED_WORLD_PROFILE, BOOTSTRAP_PROFILE}
                          or profile is False)
                     and (x != math.floor(x) or y != math.floor(y))):
                 raise ValueError('Water-origin observer returned a non-tile anchor')
@@ -296,6 +299,11 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
             'basis': 'native_insertable_count_estimate',
         }
     factory['fair_resource_targets'] = targets
+    bootstrap_output = decode_bootstrap(raw, result, attachment)
+    if 'bootstrap_output_pending' in result['factory']:
+        factory['bootstrap_output_pending'] = result['factory']['bootstrap_output_pending']
+    if bootstrap_output is not None:
+        factory['bootstrap_output'] = bootstrap_output
     factory['observation_snapshot_schema'] = 2
     factory['observation_query_bounds'] = dict(bounds)
     if anchor_diagnostics is not None:
@@ -309,6 +317,20 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
                         and abs(point[1] - drill.drop_position.y) < .5):
                     factory['drill_output_role'] = role
                     break
+    if bootstrap_output is not None:
+        from ..bootstrap_output import binding
+        from .native_bootstrap_output import read_witness
+        witness = (read_witness(attachment)
+                   if bootstrap_output['origin'] == 'legacy_authorized_current_asset' else None)
+        probe = SimpleNamespace(world_kind='fle', session_id=session, tick=tick,
+            factory=factory, iron_ore_collected=collected,
+            _bootstrap_output_ownership_witness=witness,
+            _coherent_observation_verified=(session, tick),
+            _atomic_inventory_verified=(session, tick))
+        if binding(probe, allow_pending=True) is None:
+            raise ValueError('Bootstrap output identity or ownership changed')
+    else:
+        witness = None
     snapshot.tick, snapshot.session_id, snapshot.world_kind = tick, session, 'fle'
     snapshot.player_position, snapshot.inventory = position, inventory
     snapshot.placed_entities, snapshot.nearby_resources = list(placed), nearby
@@ -317,12 +339,14 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
     snapshot.drill_output_connected = bootstrap['output_connected']
     snapshot.iron_ore_collected = collected
     snapshot.factory, snapshot.game_version = factory, native.catalog.version
+    snapshot._bootstrap_output_ownership_witness = witness
     snapshot._receiver_input_capacity = receiver_capacity
     snapshot.researched, snapshot.victory = researched, launched > baseline
     snapshot.victory_source = 'native:base-game-rocket-launch' if snapshot.victory else None
     snapshot._native_controls = controls
     snapshot._coherent_observation_verified = (session, tick)
     backend._resources, backend._drill = resources, drill
+    backend._bootstrap_output_pending = factory.get('bootstrap_output_pending', False)
     native._coherent_identity, native._coherent_tick = identity, tick
     native._coherent_drill = drill.unit_number if drill else None
     for name, value in counts.items():

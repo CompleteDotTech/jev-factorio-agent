@@ -6,6 +6,7 @@ path or arrival promise. Missing geometry is unknown, never zero-cost travel.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 from copy import deepcopy
 from dataclasses import replace
@@ -1678,6 +1679,87 @@ def _output_pickup_start_evidence(snapshot, catalog, plan, *, path_root=None):
     }
 
 
+def _bootstrap_output_ownership_digest(owned):
+    """Keep immutable native ownership bound without duplicating its row."""
+    keys = ('session_id', 'actor_unit', 'surface_index', 'force_index', 'drill_unit',
+            'chest_unit', 'drill_position', 'drop_position', 'chest_position', 'origin',
+            'binding_id', 'authorization_sha256', 'bound_at_tick',
+            'historical_paid_placement_proven', 'paid_drill_unit', 'paid_chest_unit')
+    try:
+        identity = {key: owned[key] for key in keys}
+        return hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(',', ':'),
+            ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _bootstrap_output_pickup_start_evidence(snapshot, catalog, plan):
+    """Recompile a current raw pickup from explicitly owned native stock.
+
+    A legacy current-asset authorization is not historical paid placement proof.
+    This witness forecasts only a bounded receipt-verified inventory transfer.
+    """
+    from ..bootstrap_output import ROLE, binding, allowed
+    owned = binding(snapshot)
+    if (owned is None or snapshot.game_version != catalog.version or len(plan.steps) != 1
+            or not isinstance(snapshot.session_id, str) or not snapshot.session_id
+            or type(snapshot.inventory.get('iron-ore', 0)) is not int
+            or snapshot.inventory.get('iron-ore', 0) < 0):
+        return None
+    step = plan.steps[0]
+    materials = plan.materials or {}
+    provenance = materials.get('bootstrap_output_pickup')
+    local = materials.get('local_objective')
+    intent = materials.get('work_intent')
+    p = step.parameters or {}
+    if (step.action != 'factory_extract' or step.effect != 'transfer' or step.costs != {}
+            or not isinstance(provenance, dict) or not isinstance(local, dict)
+            or not isinstance(local.get('item'), str) or not local['item']
+            or not isinstance(intent, dict) or intent.get('scope') != 'immediate'
+            or type(intent.get('observed_tick')) is not int or intent['observed_tick'] != snapshot.tick
+            or local.get('ultimate_goal') != plan.goal
+            or type(local.get('inventory_target')) is not int or local['inventory_target'] <= 0
+            or type(snapshot.inventory.get(local.get('item'), 0)) is not int
+            or snapshot.inventory.get(local.get('item'), 0) >= local['inventory_target']
+            or set(p) != {'role', 'item', 'quantity', 'receipt'}
+            or not allowed(p, snapshot)
+            or p['receipt'] != f'{snapshot.tick}:factory_extract:{ROLE}:iron-ore'
+            or provenance.get('observed_tick') != snapshot.tick
+            or provenance.get('source_role') != ROLE
+            or type(provenance.get('source_unit')) is not int
+            or provenance['source_unit'] != owned['chest_unit']
+            or provenance.get('item') != 'iron-ore'
+            or type(provenance.get('observed_output')) is not int
+            or provenance['observed_output'] != owned['output'].get('iron-ore', 0)
+            or not _current_item_dependency_path(snapshot, catalog,
+                provenance.get('planner_item_path'), local.get('item'), 'iron-ore')):
+        return None
+    try:
+        from .input_routes import InputRoutePlanner
+        matches = [candidate for candidate in InputRoutePlanner(
+            catalog, snapshot, plan.goal).candidates()
+            if candidate.id == plan.id and candidate.steps == plan.steps
+            and all((candidate.materials or {}).get(key) == materials.get(key)
+                for key in ('bootstrap_output_pickup', 'local_objective', 'work_intent',
+                            'shortages', 'batches', 'input_route_kit_prerequisite'))]
+        if len(matches) != 1:
+            return None
+    except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
+        return None
+    return {
+        'schema': 1, 'observed_tick': snapshot.tick, 'session_id': snapshot.session_id,
+        'catalog_version': catalog.version, 'source_role': ROLE,
+        'source_unit': owned['chest_unit'], 'binding_id': owned['binding_id'],
+        'ownership_sha256': _bootstrap_output_ownership_digest(owned),
+        'planner_item_path': list(provenance['planner_item_path']),
+        'inventory_now': snapshot.inventory.get('iron-ore', 0),
+        'planned_pickup_quantity': p['quantity'], 'planned_native_receipt_id': p['receipt'],
+        'basis': 'recompiled_current_local_demand_and_owned_bootstrap_output',
+        'native_pickup_and_inventory_delta_require_verification': True,
+        'later_recipe_output_and_target_completion_unverified': True,
+    }
+
+
 def _current_item_dependency_path(snapshot, catalog, path, root, tail):
     """Validate a same-tick catalog path without conflating parent and child roots."""
     if (not isinstance(path, list) or not 1 <= len(path) <= 32
@@ -2795,6 +2877,7 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
     has_coal_offer = any(coal_marker(plan, snapshot) for plan in plans)
     for index, plan in enumerate(plans):
         kit_parent_purpose = _input_route_kit_parent_purpose(snapshot, catalog, plan)
+        bootstrap_pickup_start = _bootstrap_output_pickup_start_evidence(snapshot, catalog, plan)
         if ('input_route_kit_prerequisite' in (plan.materials or {})
                 and kit_parent_purpose is None):
             # A stale or forged kit annotation cannot acquire a local-target
@@ -3395,6 +3478,8 @@ def candidate_evidence(snapshot, catalog, plans) -> dict:
                                       'factory_buffer_build', 'factory_input_build', 'factory_solid_build'} for s in plan.steps),
             'estimate_basis': 'native_observation_and_catalog_with_declared_policy_heuristics',
         }
+        if bootstrap_pickup_start is not None:
+            result[plan.id]['bootstrap_output_pickup_start_evidence'] = bootstrap_pickup_start
         if isinstance((plan.materials or {}).get('direct_alternative_to_proposed_outpost'), dict):
             result[plan.id]['work_scope_provenance'] = {
                 'compiled_scope': compiled_work_scope,

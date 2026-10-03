@@ -177,6 +177,8 @@ def satisfied(effect: str, item: str, threshold: float, parameters: dict, snapsh
 
 def allowed(action: str, parameters: dict, snapshot: GameSnapshot) -> bool:
     validate_command(action, parameters)
+    if snapshot.factory.get('bootstrap_output_pending') is True:
+        return False
     if "coal_supply" in snapshot.factory and not coal_supply.permits(action, parameters, snapshot):
         return False
     if "solid_routes" in snapshot.factory and not solid_routes.permits(action, parameters, snapshot):
@@ -259,6 +261,9 @@ def allowed(action: str, parameters: dict, snapshot: GameSnapshot) -> bool:
         return (factory.get("player_connected") is True
                 and factory.get("player_bound") is True and factory.get("crafting_queue") == 0)
     if action in {"factory_insert", "factory_extract", "factory_configure", "factory_launch"}:
+        from .bootstrap_output import ROLE as BOOTSTRAP_ROLE, allowed as bootstrap_allowed
+        if parameters.get('role') == BOOTSTRAP_ROLE:
+            return action == 'factory_extract' and bootstrap_allowed(parameters, snapshot)
         if not machine:
             return False
         if action == "factory_insert":

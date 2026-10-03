@@ -411,6 +411,128 @@ def _qualified_candidate_local_raw_demand(plan, facts, row, evidence):
         and raw["planner_item_path"][:1] == [local.get("item")])
 
 
+def _qualified_bootstrap_output_pickup(plan, facts, row):
+    """Consume the distinct current-asset witness, never generic chest stock."""
+    from .bootstrap_output import ROLE, ORIGINS
+    from .planning.decision_support import _bootstrap_output_ownership_digest
+    if not isinstance(facts, dict) or not isinstance(row, dict) or len(plan.steps) != 1:
+        return False
+    proof = row.get('bootstrap_output_pickup_start_evidence')
+    local = row.get('local_target')
+    factory = facts.get('factory')
+    if not all(isinstance(value, dict) for value in (proof, local, factory)):
+        return False
+    if set(proof) != {'schema', 'observed_tick', 'session_id', 'catalog_version',
+            'source_role', 'source_unit', 'binding_id', 'ownership_sha256',
+            'planner_item_path', 'inventory_now', 'planned_pickup_quantity',
+            'planned_native_receipt_id', 'basis',
+            'native_pickup_and_inventory_delta_require_verification',
+            'later_recipe_output_and_target_completion_unverified'}:
+        return False
+    owned = factory.get('bootstrap_output')
+    entities = factory.get('entities')
+    inventory = facts.get('inventory')
+    if not all(isinstance(value, dict) for value in (owned, entities, inventory)):
+        return False
+    machine = entities.get(ROLE)
+    capacity = owned.get('capacity')
+    output = owned.get('output')
+    if not all(isinstance(value, dict) for value in (machine, capacity, output)):
+        return False
+    step = plan.steps[0]
+    p = step.parameters if isinstance(step.parameters, dict) else {}
+    path = proof.get('planner_item_path')
+    provenance = (plan.materials or {}).get('bootstrap_output_pickup')
+    intent = (plan.materials or {}).get('work_intent')
+    tick = facts.get('tick')
+    if (not isinstance(provenance, dict) or not isinstance(intent, dict)
+            or type(tick) is not int or tick < 0
+            or not isinstance(facts.get('session_id'), str) or not facts['session_id']
+            or not isinstance(local.get('item'), str) or not local['item']
+            or not isinstance(path, list) or not 1 <= len(path) <= 32
+            or any(not isinstance(item, str) or not item for item in path)
+            or len(set(path)) != len(path)
+            or path[0] != local['item'] or path[-1] != 'iron-ore'
+            or type(local.get('inventory_target')) is not int or local['inventory_target'] <= 0
+            or type(inventory.get(local['item'], 0)) is not int
+            or inventory.get(local['item'], 0) >= local['inventory_target']
+            or type(p.get('quantity')) is not int or not 1 <= p['quantity'] <= 200
+            or type(output.get('iron-ore')) is not int or output['iron-ore'] < p['quantity']
+            or type(capacity.get('count')) is not int or capacity['count'] < p['quantity']
+            or type(inventory.get('iron-ore', 0)) is not int or inventory.get('iron-ore', 0) < 0
+            or any(type(owned.get(key)) is not int or owned[key] <= 0
+                for key in ('actor_unit', 'surface_index', 'force_index', 'drill_unit', 'chest_unit'))
+            or owned['drill_unit'] == owned['chest_unit']
+            or type(machine.get('unit_number')) is not int or machine['unit_number'] != owned['chest_unit']
+            or not isinstance(owned.get('binding_id'), str) or not owned['binding_id']
+            or type(owned.get('bound_at_tick')) is not int or not 0 <= owned['bound_at_tick'] <= tick
+            or not isinstance(owned.get('origin'), str) or owned['origin'] not in ORIGINS):
+        return False
+    digest = _bootstrap_output_ownership_digest(owned)
+    if digest is None or proof.get('ownership_sha256') != digest:
+        return False
+    if owned['origin'] == 'legacy_authorized_current_asset':
+        authority = owned.get('authorization_sha256')
+        if (not isinstance(authority, str) or len(authority) != 64
+                or authority == '0' * 64 or any(c not in '0123456789abcdef' for c in authority)
+                or owned.get('historical_paid_placement_proven') is not False
+                or owned.get('paid_drill_unit') is not False
+                or owned.get('paid_chest_unit') is not False
+                or owned['binding_id'] != authority):
+            return False
+    elif (owned['binding_id'] != f"paid:{owned['drill_unit']}:{owned['chest_unit']}"
+            or owned.get('historical_paid_placement_proven') is not True
+            or owned.get('authorization_sha256') is not False
+            or any(type(owned.get('paid_' + key)) is not int or owned['paid_' + key] != owned[key]
+                   for key in ('drill_unit', 'chest_unit'))):
+        return False
+    return (facts.get('world_kind') == 'fle'
+        and type(proof.get('schema')) is int and proof['schema'] == 1
+        and type(proof.get('observed_tick')) is int and proof['observed_tick'] == tick
+        and proof.get('session_id') == facts['session_id'] == owned.get('session_id')
+        and isinstance(facts.get('game_version'), str)
+        and proof.get('catalog_version') == facts['game_version']
+        and type(owned.get('protocol')) is int and owned['protocol'] == 1
+        and type(owned.get('tick')) is int and owned['tick'] == tick
+        and owned.get('role') == factory.get('drill_output_role') == ROLE
+        and owned.get('ownership_effective_now') is True and owned.get('native_pending') is False
+        and machine.get('name') == 'wooden-chest' and machine.get('position') == owned.get('chest_position')
+        and machine.get('output') == output and type(facts.get('iron_ore_collected')) is int
+        and output['iron-ore'] == facts['iron_ore_collected']
+        and factory.get('player_bound') is True and factory.get('player_connected') is True
+        and capacity.get('schema') == 1 and type(capacity.get('schema')) is int
+        and type(capacity.get('tick')) is int and capacity['tick'] == tick
+        and capacity.get('session_id') == facts['session_id']
+        and all(type(capacity.get(key)) is int and capacity[key] == owned[key]
+                for key in ('actor_unit', 'surface_index', 'force_index'))
+        and capacity.get('quality') == 'normal' and capacity.get('inventory') == 'character_main'
+        and capacity.get('item') == 'iron-ore'
+        and step.action == 'factory_extract' and step.effect == 'transfer' and step.costs == {}
+        and step.verification is None and step.item == ''
+        and type(step.threshold) is int and step.threshold == 0
+        and set(p) == {'role', 'item', 'quantity', 'receipt'} and p['role'] == ROLE and p['item'] == 'iron-ore'
+        and proof.get('source_role') == ROLE and type(proof.get('source_unit')) is int
+        and proof['source_unit'] == owned['chest_unit'] and proof.get('binding_id') == owned['binding_id']
+        and proof.get('planned_pickup_quantity') == p['quantity']
+        and type(proof.get('planned_pickup_quantity')) is int
+        and p['receipt'] == proof.get('planned_native_receipt_id') == f'{tick}:factory_extract:{ROLE}:iron-ore'
+        and type(proof.get('inventory_now')) is int and proof['inventory_now'] == inventory.get('iron-ore', 0)
+        and proof.get('basis') == 'recompiled_current_local_demand_and_owned_bootstrap_output'
+        and proof.get('native_pickup_and_inventory_delta_require_verification') is True
+        and proof.get('later_recipe_output_and_target_completion_unverified') is True
+        and row.get('work_scope') == intent.get('scope') == 'immediate'
+        and row.get('unknowns') == [] and row.get('reasons') == []
+        and row.get('requires_investment') is False
+        and local.get('ultimate_goal') == plan.goal
+        and (plan.materials or {}).get('local_objective') == local
+        and type(intent.get('observed_tick')) is int and intent['observed_tick'] == tick
+        and type(provenance.get('observed_tick')) is int and provenance['observed_tick'] == tick
+        and provenance.get('planner_item_path') == path and provenance.get('source_role') == ROLE
+        and type(provenance.get('source_unit')) is int and provenance['source_unit'] == owned['chest_unit']
+        and provenance.get('item') == 'iron-ore' and type(provenance.get('observed_output')) is int
+        and provenance['observed_output'] == output['iron-ore'])
+
+
 def _qualified_direct_parent_demand(plan, row, selected, facts) -> bool:
     """Check bindings before explaining a validated current gather purpose."""
     witness = row.get('direct_alternative_parent_demand_start_evidence')
@@ -1279,7 +1401,8 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 questions['candidate']['instructions'] += (
                     f" For {pointer}:" + direct_parent_hint)
             candidate_local = _qualified_candidate_local_raw_demand(plan, facts, row, evidence)
-            candidate_target = row["local_target"]["item"] if candidate_local else target
+            bootstrap_local = _qualified_bootstrap_output_pickup(plan, facts, row)
+            candidate_target = row["local_target"]["item"] if candidate_local or bootstrap_local else target
             candidate_objective = "this candidate's local_target" if candidate_local else objective
             raw = row.get('raw_prerequisite')
             raw_path = raw.get('planner_item_path') if isinstance(raw, dict) else None
@@ -1332,7 +1455,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 and type(gather_parameters.get('quantity')) is int
                 and gather_parameters['quantity'] == (
                     gather_step.threshold - gather_start['resource_inventory_now']))
-            candidate_local = candidate_local and qualified_raw_gather
+            candidate_local = (candidate_local and qualified_raw_gather) or bootstrap_local
             candidate_objective = "this candidate's local_target" if candidate_local else objective
             candidate_context_hint = (
                 " Recompiled parent demand supports recipe input; science output and route flow remain unverified."
@@ -2252,14 +2375,25 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     "Raw input is partial progress, not kit completion, science output, route flow or blocker removal. "
                     "Missing, stale, mismatched or contrary evidence means unsupported. "
                     "Judge independently; native verification is required.")
+                if bootstrap_local:
+                    questions[plan.id + '/useful_progress']['instructions'] = (
+                        f'For {pointer}, use `candidate_evidence[{json.dumps(plan.id)}]` '
+                        'and its bootstrap_output_pickup_start_evidence to judge this row local_target. '
+                        'Collecting observed owned raw stock is partial recipe-input progress; '
+                        'it is not historical placement proof, completed pickup, recipe output, '
+                        'route flow or blocker removal. Native receipt and inventory-delta verification '
+                        'are required; missing, stale, mismatched or contrary evidence means unsupported.')
             questions[plan.id + "/benefit"] = {
                 "type": "score",
                 "instructions": (
                     f"How directly do the steps in {pointer} advance `{candidate_objective}` "
                     "given `facts`, current `candidate_evidence`, and `execution_contract`? Do not demand a full-game plan "
-                    "from one bounded local production action. A current "
-                    "`raw_prerequisite` is evidence that gathering supplies an input to "
-                    "the named native recipe, not that the later craft already happened."
+                    "from one bounded local production action. "
+                    + ("`bootstrap_output_pickup_start_evidence` binds observed owned raw stock "
+                       "to a current recipe-input need; pickup and later output remain unverified."
+                       if bootstrap_local else
+                       "A current `raw_prerequisite` is evidence that gathering supplies an input to "
+                       "the named native recipe, not that the later craft already happened.")
                     + candidate_context_hint
                     + contribution_hint
                     + local_target_completion_hint

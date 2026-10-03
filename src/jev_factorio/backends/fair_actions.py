@@ -307,7 +307,8 @@ class FairActions:
         raise NativePathNotFound("No native route to any bounded build approach")
 
     def place_entity(self, prototype: Any, position: Any, direction: Any,
-                     exact: bool = False, connector: tuple[str, int] | None = None) -> Any:
+                     exact: bool = False, connector: tuple[str, int] | None = None,
+                     bootstrap_owned: bool = False) -> Any:
         from fle.env import Position
 
         name = prototype.value[0]
@@ -319,7 +320,7 @@ class FairActions:
         self.approach_build(Position(**target), name, direction_value)
         result = (self.call("connector_place", connector[0], connector[1],
                             name, target, direction_value) if connector else
-                  self.call("place", name, target, direction_value))
+                  self.call("bootstrap_place" if bootstrap_owned else "place", name, target, direction_value))
         return SimpleNamespace(
             name=result["name"], position=Position(**result["position"]),
             unit_number=result.get("unit_number"),

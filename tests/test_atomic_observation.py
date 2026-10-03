@@ -52,10 +52,13 @@ def setup(monkeypatch, craft=False):
             calls.append(command)
             snapshot_payload = copy.deepcopy(payload)
             capacity_payload = snapshot_payload.pop('_receiver_input_capacity_payload', None)
+            bootstrap_payload = snapshot_payload.pop('_bootstrap_output_payload', None)
             response = 'JEV_SNAPSHOT|' + json.dumps(snapshot_payload)
             if capacity_payload is not None:
                 from jev_factorio.backends.native_input_capacity import MARKER
                 response += '\n' + MARKER + json.dumps(capacity_payload)
+            if bootstrap_payload is not None:
+                response += '\nJEV_BOOTSTRAP_OUTPUT|' + json.dumps(bootstrap_payload)
             return response
     backend = FleBackend()
     backend.consolidated_observations = True

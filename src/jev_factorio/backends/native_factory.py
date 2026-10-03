@@ -53,11 +53,25 @@ class NativeFactory:
     def approach(self, position: Any) -> None:
         self.backend._fair.approach(position)
 
-    def approach_role(self, role: str) -> None:
+    def approach_role(self, role: str, *, bootstrap_parameters=None) -> None:
         from fle.env import Position
 
+        preflight = ''
+        if bootstrap_parameters is not None:
+            from ..bootstrap_output import ROLE
+            if role != ROLE:
+                raise ValueError('Bootstrap preflight cannot authorize another endpoint')
+            item = json.dumps(bootstrap_parameters['item'])
+            receipt = json.dumps(bootstrap_parameters['receipt'])
+            quantity = str(bootstrap_parameters['quantity'])
+            preflight = (
+                'local output=assert(storage.bootstrap_output_v1.observe());'
+                'assert(not output.native_pending and output.role==' + json.dumps(ROLE) + ');'
+                'assert(' + item + '=="iron-ore" and output.output["iron-ore"]>=' + quantity
+                + ' and output.capacity.count>=' + quantity + ');'
+                'assert(not storage.campaign.receipts[' + receipt + ']);')
         state = decode_native(self.command(
-            "local entity = storage.campaign.entities[" + json.dumps(role) + "]; "
+            preflight + "local entity = storage.campaign.entities[" + json.dumps(role) + "]; "
             "assert(entity and entity.valid); "
             "rcon.print(helpers.table_to_json({name=entity.name, position=entity.position}))"
         ))
@@ -310,6 +324,21 @@ class NativeFactory:
             self.call("configure", parameters["role"], parameters["recipe"])
             return f"Configured {parameters['role']}"
         if action in {"factory_insert", "factory_extract"}:
+            from ..bootstrap_output import ROLE as BOOTSTRAP_ROLE
+            if parameters['role'] == BOOTSTRAP_ROLE:
+                if action != 'factory_extract':
+                    raise ValueError('Bootstrap output only permits bounded raw ore pickup')
+                from .native_attachment import require_asset
+                attachment = getattr(self.backend, '_native_attachment', None)
+                if attachment is None or not require_asset(attachment, 'bootstrap_output_v1'):
+                    raise RuntimeError('Bootstrap pickup requires its qualified native attachment')
+                with phase('approach', trace):
+                    self.approach_role(parameters['role'], bootstrap_parameters=parameters)
+                with phase('transfer_rpc', trace):
+                    self.command('storage.bootstrap_output_v1.extract('
+                        + json.dumps(parameters['item']) + ',' + str(parameters['quantity'])
+                        + ',' + json.dumps(parameters['receipt']) + ')')
+                return f"Collected {parameters['quantity']} native bootstrap ore ({parameters['receipt']})"
             with phase("approach", trace):
                 self.approach_role(parameters["role"])
             with phase("transfer_rpc", trace):

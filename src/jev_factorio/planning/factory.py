@@ -66,12 +66,17 @@ class FactoryPlanner:
         quantity = min(200, math.ceil(quantity))
         action = "factory_extract" if extracting else "factory_insert"
         receipt = f"{self.snapshot.tick}:{action}:{role}:{item}"
+        identity = None
+        from ..bootstrap_output import ROLE
+        if extracting and role == ROLE:
+            identity = f"bootstrap:{self.entities[role]['unit_number']}:{item}:{quantity}"
         return self._plan(
             action, "transfer", parameters={"role": role, "item": item,
                                            "quantity": quantity, "receipt": receipt},
             costs={} if extracting else {item: quantity},
             description=f"{'Collect' if extracting else 'Deliver'} {quantity} {item} "
                         f"{'from' if extracting else 'to'} {role}",
+            identity=identity,
         )
 
     def _recipe(self, item, path):
@@ -115,6 +120,15 @@ class FactoryPlanner:
         network_sources = private_source_roles(self.snapshot)
         candidates = []
         for role, machine in sorted(self.entities.items()):
+            useful_missing = missing
+            from ..bootstrap_output import ROLE, binding
+            if role == ROLE:
+                owned = binding(self.snapshot)
+                if owned is None or item != 'iron-ore':
+                    continue
+                useful_missing = min(missing, owned['capacity']['count'])
+                if useful_missing <= 0:
+                    continue
             if role in network_sources:
                 continue  # Do not strand a raw-material need behind an illegal pickup.
             if 'successors' in self.factory:
@@ -123,7 +137,7 @@ class FactoryPlanner:
                     continue  # Trial or preferred output needs the successor-aware planner.
             available = machine.get("output", {}).get(item, 0)
             if available:
-                candidates.append((role, machine, min(200, missing, available)))
+                candidates.append((role, machine, min(200, useful_missing, available)))
         if not candidates:
             return None
         if len(candidates) > 1:
@@ -180,6 +194,15 @@ class FactoryPlanner:
                         'source_unit': machine['unit_number'],
                         'item': item,
                         'observed_output': machine.get('output', {}).get(item),
+                    }})
+            from ..bootstrap_output import ROLE, binding
+            if role == ROLE and binding(self.snapshot) is not None:
+                pickup = replace(pickup, materials={**(pickup.materials or {}),
+                    'bootstrap_output_pickup': {
+                        'observed_tick': self.snapshot.tick,
+                        'planner_item_path': item_path,
+                        'source_role': role, 'source_unit': machine['unit_number'],
+                        'item': item, 'observed_output': machine.get('output', {}).get(item),
                     }})
             return pickup
         if item in RAW_ITEMS:
