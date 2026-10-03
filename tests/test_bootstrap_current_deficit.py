@@ -26,6 +26,8 @@ def frontier():
     plans=MiningOutpostPlanner(catalog,snapshot,'rocket_launch').candidates()
     rows=candidate_evidence(snapshot,catalog,plans)
     state=deepcopy(actual['state']);state['facts']=snapshot.for_jev();state['candidate_evidence']=rows
+    from jev_factorio.planning.bootstrap_chain import catalog_projection
+    state['facts']['factory']['recipe_dependency_catalog'] = catalog_projection(snapshot,catalog,plans)
     for key in ('acceptance_runtime','consumed','observation_snapshot_schema','observation_query_bounds','inventory_insertable_evidence','receipts','connectors'):state['facts']['factory'].pop(key,None)
     return snapshot,catalog,plans,rows,state
 
@@ -85,7 +87,9 @@ def test_stock_headroom_and_carried_bounds(stock,headroom,carried):
             assert d['carried_inventory']==carried
             assert d['carried_deficit']==d['required_carried_quantity']-carried
             assert d['planned_pickup_quantity']==min(200,stock,headroom,d['carried_deficit'])
-            assert _qualified_bootstrap_output_pickup(plan,snapshot.for_jev(),rows[plan.id])
+            from jev_factorio.planning.bootstrap_chain import catalog_projection
+            facts=snapshot.for_jev();facts['factory']['recipe_dependency_catalog']=catalog_projection(snapshot,catalog,plans)
+            assert _qualified_bootstrap_output_pickup(plan,facts,rows[plan.id])
     assert qualified>=1
 
 @pytest.mark.parametrize('path',[None,[],['iron-ore']])

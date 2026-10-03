@@ -1801,6 +1801,10 @@ class HierarchicalLoop(AgentLoop):
                 self._trace_decision()
             else:
                 facts = self._model_facts(snapshot)
+                if self.catalog is not None and any(
+                        isinstance((plan.materials or {}).get('bootstrap_output_pickup'), dict) for plan in plans):
+                    from .planning.bootstrap_chain import catalog_projection
+                    facts['factory']['recipe_dependency_catalog'] = catalog_projection(snapshot, self.catalog, plans)
                 if facts["factory"]:
                     receipts = facts["factory"].pop("receipts", {})
                     facts["factory"].pop("connectors", None)
