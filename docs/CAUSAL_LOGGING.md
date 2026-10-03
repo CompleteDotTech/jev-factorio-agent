@@ -234,3 +234,31 @@ supervisor intervention are part of these tests.
 Report local tests separately from the hosted Python 3.10/3.12 and Chromium gates.
 Passing offline tests does not establish native
 rocket completion, provider latency, or durability under every power-loss scenario.
+
+
+Wait delta writers choose the smallest canonical encoding among the existing
+inline, reference and recursive typed nodes. Small unchanged values can cost
+less inline than a path and SHA256 reference; changed small objects can also
+cost less inline than one node per field. Reconstruction still returns the
+complete original typed JSON record. The version, decoder grammar, checksums,
+source/session scope, 12-row and 512 KiB anchor windows, and reconstruction
+limits are unchanged. Model, action and research records retain their existing
+full-record behavior. Size savings depend on the recorded workload and do not
+establish native latency or throughput improvement.
+
+
+An offline replay of seven retained native gameplay records (one verified
+pickup, one blocked decision and five waits) used the same compact physical
+serializer and identical writer/reader limits for the baseline and change.
+Every decoded record matched its original canonical typed JSON bytes.
+
+| Replay | Total physical bytes | Five wait rows emitted as deltas |
+| --- | ---: | ---: |
+| Previous encoding | 1,279,611 | 3 |
+| Minimum-cost typed nodes | 651,690 | 5 |
+
+Changed wait lines were 48,182–48,746 bytes in this replay. The original native
+log uses different full-record serialization, so these paired replay totals
+must not be reported as a deployed native before/after measurement. This is
+retained-data size and reconstruction evidence, not a latency, throughput or
+live deployment result. Full records still anchor the bounded reference window.

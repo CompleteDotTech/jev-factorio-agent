@@ -435,3 +435,59 @@ def test_dashboard_wait_without_source_identity_stays_full():
     second = encoder.prepare(second_row, wait=True)
     assert not first.is_delta
     assert not second.is_delta
+
+
+@pytest.mark.parametrize("value", [None, True, False, 0, 1, 1.0, -0.0, "", "çŸ­", [], {}, [True, 1, 1.0, -0.0]])
+def test_small_equal_subtrees_inline_without_losing_json_types(value):
+    patch = codec._patch(value, copy.deepcopy(value), ["deep", "path", 12])
+    assert patch == {"k": "v", "v": value}
+    assert codec.canonical(codec._apply(patch, value, value)) == codec.canonical(value)
+
+
+@pytest.mark.parametrize("before,after", [(True, 1), (1, 1.0), (0.0, -0.0), ("1", 1)])
+def test_minimum_cost_patch_preserves_changed_scalar_type(before, after):
+    patch = codec._patch(after, before, ["value"])
+    assert patch["k"] == "v"
+    assert codec.canonical(codec._apply(patch, before, before)) == codec.canonical(after)
+
+
+def test_mixed_patch_uses_large_references_and_small_inline_nodes():
+    base = {"large": {"facts": ["recipe"] * 400}, "small": True,
+            "list": [1, -0.0, {"x": 2}], "remove": "old"}
+    current = copy.deepcopy(base)
+    current["list"][2]["x"] = 3
+    current.pop("remove")
+    current["new"] = {"value": 1.0}
+    patch = codec._patch(current, base, [])
+    assert patch["k"] == "o" and patch["f"]["large"]["k"] == "r"
+    assert patch["f"]["small"]["k"] == "v"
+    assert patch["f"]["list"]["k"] == "v"
+    assert codec.canonical(codec._apply(patch, base, base)) == codec.canonical(current)
+    assert len(codec.canonical(patch)) < len(codec.canonical(current)) // 4
+    corrupt = copy.deepcopy(patch)
+    corrupt["f"]["large"]["h"] = "0" * 64
+    with pytest.raises(ValueError, match="hash mismatch"):
+        codec._apply(corrupt, base, base)
+    corrupt = copy.deepcopy(patch)
+    corrupt["f"]["large"]["p"] = ["missing"]
+    with pytest.raises(ValueError, match="missing anchor path"):
+        codec._apply(corrupt, base, base)
+
+
+def test_small_changing_fact_maps_do_not_force_alternating_full_anchors():
+    encoder, decoder = Encoder("gameplay"), Decoder("gameplay")
+    rows = []
+    total = 0
+    for tick in range(1, 8):
+        row = gameplay(tick)
+        row["planning_diagnostics"] = {str(i): {"enabled": True, "count": i, "tick": tick}
+                                       for i in range(250)}
+        prepared = encoder.prepare(row, wait=tick > 1)
+        line = encode_line(prepared)
+        total += len(line)
+        assert decoder.decode(parse_json(line[:-1]), len(line)) == row
+        assert prepared.is_delta is (tick > 1)
+        encoder.commit(prepared, len(line))
+        rows.append(row)
+    assert total < sum(len(codec.canonical(row)) + 1 for row in rows)
+    assert encoder.bytes_since_anchor <= MAX_REFERENCE_BYTES
