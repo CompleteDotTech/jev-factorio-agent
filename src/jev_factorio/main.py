@@ -124,6 +124,11 @@ def cli() -> None:
     p.add_argument("--resume-controller", action="store_true")
     p.add_argument("--reevaluate-blocked-once", action="store_true",
                    help="Re-evaluate one exact blocked decision after the decision contract changes")
+    p.add_argument("--compatible-source-authorization", type=Path,
+                   help="One-use supervisor authority for equal-contract source recovery")
+    p.add_argument("--compatible-source-authorization-sha256")
+    p.add_argument("--compatible-source-lock-fd", type=int,
+                   help="Inherited original supervisor writer-lock descriptor")
     p.add_argument("--exact-checkpoint-sha256",
                    help="Exact starting controller checkpoint SHA-256 for blocked re-evaluation")
     p.add_argument("--blocked-source-revision",
@@ -173,6 +178,23 @@ def cli() -> None:
         p.error("--reconcile-only requires resumed hierarchical FLE background-work, "
                 "ready-work scheduling, and a checkpoint")
     persistent_checkpoint_capture = None
+    compatible_authorization = None
+    if args.compatible_source_authorization is not None:
+        if (not args.persist_recoverable_blocks or args.reevaluate_blocked_once
+                or args.compatible_source_authorization_sha256 is None
+                or args.compatible_source_lock_fd is None):
+            p.error("Compatible-source recovery requires persistent recovery, exact authority pin "
+                    "and original lock descriptor; changed-contract reevaluation is separate")
+        try:
+            from .compatible_recovery import read_authorization, require_writer_lock
+            compatible_authorization = read_authorization(
+                args.compatible_source_authorization, args.compatible_source_authorization_sha256)
+            require_writer_lock(args.compatible_source_lock_fd, compatible_authorization["lock_path"])
+        except (OSError, ValueError, KeyError) as error:
+            p.error(f"Compatible-source authority preflight failed: {error}")
+    elif (args.compatible_source_authorization_sha256 is not None
+          or args.compatible_source_lock_fd is not None):
+        p.error("Compatible-source pins require an explicit authorization file")
     if args.persist_recoverable_blocks:
         if (not args.until_complete or args.backend != "fle" or args.controller != "hierarchical"
                 or args.policy != "jev" or args.mock_model or not args.resume
@@ -200,14 +222,17 @@ def cli() -> None:
             import json
             from .blocked_persistence import validate_checkpoint_metadata
             from .provenance import gameplay_context
-            revision = gameplay_context().get("code_revision")
+            owner_context = gameplay_context()
+            revision = owner_context.get("code_revision")
             if not isinstance(revision, dict):
                 raise ValueError("a supervisor-pinned source revision is required")
             persistent_checkpoint_capture = Path(args.checkpoint).read_bytes()
             checkpoint_data = json.loads(persistent_checkpoint_capture.decode("utf-8"))
             validate_checkpoint_metadata(
                 checkpoint_data, revision,
-                allow_source_change=args.reevaluate_blocked_once)
+                allow_source_change=(args.reevaluate_blocked_once
+                                     or compatible_authorization is not None),
+                owner_context=owner_context)
             if (args.reevaluate_blocked_once
                     and (checkpoint_data.get("status") != "blocked"
                          or checkpoint_data.get("reason") not in {
@@ -517,6 +542,31 @@ def cli() -> None:
                 options.update(lead_time_supply=args.lead_time_supply,
                                coverage_margin_lookahead=args.coverage_margin_lookahead)
             if args.checkpoint and Path(args.checkpoint).is_file():
+                if compatible_authorization is not None:
+                    try:
+                        from .compatible_recovery import migrate_checkpoint
+                        from .provenance import gameplay_context
+                        context = gameplay_context()
+                        provider_identity = None
+                        if getattr(client, "uses_http_provider", False):
+                            from .provider_health import ProviderCircuit
+                            from .operational_safety import safety_dir
+                            # Validate the retained circuit before backend
+                            # attachment; its constructor does not dispatch.
+                            circuit = ProviderCircuit(client, safety_dir(Path(args.checkpoint)) / "provider.json")
+                            provider_identity = circuit.identity
+                        migrate_checkpoint(
+                            Path(args.checkpoint), compatible_authorization,
+                            loop_type.memory_type, context["code_revision"],
+                            {key: context[key] for key in ("run_id", "segment_id", "execution_id")},
+                            lock_fd=args.compatible_source_lock_fd,
+                            provider_identity_sha256=provider_identity)
+                        # The authorization is consumed before make_backend or
+                        # any native observation. Every later guard binds the
+                        # durably migrated bytes, not the old capture.
+                        persistent_checkpoint_capture = Path(args.checkpoint).read_bytes()
+                    except (OSError, ValueError, TypeError, KeyError) as error:
+                        p.error(f"Compatible-source migration failed; reconcile checkpoint before retry: {error}")
                 try:
                     import json
                     path = Path(args.checkpoint)
