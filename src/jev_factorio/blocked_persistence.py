@@ -732,6 +732,11 @@ def selection_attempts_for_state(memory, source_revision: dict, state_sha256: st
                 key = (row["source_revision"]["commit"], row["source_revision"]["source_sha256"],
                        row["decision_input_sha256"])
                 rows[key] = deepcopy(row)
+    from .paid_selection_reconciliation import scoped_representation_budget_rows
+    carried, _ = scoped_representation_budget_rows(memory,aliases,archive_index=archive_index)
+    for row in carried:
+        key=(row["source_revision"]["commit"],row["source_revision"]["source_sha256"],row["decision_input_sha256"])
+        rows[key]=deepcopy(row)
     result = [rows[key] for key in sorted(rows)]
     if len(result) > MAX_SELECTION_BATCHES_PER_STATE:
         raise ValueError("Persistent selection batch limit is exceeded for one state")
