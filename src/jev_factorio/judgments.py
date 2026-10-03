@@ -2238,15 +2238,20 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                 ),
             }
             if candidate_local:
+                context["execution_contract"] = context["execution_contract"].replace(
+                    "Judge the supplied local_objective when present; otherwise judge active_goal.",
+                    "For qualified candidate-local raw demand, judge that candidate's evidence row local_target; "
+                    "otherwise judge supplied local_objective or active_goal.")
                 questions["candidate"]["instructions"] += (
                     " Compare qualified candidate-local parent contributions separately from the kit target.")
+                questions[plan.id + "/useful_progress"]["criteria"]["useful"] = (
+                    "Current evidence supports progress toward this candidate's evidence row local_target")
                 questions[plan.id + "/useful_progress"]["instructions"] = (
                     f"For {pointer}, use `candidate_evidence[{json.dumps(plan.id)}]` "
-                    "to judge useful next-step progress toward its local_target after native verification. "
-                    "Judge current facts and raw-demand/start proof independently. "
+                    "to judge progress toward that row's local_target from current facts and raw-demand/start proof. "
                     "Raw input is partial progress, not kit completion, science output, route flow or blocker removal. "
                     "Missing, stale, mismatched or contrary evidence means unsupported. "
-                    "Native checks apply; other answers are unavailable.")
+                    "Judge independently; native verification is required.")
             questions[plan.id + "/benefit"] = {
                 "type": "score",
                 "instructions": (
