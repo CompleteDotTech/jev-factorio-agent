@@ -88,7 +88,8 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
         LEGACY_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE,
         WATER_ORIGIN_OBSERVATION_PROFILE,
     )
-    from ..bootstrap_output import PROFILE as BOOTSTRAP_PROFILE
+    from ..bootstrap_output import (PROFILE as BOOTSTRAP_PROFILE,
+                                   MANUAL_CYCLE_PROFILE as MANUAL_CYCLE_BOOTSTRAP_PROFILE)
 
     backend = native.backend
     attachment = getattr(backend, '_native_attachment', None)
@@ -100,7 +101,8 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
         if profile == LEGACY_OBSERVATION_PROFILE:
             expected_bounds = BOUNDS
         elif profile in {EXPANDED_OBSERVATION_PROFILE, WATER_ORIGIN_OBSERVATION_PROFILE,
-                         MANUAL_CYCLE_PROFILE, CLOSED_WORLD_PROFILE, BOOTSTRAP_PROFILE} or (
+                         MANUAL_CYCLE_PROFILE, CLOSED_WORLD_PROFILE, BOOTSTRAP_PROFILE,
+                         MANUAL_CYCLE_BOOTSTRAP_PROFILE} or (
                 profile is False and isinstance(installed, dict)):
             expected_bounds = EXPANDED_ANCHOR_BOUNDS
         else:
@@ -272,7 +274,7 @@ def observe_atomic(native: Any, snapshot: GameSnapshot) -> GameSnapshot:
             if (group == 'anchors' and item == 'water'
                     and (attachment is None or profile in {
                          WATER_ORIGIN_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE,
-                         CLOSED_WORLD_PROFILE, BOOTSTRAP_PROFILE}
+                         CLOSED_WORLD_PROFILE, BOOTSTRAP_PROFILE, MANUAL_CYCLE_BOOTSTRAP_PROFILE}
                          or profile is False)
                     and (x != math.floor(x) or y != math.floor(y))):
                 raise ValueError('Water-origin observer returned a non-tile anchor')

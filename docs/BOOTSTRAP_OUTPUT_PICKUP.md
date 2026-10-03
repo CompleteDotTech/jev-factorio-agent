@@ -11,6 +11,17 @@ unique drop-position chest to `bootstrap-output:iron-ore`. Its existing
 unchanged. Native installation records add the capability asset and profile;
 the original attachment receipt remains an immutable historical input.
 
+Installation preserves the qualified base profile. The V5 connector-observer
+profile maps to its explicit V5 plus bootstrap profile; its fifteen original
+assets and callbacks remain pinned, and `coal_manual_cycle_v2` remains absent.
+The V6 connector-observer profile maps separately to the V6 plus bootstrap
+profile and retains its installed cycle module. Neither mapping upgrades V5 to
+V6. Completed paid connector routes remain intact; ambiguous or pending native
+work still blocks installation. The existing V5-to-V6 migration's empty-route
+guard is unchanged. Legacy V5 profiles without the qualified observer bridge,
+unknown profiles and already installed bootstrap profiles cannot be adopted by
+this installer.
+
 ## Ownership and observation
 
 Future bootstrap construction records native item consumption and actual drill

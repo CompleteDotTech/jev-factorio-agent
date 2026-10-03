@@ -16,7 +16,8 @@ from importlib.resources import files
 from pathlib import Path
 
 from ..iteration_timing import decode_native
-from ..bootstrap_output import MODULE as BOOTSTRAP_MODULE, PROFILE as BOOTSTRAP_PROFILE
+from ..bootstrap_output import (MODULE as BOOTSTRAP_MODULE, PROFILE as BOOTSTRAP_PROFILE,
+                                MANUAL_CYCLE_PROFILE as MANUAL_CYCLE_BOOTSTRAP_PROFILE)
 
 
 # These bytes were installed from main e759462 in the isolated native fixture.
@@ -556,8 +557,9 @@ def readback(client, *, receipt_path=None, connector_witness_path=None,
                                      else PINNED_ASSETS.get(name))
                            for name, value in native['assets'].items())):
                 raise RuntimeError('Observation migration profile requires reconciliation')
-        elif profile == MANUAL_CYCLE_PROFILE:
+        elif profile in {MANUAL_CYCLE_PROFILE, MANUAL_CYCLE_BOOTSTRAP_PROFILE}:
             if (result['modules']['connector_ownership'] is not True
+                    or result['modules'][BOOTSTRAP_MODULE] != (profile == MANUAL_CYCLE_BOOTSTRAP_PROFILE)
                     or result['modules']['successors']
                     or result['modules']['coal_manual_journal_v1'] is not True
                     or result['modules']['coal_manual_cycle_v2'] is not False
@@ -572,6 +574,8 @@ def readback(client, *, receipt_path=None, connector_witness_path=None,
                                      else connector_ownership_sha256() if name == 'connector_ownership'
                                      else manual_journal_sha256() if name == 'coal_manual_journal_v1'
                                      else connector_observer_bridge_sha256() if name == 'connector_observer_bridge_v1'
+                                     else hashlib.sha256(_asset_source(BOOTSTRAP_MODULE).read_bytes()).hexdigest()
+                                         if name == BOOTSTRAP_MODULE and profile == MANUAL_CYCLE_BOOTSTRAP_PROFILE
                                      else PINNED_ASSETS.get(name))
                            for name, value in native['assets'].items())):
                 raise RuntimeError('Manual-cycle migration profile requires reconciliation')
@@ -630,7 +634,7 @@ def readback(client, *, receipt_path=None, connector_witness_path=None,
             if profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE,
                            WATER_ORIGIN_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE,
                            LEGACY_MANUAL_CYCLE_PROFILE,
-                           CLOSED_WORLD_PROFILE, BOOTSTRAP_PROFILE} \
+                           CLOSED_WORLD_PROFILE, BOOTSTRAP_PROFILE, MANUAL_CYCLE_BOOTSTRAP_PROFILE} \
                     and name not in {'observation_v2', 'connector_ownership',
                                      'coal_manual_journal_v1', 'coal_manual_cycle_v2',
                                      'connector_observer_bridge_v1'}:
@@ -689,7 +693,7 @@ def require_asset(attachment, name):
                 and profile in {LEGACY_OBSERVATION_PROFILE, EXPANDED_OBSERVATION_PROFILE,
                                 WATER_ORIGIN_OBSERVATION_PROFILE, MANUAL_CYCLE_PROFILE,
                                 LEGACY_MANUAL_CYCLE_PROFILE,
-                                 CLOSED_WORLD_PROFILE, BOOTSTRAP_PROFILE}
+                                 CLOSED_WORLD_PROFILE, BOOTSTRAP_PROFILE, MANUAL_CYCLE_BOOTSTRAP_PROFILE}
                 and name in PINNED_ASSETS
                 and name not in {'observation_v2', 'connector_ownership',
                                  'coal_manual_journal_v1', 'coal_manual_cycle_v2',

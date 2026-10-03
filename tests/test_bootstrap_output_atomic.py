@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from jev_factorio.bootstrap_output import MODULE, PROFILE, ROLE, binding
+from jev_factorio.bootstrap_output import MODULE, PROFILE, ROLE, binding, MANUAL_CYCLE_PROFILE
 from jev_factorio.state import GameSnapshot
 from jev_factorio.observation import profile_backend
 from test_atomic_observation import setup
@@ -35,8 +35,10 @@ def prepared(monkeypatch,tmp_path):
     return backend,native,payload,calls
 
 
-def test_ownership_stock_and_capacity_arrive_in_one_validated_native_command(monkeypatch,tmp_path):
+@pytest.mark.parametrize('profile', [PROFILE, MANUAL_CYCLE_PROFILE])
+def test_ownership_stock_and_capacity_arrive_in_one_validated_native_command(monkeypatch,tmp_path,profile):
     backend,native,payload,calls=prepared(monkeypatch,tmp_path)
+    backend._native_attachment['native_installation']['profile']=profile
     state=backend.observe()
     assert len(calls)==1 and 'JEV_BOOTSTRAP_OUTPUT|' in calls[0]
     assert binding(state)['capacity']['count']==17 and state.iron_ore_collected==33
