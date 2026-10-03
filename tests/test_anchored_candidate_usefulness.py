@@ -57,7 +57,9 @@ def test_native064_usefulness_branch_identifies_plan_and_evidence_without_questi
     assert packet["candidate_plans"][plan_id]["steps"][0]["parameters"]["quantity"] == 20
     assert packet["candidate_evidence"][evidence_id]["local_target"]["item"] == "automation-science-pack"
     assert packet["candidate_evidence"][evidence_id]["candidate_local_raw_demand"]["tick"] == snapshot.tick
-    assert branch["criteria"] == captured["questions"][manual.id + "/useful_progress"]["criteria"]
+    assert branch["criteria"]["useful"] == (
+        "Current evidence supports progress toward this candidate's evidence row local_target")
+    assert branch["criteria"]["unsupported"] == captured["questions"][manual.id + "/useful_progress"]["criteria"]["unsupported"]
     assert len(json.dumps({"state": packet, "questions": questions},
                           ensure_ascii=False, allow_nan=False).encode()) < 48000
     for other in (offered[0], offered[2]):
