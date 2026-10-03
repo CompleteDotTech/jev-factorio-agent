@@ -37,12 +37,10 @@ def test_actual074_prospective_pickup_has_current_proof_without_future_receipt()
         old = captured['questions'][plan.id+'/useful_progress']['instructions']
         assert 'verification are required; missing' in old
         new = questions[plan.id+'/useful_progress']['instructions']
-        assert 'IF its native receipt and fresh inventory delta verify' in new
-        assert 'their absence alone is not contrary start evidence' in new
-        assert 'CURRENT ownership' in new and 'stock, headroom or recipe-demand evidence means unsupported' in new
-        assert 'facts.factory.bootstrap_output.output' in new
-        assert 'Execution and success still require native verification' in new
-        for suffix in ('/benefit','/disruption','/needs_observation'):
+        # Recorded pre-projection proof remains unchanged and cannot claim the new scoped contract.
+        assert 'current_raw_demand' not in packet['candidate_evidence'][plan.id]['bootstrap_output_pickup_start_evidence']
+        assert 'their absence alone is not contrary start evidence' not in new
+        for suffix in ('/disruption','/needs_observation'):
             assert questions[plan.id+suffix] == captured['questions'][plan.id+suffix]
     assert state == before
     assert len(json.dumps({'state':packet,'questions':questions},ensure_ascii=False,allow_nan=False).encode()) <= 48000

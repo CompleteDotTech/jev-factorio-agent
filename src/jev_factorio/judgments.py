@@ -424,10 +424,60 @@ def _qualified_bootstrap_output_pickup(plan, facts, row):
         return False
     if set(proof) != {'schema', 'observed_tick', 'session_id', 'catalog_version',
             'source_role', 'source_unit', 'binding_id', 'ownership_sha256',
-            'planner_item_path', 'inventory_now', 'planned_pickup_quantity',
+            'planner_item_path', 'inventory_now', 'current_raw_demand', 'planned_pickup_quantity',
             'planned_native_receipt_id', 'basis',
             'native_pickup_and_inventory_delta_require_verification',
             'later_recipe_output_and_target_completion_unverified'}:
+        return False
+    demand = proof.get('current_raw_demand')
+    provenance_row = (plan.materials or {}).get('bootstrap_output_pickup')
+    provenance_demand = provenance_row.get('current_raw_demand') if isinstance(provenance_row, dict) else None
+    if (not isinstance(demand, dict) or demand != provenance_demand
+            or set(demand) != {'schema', 'item', 'observed_tick', 'session_id',
+                'required_carried_quantity', 'carried_inventory', 'carried_deficit',
+                'scope', 'direct_recipe', 'direct_product', 'owned_source_stock', 'inventory_headroom', 'planned_pickup_quantity', 'accounting'}
+            or any(type(demand.get(key)) is not int for key in ('schema', 'observed_tick',
+                'required_carried_quantity', 'carried_inventory', 'carried_deficit',
+                'owned_source_stock', 'inventory_headroom', 'planned_pickup_quantity'))
+            or demand['schema'] != 1 or demand['item'] != 'iron-ore'
+            or demand['observed_tick'] != facts.get('tick')
+            or demand['session_id'] != facts.get('session_id')
+            or demand['carried_inventory'] != facts.get('inventory', {}).get('iron-ore', 0)
+            or demand['carried_deficit'] != demand['required_carried_quantity'] - demand['carried_inventory']
+            or demand['carried_deficit'] <= 0
+            or demand['accounting'] != 'carried_deficit_before_owned_stock_allocation'
+            or demand['scope'] != 'next_recursive_recipe_input_batch'
+            or not isinstance(proof.get('planner_item_path'), list)
+            or len(proof['planner_item_path']) < 2
+            or demand['direct_product'] != proof['planner_item_path'][-2]
+            or not isinstance(demand['direct_recipe'], dict)):
+        return False
+    try:
+        from .planning.catalog import Catalog
+        recipe = demand['direct_recipe']
+        if (type(recipe.get('enabled')) is not bool or type(recipe.get('hidden', False)) is not bool
+                or recipe.get('hidden', False) or not isinstance(recipe.get('name'), str)
+                or not isinstance(recipe.get('category'), str)
+                or not all(isinstance(recipe.get(key), list) and recipe[key]
+                           and all(isinstance(entry, dict)
+                                   and isinstance(entry.get('name'), str)
+                                   and entry.get('type') == 'item'
+                                   and type(entry.get('amount')) in (int, float)
+                                   and math.isfinite(entry['amount']) and entry['amount'] > 0
+                                   for entry in recipe[key])
+                           for key in ('ingredients', 'products'))):
+            return False
+        catalog = Catalog(proof['catalog_version'], {recipe['name']: recipe}, {}, {}, {})
+        current_recipe = catalog.recipe_for(demand['direct_product'])
+        if (not catalog.enabled(current_recipe, facts.get('researched', []))
+                or not any(entry.get('type') == 'item' and entry.get('name') == 'iron-ore'
+                           and type(entry.get('amount')) in (int, float) and entry['amount'] > 0
+                           for entry in current_recipe['ingredients'])
+                or not any(entry.get('type') == 'item' and entry.get('name') == demand['direct_product']
+                           and entry.get('probability', 1) == 1 and entry.get('amount', 0) > 0
+                           for entry in current_recipe['products'])):
+            return False
+    except (KeyError, TypeError, ValueError, IndexError, ArithmeticError):
         return False
     owned = factory.get('bootstrap_output')
     entities = factory.get('entities')
@@ -513,6 +563,9 @@ def _qualified_bootstrap_output_pickup(plan, facts, row):
         and set(p) == {'role', 'item', 'quantity', 'receipt'} and p['role'] == ROLE and p['item'] == 'iron-ore'
         and proof.get('source_role') == ROLE and type(proof.get('source_unit')) is int
         and proof['source_unit'] == owned['chest_unit'] and proof.get('binding_id') == owned['binding_id']
+        and demand['owned_source_stock'] == output['iron-ore']
+        and demand['inventory_headroom'] == capacity['count']
+        and demand['planned_pickup_quantity'] == p['quantity'] == min(200, demand['carried_deficit'], output['iron-ore'], capacity['count'])
         and proof.get('planned_pickup_quantity') == p['quantity']
         and type(proof.get('planned_pickup_quantity')) is int
         and p['receipt'] == proof.get('planned_native_receipt_id') == f'{tick}:factory_extract:{ROLE}:iron-ore'
@@ -2380,7 +2433,7 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                         f'For {pointer}, use `candidate_evidence[{json.dumps(plan.id)}]` '
                         'and its bootstrap_output_pickup_start_evidence: would the next pickup advance '
                         'this row local_target IF its native receipt and fresh inventory delta verify? '
-                        'Read current stock and headroom in facts.factory.bootstrap_output.output and '
+                        'Read current_raw_demand for the next scoped recipe-input batch: required carried quantity, carried inventory, deficit, owned stock, headroom and pickup. Allocation-ledger remaining is not carried inventory. Read current stock and headroom in facts.factory.bootstrap_output.output and '
                         'capacity, and the proof planner_item_path and planned_pickup_quantity. '
                         'Collecting owned raw stock can supply a bounded recipe prerequisite; '
                         'judge prospective usefulness separately from completion. An unexecuted pickup '
