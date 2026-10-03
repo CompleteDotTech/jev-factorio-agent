@@ -15,6 +15,38 @@ _BLOCKED_REEVALUATION_REASONS = frozenset({
 })
 
 
+def _history_partition(history: object) -> tuple[list[dict], list[dict]]:
+    if not isinstance(history, list) or any(not isinstance(row, dict) for row in history):
+        raise ValueError("Invalid checkpoint history")
+    administrative = [row for row in history if row.get("kind") == "paid_duplicate_selection_reconciled"]
+    ordinary = [row for row in history if row.get("kind") != "paid_duplicate_selection_reconciled"]
+    if len(administrative) > 1 or len(ordinary) > 64:
+        raise ValueError("Invalid bounded ordinary or administrative history")
+    return ordinary, administrative
+
+
+def ordinary_history(history: object, *, session_id=None, target=None) -> list[dict]:
+    """Keep ordinary64 unchanged; exclude only one complete signed administrative scope."""
+    ordinary, administrative = _history_partition(history)
+    if administrative:
+        from .paid_selection_reconciliation import authenticate_representation_history_receipt
+        row = administrative[0]
+        carry = row.get("budget_carry")
+        if not isinstance(carry, dict):
+            raise ValueError("Invalid governed administrative history")
+        authenticate_representation_history_receipt(row,
+            carry.get("session_id") if session_id is None else session_id,
+            carry.get("target") if target is None else target)
+    return ordinary
+
+
+def validate_history_authority(memory, *, archive_index=None) -> None:
+    _, administrative = _history_partition(memory.history)
+    if administrative:
+        from .paid_selection_reconciliation import validate_representation_budget_carry
+        validate_representation_budget_carry(memory, administrative[0], archive_index=archive_index)
+
+
 @dataclass
 class CampaignMemory:
     session_id: str
@@ -46,8 +78,18 @@ class CampaignMemory:
     compatible_source_recoveries: list[dict] = field(default_factory=list)
 
     def event(self, kind: str, **details) -> None:
-        self.history.append({"kind": kind, **details})
-        self.history = self.history[-64:]
+        validate_history_authority(self, archive_index=getattr(self, "_blocked_recovery_archive_index", None))
+        proposed = [*self.history, {"kind": kind, **details}]
+        # Validate new administrative authority before any history mutation.
+        administrative = [row for row in proposed if row.get("kind") == "paid_duplicate_selection_reconciled"]
+        if len(administrative) > 1:
+            raise ValueError("Duplicate governed administrative history")
+        if kind == "paid_duplicate_selection_reconciled":
+            from .paid_selection_reconciliation import validate_representation_budget_carry
+            validate_representation_budget_carry(self, administrative[0],
+                archive_index=getattr(self, "_blocked_recovery_archive_index", None))
+        ordinary = [row for row in proposed if row.get("kind") != "paid_duplicate_selection_reconciled"]
+        self.history = ordinary[-64:] + administrative
 
     def reserve(self, owner: str, costs: dict[str, float], inventory: dict[str, int]) -> None:
         costs = quantities(costs)
@@ -73,6 +115,13 @@ class CampaignMemory:
         if memory.blocked_recovery_archive is not None:
             from .blocked_recovery_archive import build_index
             memory._blocked_recovery_archive_index = build_index(path, memory)
+        try:
+            validate_history_authority(memory, archive_index=getattr(memory, "_blocked_recovery_archive_index", None))
+        except BaseException:
+            index = getattr(memory, "_blocked_recovery_archive_index", None)
+            if index is not None:
+                index.close()
+            raise
         return memory
 
     @classmethod
@@ -116,6 +165,7 @@ class CampaignMemory:
             if memory.connector_ownership is not None:
                 from .connector_checkpoint import validate_binding
                 validate_binding(memory.connector_ownership, session_id)
+            ordinary_history(memory.history, session_id=session_id, target=target)
             order = goal_order(target)
             if (memory.last_tick < -1 or memory.active_goal not in [None, *order]
                     or not set(memory.completed_goals).issubset(order)
@@ -123,7 +173,7 @@ class CampaignMemory:
                            for t in memory.completed_goals.values())
                     or any(type(n) is not int or n < 0 for n in memory.failures.values())
                     or type(memory.stalled_decisions) is not int or memory.stalled_decisions < 0
-                    or len(memory.history) > 64 or not all(isinstance(e, dict) for e in memory.history)):
+                    or not all(isinstance(e, dict) for e in memory.history)):
                 raise ValueError("Invalid checkpoint receipts or counters")
             if memory.capital_investment is not None:
                 from .planning.capital import MARKER, matches, validate_state
@@ -288,4 +338,11 @@ def load_checkpoint(path: Path, session_id: str, target: str) -> CampaignMemory:
     if memory.blocked_recovery_archive is not None:
         from .blocked_recovery_archive import build_index
         memory._blocked_recovery_archive_index = build_index(path, memory)
+    try:
+        validate_history_authority(memory, archive_index=getattr(memory, "_blocked_recovery_archive_index", None))
+    except BaseException:
+        index = getattr(memory, "_blocked_recovery_archive_index", None)
+        if index is not None:
+            index.close()
+        raise
     return memory
