@@ -1,0 +1,98 @@
+{
+  "candidate": {
+    "choice": "factory:factory_extract:bootstrap:2545:iron-ore:7",
+    "confidence": 0.24,
+    "probabilities": {
+      "factory:factory_extract:bootstrap:2545:iron-ore:7": 0.49,
+      "factory:factory_insert:recipe:iron-plate": 0.2,
+      "observe": 0.31
+    },
+    "type": "choice"
+  },
+  "factory:factory_extract:bootstrap:2545:iron-ore:7/benefit": {
+    "confidence": 0.55,
+    "legend": {
+      "0": "No demonstrated contribution to the bounded production objective",
+      "1": "Makes useful partial progress through useful inputs, a current planner-linked intermediate craft, an immediate planner-linked research prerequisite backed by same-tick evidence, or evidenced bounded capacity, but does not establish receipt-conditional closure of an observed local-target shortfall for a craft or fresh-inventory-conditional closure of one for a direct gather, and does not remove a separately evidenced current blocker or due starvation",
+      "2": "Same-tick qualified evidence shows the action would close the current local-target shortfall only after its native receipt verifies for a craft or fresh native postcondition verifies for a direct gather, or separate same-tick evidence shows it directly removes a specific observed blocker or due starvation"
+    },
+    "probabilities": {
+      "0": 0.02,
+      "1": 0.26,
+      "2": 0.72
+    },
+    "score": 1.7,
+    "type": "score"
+  },
+  "factory:factory_extract:bootstrap:2545:iron-ore:7/disruption": {
+    "confidence": 0.99,
+    "legend": {
+      "0": "Only moves, gathers resources, waits, fuels an existing machine, or handcrafts from carried inputs without changing existing entities",
+      "1": "Places new machinery or connectors, such as pipes, poles or belts, without removing any existing entity",
+      "2": "Stops, removes, or rebuilds existing factory infrastructure"
+    },
+    "probabilities": {
+      "0": 1.0,
+      "1": 0.0,
+      "2": 0.0
+    },
+    "score": 0.0,
+    "type": "score"
+  },
+  "factory:factory_extract:bootstrap:2545:iron-ore:7/needs_observation": {
+    "noul": 0.25,
+    "type": "noul"
+  },
+  "factory:factory_extract:bootstrap:2545:iron-ore:7/useful_progress": {
+    "choice": "useful",
+    "confidence": 0.32,
+    "probabilities": {
+      "unsupported": 0.34,
+      "useful": 0.66
+    },
+    "type": "choice"
+  },
+  "factory:factory_insert:recipe:iron-plate/benefit": {
+    "confidence": 0.63,
+    "legend": {
+      "0": "No demonstrated contribution to the bounded production objective",
+      "1": "Makes useful partial progress through useful inputs, a current planner-linked intermediate craft, an immediate planner-linked research prerequisite backed by same-tick evidence, or evidenced bounded capacity, but does not establish receipt-conditional closure of an observed local-target shortfall for a craft or fresh-inventory-conditional closure of one for a direct gather, and does not remove a separately evidenced current blocker or due starvation",
+      "2": "Same-tick qualified evidence shows the action would close the current local-target shortfall only after its native receipt verifies for a craft or fresh native postcondition verifies for a direct gather, or separate same-tick evidence shows it directly removes a specific observed blocker or due starvation"
+    },
+    "probabilities": {
+      "0": 0.14,
+      "1": 0.75,
+      "2": 0.11
+    },
+    "score": 0.97,
+    "type": "score"
+  },
+  "factory:factory_insert:recipe:iron-plate/disruption": {
+    "confidence": 0.91,
+    "legend": {
+      "0": "Only moves, gathers resources, waits, fuels an existing machine, or handcrafts from carried inputs without changing existing entities",
+      "1": "Places new machinery or connectors, such as pipes, poles or belts, without removing any existing entity",
+      "2": "Stops, removes, or rebuilds existing factory infrastructure"
+    },
+    "probabilities": {
+      "0": 0.95,
+      "1": 0.04,
+      "2": 0.01
+    },
+    "score": 0.06,
+    "type": "score"
+  },
+  "factory:factory_insert:recipe:iron-plate/needs_observation": {
+    "noul": 0.22,
+    "type": "noul"
+  },
+  "factory:factory_insert:recipe:iron-plate/useful_progress": {
+    "choice": "useful",
+    "confidence": 0.27,
+    "probabilities": {
+      "unsupported": 0.36,
+      "useful": 0.64
+    },
+    "type": "choice"
+  }
+}

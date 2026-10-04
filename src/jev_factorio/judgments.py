@@ -2791,6 +2791,16 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
         comparison = _qualified_shared_parent_comparison(facts, selected, state.get('candidate_evidence') or {})
         if comparison is not None:
             context['shared_parent_comparison'] = comparison
+            context['local_objective'] = {
+                'kind': 'qualified_shared_parent_branches',
+                'primary_target': comparison['parent_target'].copy(),
+                'ultimate_goal': comparison['parent_target']['ultimate_goal'],
+                'instruction': (
+                    'Compare partial branches toward this parent using each row local_target and current start facts. '
+                    'The kit includes route work and future belt reserve; neither step proves parent completion, '
+                    'future flow or recipe output.'),
+                'success_authority': 'unchanged native step and goal predicates, never model scores',
+            }
             # Some callers retain full route facts; ordinary model snapshots
             # compact them. Elide only an identical duplicated route contract.
             route_projection = facts['factory']['recipe_dependency_catalog'].get('comparison_input_route')
