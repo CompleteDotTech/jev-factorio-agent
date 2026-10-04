@@ -1,0 +1,5 @@
+# Native 101 numeric response provenance
+
+The recorded answers are the complete typed numeric/classifier response from the first paid decision in the private 101 research prefix. No free model reasoning, credentials, or provider configuration is included. Capture SHA256: 4538ce080f04206f8cf9e04a0cbf709ce15c20f06467ae5cb858232085756958; captured event-prefix SHA256: 6369003aa8c8e06443a6dc99b8aad8bd6046744513aefa7ee99d8f10f1348d82. The observed choice confidence was 0.24 against the unchanged 0.45 floor, and no new action was selected.
+
+The compiler-context tests reuse the published sanitized 095 game facts and real compiler fixture: the relevant current quantities in 101 are still carried ore 13, pickup deficit 7, kit belt target 25, physical route bill 5, future science belt reserve 20, and parent automation-science target 20. These are offline source fixtures, not a native authority or a claim that the new wording improves model confidence. An independent exact actual 101 packet-expression replay retains both branches at 46024 bytes, below 48000.
