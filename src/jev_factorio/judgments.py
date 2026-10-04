@@ -629,6 +629,101 @@ def _qualified_bootstrap_output_pickup(plan, facts, row):
         and provenance['observed_output'] == output['iron-ore'])
 
 
+
+def _qualified_shared_parent_comparison(facts, plans, rows):
+    """Expose two proven branches of one parent; never prefer or authorize either."""
+    try:
+        from copy import deepcopy
+        from types import SimpleNamespace
+        from .input_routes import sources, current, remaining
+        if len(plans) != 2 or not isinstance(rows, dict):
+            return None
+        transfers = [p for p in plans if _qualified_recipe_transfer_chain(p, facts, rows[p.id])]
+        pickups = [p for p in plans if _qualified_bootstrap_output_pickup(p, facts, rows[p.id])]
+        if len(transfers) != 1 or len(pickups) != 1 or transfers[0].id == pickups[0].id:
+            return None
+        transfer, pickup = transfers[0], pickups[0]
+        row = rows[transfer.id]; other = rows[pickup.id]
+        marker = row['input_route_kit_parent_purpose']
+        annotation = transfer.materials['input_route_kit_prerequisite']
+        expected = dict(annotation, basis='same_tick_recompiled_owned_input_route_kit_need',
+                        route_flow_and_parent_output_are_not_established=True,
+                        later_steps_require_fresh_native_preconditions=True)
+        canonical = lambda x: json.dumps(x, sort_keys=True, separators=(',', ':'),
+                                         ensure_ascii=False, allow_nan=False)
+        if (canonical(marker) != canonical(expected)
+                or type(marker['schema']) is not int or marker['schema'] != 1
+                or type(marker['observed_tick']) is not int or marker['observed_tick'] != facts['tick']
+                or marker['session_id'] != facts['session_id']
+                or type(marker['source_unit']) is not int or marker['source_unit'] <= 0
+                or type(marker['kit_inventory_target']) is not int or marker['kit_inventory_target'] <= 0
+                or canonical(marker['parent_local_objective']) != canonical(other['local_target'])
+                or canonical(row['local_target']) != canonical({'item': marker['kit_item'],
+                    'inventory_target': marker['kit_inventory_target'], 'ultimate_goal': transfer.goal})
+                or transfer.goal != pickup.goal
+                or marker['parent_local_objective']['ultimate_goal'] != transfer.goal):
+            return None
+        factory = dict(facts['factory'])
+        factory['input_routes'] = facts['factory']['recipe_dependency_catalog'].get(
+            'comparison_input_route', facts['factory']['input_routes'])
+        snapshot = SimpleNamespace(factory=factory, session_id=facts['session_id'],
+                                   tick=facts['tick'], inventory=facts['inventory'])
+        route = sources(snapshot)[marker['source']]
+        compact_route = facts['factory']['input_routes']['sources'][marker['source']]
+        if any(canonical(compact_route[key]) != canonical(route[key]) for key in
+               ('source_unit', 'layout', 'state', 'item', 'ore', 'reserve_belts', 'topology', 'flow')):
+            return None
+        reserve = 0
+        if route['state'] == 'proposed':
+            recipe = facts['factory']['recipe_dependency_catalog']['recipes'].get('logistic-science-pack')
+            if recipe is not None:
+                if not isinstance(recipe, dict) or recipe.get('name') != 'logistic-science-pack':
+                    return None
+                for key in ('ingredients', 'products'):
+                    if (not isinstance(recipe.get(key), list) or not recipe[key]
+                            or any(not isinstance(part, dict) or type(part.get('amount')) not in (int, float)
+                                   or not math.isfinite(part['amount']) or part['amount'] <= 0
+                                   or part.get('type') != 'item' or type(part.get('name')) is not str
+                                   or type(part.get('probability', 1)) not in (int, float)
+                                   or part.get('probability', 1) != 1 for part in recipe[key])):
+                        return None
+                products = [part for part in recipe['products'] if part['name'] == 'logistic-science-pack']
+                if len(products) != 1:
+                    return None
+                per_batch = sum(part['amount'] for part in recipe['ingredients'] if part['name'] == 'transport-belt')
+                reserve = math.ceil(per_batch * math.ceil(20 / products[0]['amount']))
+                if not 0 <= reserve <= 200:
+                    return None
+        else:
+            reserve = route['reserve_belts']
+        pickup_proof = other['bootstrap_output_pickup_start_evidence']
+        transfer_proof = row['recipe_input_transfer_start_evidence']
+        path = pickup_proof['planner_item_path']
+        if (not current(route, snapshot) or route['state'] not in {'proposed', 'building'}
+                or route['layout'] != marker['layout'] or route['source_unit'] != marker['source_unit']
+                or marker['state'] != route['state']
+                or marker['source'] != transfer_proof['owned_source_role']
+                or marker['source_unit'] != transfer_proof['owned_source_unit']
+                or marker['source'] != 'recipe:' + path[-2]
+                or canonical(marker['parent_planner_item_path']) != canonical(path[:-1])
+                or transfer_proof['ingredient'] != path[-1]
+                or canonical(marker['remaining_route_bill']) != canonical(remaining(route, reserve))
+                or type(marker['construction_fuel_inventory_target']) is not int
+                or marker['construction_fuel_inventory_target'] < 0):
+            return None
+        return {'schema': 1, 'observed_tick': facts['tick'], 'session_id': facts['session_id'],
+            'basis': 'current_owned_route_and_independently_qualified_recipe_branches',
+            'parent_target': deepcopy(marker['parent_local_objective']),
+            'kit_branch': {'plan_id': transfer.id,
+                'physical_route_bill': deepcopy(remaining(route, 0)),
+                'belt_reserve_for_twenty_logistic_science': reserve},
+            'direct_parent_branch': {'plan_id': pickup.id},
+            'scope': 'alternative_partial_branches_not_joint_completion',
+            'future_route_flow_and_recipe_outputs_unverified': True,
+            'preference_or_execution_authorized': False}
+    except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
+        return None
+
 def _qualified_direct_parent_demand(plan, row, selected, facts) -> bool:
     """Check bindings before explaining a validated current gather purpose."""
     witness = row.get('direct_alternative_parent_demand_start_evidence')
@@ -2693,6 +2788,29 @@ def question_batch(state: dict, plans: list[Plan], max_bytes: int = 32000,
                     'Use facts, execution_contract and bootstrap_output_pickup_start_evidence with recipe_dependency_chain/current_raw_demand. '
                     'Owned stock can supply this bounded recipe-input branch; pickup, output, '
                     'science/route flow remain unverified; no full-game plan required.')
+        comparison = _qualified_shared_parent_comparison(facts, selected, state.get('candidate_evidence') or {})
+        if comparison is not None:
+            context['shared_parent_comparison'] = comparison
+            # Some callers retain full route facts; ordinary model snapshots
+            # compact them. Elide only an identical duplicated route contract.
+            route_projection = facts['factory']['recipe_dependency_catalog'].get('comparison_input_route')
+            original_routes = facts['factory']['input_routes']
+            if (route_projection is not None
+                    and json.dumps({key: original_routes.get(key) for key in ('protocol', 'tick', 'session_id')}, sort_keys=True, allow_nan=False)
+                        == json.dumps({key: route_projection[key] for key in ('protocol', 'tick', 'session_id')}, sort_keys=True, allow_nan=False)
+                    and all(json.dumps(original_routes['sources'].get(key), sort_keys=True, allow_nan=False)
+                            == json.dumps(value, sort_keys=True, allow_nan=False)
+                            for key, value in route_projection['sources'].items())):
+                from copy import deepcopy
+                context['facts'] = deepcopy(context['facts'])
+                del context['facts']['factory']['recipe_dependency_catalog']['comparison_input_route']
+            questions['candidate']['instructions'] = (
+                'Compare shared_parent_comparison and keyed candidate_evidence. '
+                'The kit covers a proposed route and future science belt reserve; '
+                'the other branch supplies the same parent recipe. Compare current start facts, candidate-local '
+                'scope and remaining work. Ranking/costs are heuristics, not native measurements. '
+                'Neither proves future flow/output; their quantities are not joint completion. '
+                'Observe for disputed start facts. No answer or confidence is imposed.')
         context = _factor_bootstrap_recipes(context)
         size = len(json.dumps({"state": context, "questions": questions},
                               ensure_ascii=False, allow_nan=False).encode("utf-8"))

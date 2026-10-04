@@ -114,8 +114,28 @@ def validate_dependency_chain(facts, local, path, witness, raw_required):
 
 def catalog_projection(snapshot, catalog, plans):
     """Independent current Catalog subset; never copied from candidate witnesses."""
-    recipes = {}; hand = {}; stacks = {}; machines = {}
+    recipes = {}; hand = {}; stacks = {}; machines = {}; route_state = None
     for plan in plans:
+        if (isinstance((plan.materials or {}).get('input_route_kit_prerequisite'), dict)
+                and isinstance((plan.materials or {}).get('recipe_input_transfer'), dict)
+                and len(plans) == 2
+                and any(isinstance((other.materials or {}).get('bootstrap_output_pickup'), dict)
+                        for other in plans if other.id != plan.id)):
+            reserve_recipe = catalog.recipes.get('logistic-science-pack')
+            if reserve_recipe is not None:
+                recipes['logistic-science-pack'] = deepcopy(reserve_recipe)
+            from ..input_routes import sources
+            # Ordinary model facts compact route geometry/receipts. Keep the
+            # independently observed route contract needed by this comparison.
+            source = plan.materials['input_route_kit_prerequisite'].get('source')
+            try:
+                observed_routes = sources(snapshot)
+            except (KeyError, TypeError, ValueError, AttributeError):
+                observed_routes = {}  # Invalid telemetry cannot qualify a comparison.
+            if source in observed_routes:
+                route_state = {'protocol': snapshot.factory['input_routes']['protocol'],
+                    'session_id': snapshot.session_id, 'tick': snapshot.tick,
+                    'sources': {source: deepcopy(observed_routes[source])}}
         marker = (plan.materials or {}).get('bootstrap_output_pickup') or (plan.materials or {}).get('recipe_input_transfer')
         if not isinstance(marker, dict):continue
         path = marker.get('planner_item_path')
@@ -132,4 +152,5 @@ def catalog_projection(snapshot, catalog, plans):
                 for entry in recipe['ingredients']:
                     stacks[entry['name']] = catalog.stack_sizes.get(entry['name'], 200)
     return {'schema': 1, 'tick': snapshot.tick, 'session_id': snapshot.session_id,
-        'version': catalog.version, 'recipes': recipes, 'hand_categories': hand, 'stack_sizes': stacks, **({'machines': machines} if machines else {})}
+        'version': catalog.version, 'recipes': recipes, 'hand_categories': hand, 'stack_sizes': stacks,
+        **({'machines': machines} if machines else {}), **({'comparison_input_route': route_state} if route_state else {})}
